@@ -2,8 +2,7 @@ import argparse
 import base64
 import io
 import json
-import math
-import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +13,10 @@ from PIL import Image
 
 DEFAULT_API = "http://127.0.0.1:7861"
 DEFAULT_OUTPUT_ROOT = "output"
+
+
+def emit(message: str):
+    sys.stdout.write(f"{message}\n")
 
 
 def multiple_of(value: float, multiple: int) -> int:
@@ -37,12 +40,13 @@ def image_to_b64_png(image: Image.Image) -> str:
 def decode_b64_image(data: str) -> Image.Image:
     if "," in data:
         data = data.split(",", 1)[1]
-    return Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
+    with Image.open(io.BytesIO(base64.b64decode(data))) as image:
+        return image.convert("RGB")
 
 
 def prompt_from_png(path: Path) -> tuple[str, str]:
-    image = Image.open(path)
-    params = image.info.get("parameters", "")
+    with Image.open(path) as image:
+        params = image.info.get("parameters", "")
     if not params:
         return "", ""
     negative = ""
@@ -101,7 +105,8 @@ def main() -> int:
     if not input_path.exists():
         raise FileNotFoundError(input_path)
 
-    source = Image.open(input_path).convert("RGB")
+    with Image.open(input_path) as image:
+        source = image.convert("RGB")
     target_w, target_h = target_size(source.width, source.height, args.long_edge, args.width, args.height)
 
     png_prompt, png_negative = prompt_from_png(input_path)
@@ -160,33 +165,33 @@ def main() -> int:
     preview_path = output_dir / "request_preview.json"
     preview_path.write_text(json.dumps(preview, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"OUTPUT_DIR={output_dir}")
-    print(f"INPUT={input_path}")
-    print(f"TARGET={target_w}x{target_h} ({target_w * target_h / 1_000_000:.1f} MP)")
-    print(f"RESIZED_INPUT={resized_path}")
-    print(f"REQUEST_PREVIEW={preview_path}")
+    emit(f"OUTPUT_DIR={output_dir}")
+    emit(f"INPUT={input_path}")
+    emit(f"TARGET={target_w}x{target_h} ({target_w * target_h / 1_000_000:.1f} MP)")
+    emit(f"RESIZED_INPUT={resized_path}")
+    emit(f"REQUEST_PREVIEW={preview_path}")
 
     if args.dry_run:
-        print("DRY_RUN=1")
+        emit("DRY_RUN=1")
         return 0
 
     started_at = time.time()
     response = requests.post(f"{args.api}/sdapi/v1/img2img", json=payload, timeout=args.timeout)
-    print(f"HTTP={response.status_code}")
+    emit(f"HTTP={response.status_code}")
     if response.status_code != 200:
-        print(response.text[:4000])
+        emit(response.text[:4000])
         return 1
 
     data = response.json()
     info_path = output_dir / "response_info.txt"
     info_path.write_text(str(data.get("info", "")), encoding="utf-8")
-    print(f"INFO={info_path}")
+    emit(f"INFO={info_path}")
 
     if args.return_image and data.get("images"):
         image = decode_b64_image(data["images"][0])
         output_path = output_dir / "krea2_8k_img2img.png"
         image.save(output_path)
-        print(f"IMAGE={output_path}")
+        emit(f"IMAGE={output_path}")
     else:
         saved = recent_saved_images(Path(args.output_root), started_at)
         manifest = {
@@ -196,9 +201,9 @@ def main() -> int:
         }
         manifest_path = output_dir / "saved_images_manifest.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"SAVED_IMAGES_MANIFEST={manifest_path}")
+        emit(f"SAVED_IMAGES_MANIFEST={manifest_path}")
         if saved:
-            print(f"LATEST_SAVED_IMAGE={saved[0]}")
+            emit(f"LATEST_SAVED_IMAGE={saved[0]}")
     return 0
 
 

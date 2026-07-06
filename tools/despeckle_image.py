@@ -2,6 +2,7 @@ import argparse
 import base64
 import io
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -16,6 +17,10 @@ except ImportError:
 
 
 DEFAULT_API = "http://127.0.0.1:7861"
+
+
+def emit(message: str):
+    sys.stdout.write(f"{message}\n")
 
 
 def require_cv2():
@@ -40,12 +45,13 @@ def image_to_b64_png(image: Image.Image) -> str:
 def decode_b64_image(data: str) -> Image.Image:
     if "," in data:
         data = data.split(",", 1)[1]
-    return Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
+    with Image.open(io.BytesIO(base64.b64decode(data))) as image:
+        return image.convert("RGB")
 
 
 def prompt_from_png(path: Path) -> tuple[str, str]:
-    image = Image.open(path)
-    params = image.info.get("parameters", "")
+    with Image.open(path) as image:
+        params = image.info.get("parameters", "")
     if not params:
         return "", ""
     negative = ""
@@ -301,7 +307,8 @@ def main() -> int:
     if not input_path.exists():
         raise FileNotFoundError(input_path)
 
-    image = Image.open(input_path).convert("RGB")
+    with Image.open(input_path) as source:
+        image = source.convert("RGB")
     mask, stats = build_speckle_mask(
         image,
         threshold=args.threshold,
@@ -339,18 +346,18 @@ def main() -> int:
     if report_path is not None:
         write_report(report_path, stats, output_path, mask_path, preview_path, args.overwrite)
 
-    print(f"INPUT={input_path}")
-    print(f"MODE={args.mode}")
-    print(f"MASKED_PIXELS={stats['masked_pixels']} ({stats['masked_percent']}%)")
-    print(f"KEPT_COMPONENTS={stats['kept_components']} / {stats['candidate_components']}")
+    emit(f"INPUT={input_path}")
+    emit(f"MODE={args.mode}")
+    emit(f"MASKED_PIXELS={stats['masked_pixels']} ({stats['masked_percent']}%)")
+    emit(f"KEPT_COMPONENTS={stats['kept_components']} / {stats['candidate_components']}")
     if output_path is not None:
-        print(f"OUTPUT={output_path}")
+        emit(f"OUTPUT={output_path}")
     if mask_path is not None:
-        print(f"MASK={mask_path}")
+        emit(f"MASK={mask_path}")
     if preview_path is not None:
-        print(f"PREVIEW={preview_path}")
+        emit(f"PREVIEW={preview_path}")
     if report_path is not None:
-        print(f"REPORT={report_path}")
+        emit(f"REPORT={report_path}")
 
     return 0
 
