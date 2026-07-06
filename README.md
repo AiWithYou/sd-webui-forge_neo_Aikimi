@@ -393,6 +393,28 @@ Denoising strength: 0.27-0.30
 
 `0.35` 以上は再描画が強くなり、肌や背景に粉っぽい再描画が出る場合があります。
 
+生成後の画像だけを補正する場合は、単体ツールで小さな粒状ノイズを検出して補修できます。
+
+まずマスクと確認用プレビューだけ出す場合:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\despeckle_image.py --input '<image>' --mode mask --mask-out '<mask.png>' --preview-out '<preview.png>'
+```
+
+周辺画素で埋める場合:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\despeckle_image.py --input '<image>' --output '<fixed.png>' --mode local-inpaint
+```
+
+検出した小領域だけForgeで再生成する場合:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\despeckle_image.py --input '<image>' --output '<fixed.png>' --mode forge-inpaint --denoise 0.24 --steps 8
+```
+
+白い粒が残る場合は `--threshold 24`、実線や装飾まで削れる場合は `--threshold 40 --max-area 24` から調整します。暗い粒も対象にする場合は `--polarity both` を使います。
+
 ## upstreamへの敬意
 
 このforkは以下のプロジェクトをベースにしています。
