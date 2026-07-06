@@ -23,8 +23,47 @@ def multiple_of(value: float, multiple: int) -> int:
     return max(multiple, int(round(value / multiple)) * multiple)
 
 
+def require_positive_int(value: int | None, name: str):
+    if value is not None and value <= 0:
+        raise ValueError(f"{name} must be > 0.")
+
+
+def validate_args(args):
+    if (args.width is None) != (args.height is None):
+        raise ValueError("--width and --height must be passed together.")
+
+    for value, name in (
+        (args.long_edge, "--long-edge"),
+        (args.width, "--width"),
+        (args.height, "--height"),
+        (args.steps, "--steps"),
+        (args.tile_width, "--tile-width"),
+        (args.tile_height, "--tile-height"),
+        (args.tile_batch_size, "--tile-batch-size"),
+        (args.timeout, "--timeout"),
+    ):
+        require_positive_int(value, name)
+
+    if args.tile_overlap < 0:
+        raise ValueError("--tile-overlap must be >= 0.")
+    if not 0 <= args.denoise <= 1:
+        raise ValueError("--denoise must be between 0 and 1.")
+    if args.cfg < 0:
+        raise ValueError("--cfg must be >= 0.")
+    if args.distilled_cfg < 0:
+        raise ValueError("--distilled-cfg must be >= 0.")
+
+
 def target_size(width: int, height: int, long_edge: int, explicit_width: int | None, explicit_height: int | None) -> tuple[int, int]:
-    if explicit_width and explicit_height:
+    if (explicit_width is None) != (explicit_height is None):
+        raise ValueError("--width and --height must be passed together.")
+    require_positive_int(width, "source width")
+    require_positive_int(height, "source height")
+    require_positive_int(long_edge, "--long-edge")
+    require_positive_int(explicit_width, "--width")
+    require_positive_int(explicit_height, "--height")
+
+    if explicit_width is not None and explicit_height is not None:
         return multiple_of(explicit_width, 64), multiple_of(explicit_height, 64)
     if width >= height:
         return multiple_of(long_edge, 64), multiple_of(height * long_edge / width, 64)
@@ -82,8 +121,8 @@ def main() -> int:
     parser.add_argument("--prompt", default=None, help="Prompt. Defaults to PNG infotext prompt.")
     parser.add_argument("--negative-prompt", default=None, help="Negative prompt. Defaults to PNG infotext negative prompt.")
     parser.add_argument("--long-edge", type=int, default=8192, help="Target long edge when width/height are not set.")
-    parser.add_argument("--width", type=int, default=None, help="Explicit target width.")
-    parser.add_argument("--height", type=int, default=None, help="Explicit target height.")
+    parser.add_argument("--width", type=int, default=None, help="Explicit target width. Must be passed with --height.")
+    parser.add_argument("--height", type=int, default=None, help="Explicit target height. Must be passed with --width.")
     parser.add_argument("--steps", type=int, default=12)
     parser.add_argument("--sampler", default="DPM++ SDE")
     parser.add_argument("--scheduler", default="Simple")
@@ -100,6 +139,7 @@ def main() -> int:
     parser.add_argument("--return-image", action="store_true", help="Return image over API instead of relying on Forge save.")
     parser.add_argument("--dry-run", action="store_true", help="Write resized input and request preview, but do not call Forge.")
     args = parser.parse_args()
+    validate_args(args)
 
     input_path = Path(args.input)
     if not input_path.exists():
