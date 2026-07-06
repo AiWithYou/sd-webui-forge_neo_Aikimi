@@ -9,6 +9,29 @@ from backend import memory_management
 from backend.patcher.base import ModelPatcher
 
 
+def tiled_scale_feather_mask(shape, dims, feathers, device, dtype):
+    mask_shape = [1, 1] + [int(shape[d]) for d in range(2, dims + 2)]
+    mask = torch.ones(mask_shape, device=device, dtype=dtype)
+
+    for dim, feather in enumerate(feathers):
+        axis = dim + 2
+        dim_size = mask_shape[axis]
+
+        if feather <= 0 or feather >= dim_size:
+            continue
+
+        ramp = torch.linspace(1.0 / feather, 1.0, feather, device=device, dtype=dtype)
+        ramp = ramp * ramp * (3.0 - 2.0 * ramp)
+
+        view_shape = [1] * len(mask_shape)
+        view_shape[axis] = feather
+
+        mask.narrow(axis, 0, feather).mul_(ramp.view(view_shape))
+        mask.narrow(axis, dim_size - feather, feather).mul_(ramp.flip(0).view(view_shape))
+
+    return mask
+
+
 @torch.inference_mode()
 def tiled_scale_multidim(samples, function, tile=(64, 64), overlap=8, upscale_amount=4, out_channels=3, output_device="cpu", downscale=False, index_formulas=None):
     """https://github.com/comfyanonymous/ComfyUI/blob/v0.3.64/comfy/utils.py#L901"""
@@ -77,9 +100,11 @@ def tiled_scale_multidim(samples, function, tile=(64, 64), overlap=8, upscale_am
             continue
 
         out = torch.zeros([s.shape[0], out_channels] + mult_list_upscale(s.shape[2:]), device=output_device)
-        out_div = torch.zeros([s.shape[0], out_channels] + mult_list_upscale(s.shape[2:]), device=output_device)
+        out_div = torch.zeros([s.shape[0], 1] + mult_list_upscale(s.shape[2:]), device=output_device)
 
         positions = [range(0, s.shape[d + 2] - overlap[d], tile[d] - overlap[d]) if s.shape[d + 2] > tile[d] else [0] for d in range(dims)]
+        mask_cache = {}
+        feathers = [round(get_scale(d, overlap[d])) for d in range(dims)]
 
         for it in itertools.product(*positions):
             s_in = s
@@ -92,16 +117,11 @@ def tiled_scale_multidim(samples, function, tile=(64, 64), overlap=8, upscale_am
                 upscaled.append(round(get_pos(d, pos)))
 
             ps = function(s_in).to(output_device)
-            mask = torch.ones_like(ps)
-
-            for d in range(2, dims + 2):
-                feather = round(get_scale(d - 2, overlap[d - 2]))
-                if feather >= mask.shape[d]:
-                    continue
-                for t in range(feather):
-                    a = (t + 1) / feather
-                    mask.narrow(d, t, 1).mul_(a)
-                    mask.narrow(d, mask.shape[d] - 1 - t, 1).mul_(a)
+            mask_key = (tuple(ps.shape[2:]), tuple(feathers), str(ps.device), ps.dtype)
+            mask = mask_cache.get(mask_key)
+            if mask is None:
+                mask = tiled_scale_feather_mask(ps.shape, dims, feathers, ps.device, ps.dtype)
+                mask_cache[mask_key] = mask
 
             o = out
             o_d = out_div
