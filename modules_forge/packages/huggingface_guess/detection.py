@@ -21,6 +21,18 @@ def count_blocks(state_dict_keys: list[str], prefix_string: str) -> int:
     return count
 
 
+def tensor_shape(state_dict: dict, key: str) -> tuple[int, ...]:
+    quant_state_prefix = key + ".quant_state.bitsandbytes__"
+    if any(k.startswith(quant_state_prefix) for k in state_dict):
+        from bitsandbytes.nn.modules import QuantState
+
+        stats_prefix = key + "."
+        quant_state_dict = {k[len(stats_prefix) :]: v for k, v in state_dict.items() if k.startswith(stats_prefix)}
+        return tuple(int(x) for x in QuantState.from_dict(quant_state_dict, device=state_dict[key].device).shape)
+
+    return tuple(int(x) for x in state_dict[key].shape)
+
+
 def calculate_transformer_depth(prefix, state_dict_keys, state_dict):
     context_dim = None
     use_linear_in_transformer = False
@@ -243,15 +255,15 @@ def detect_unet_config(state_dict: dict, key_prefix: str) -> dict:
         dit_config = {}
         dit_config["image_model"] = "krea2"
         head_dim = 128
-        first_w = state_dict["{}first.weight".format(key_prefix)]
-        dit_config["features"] = int(first_w.shape[0])
-        dit_config["channels"] = int(first_w.shape[1]) // (2 * 2)
+        first_w_shape = tensor_shape(state_dict, "{}first.weight".format(key_prefix))
+        dit_config["features"] = first_w_shape[0]
+        dit_config["channels"] = first_w_shape[1] // (2 * 2)
         dit_config["patch"] = 2
         dit_config["layers"] = count_blocks(state_dict_keys, "{}blocks.".format(key_prefix) + "{}.")
-        dit_config["heads"] = int(state_dict["{}blocks.0.attn.wq.weight".format(key_prefix)].shape[0]) // head_dim
-        dit_config["kvheads"] = int(state_dict["{}blocks.0.attn.wk.weight".format(key_prefix)].shape[0]) // head_dim
-        dit_config["txtlayers"] = int(state_dict["{}txtfusion.projector.weight".format(key_prefix)].shape[1])
-        dit_config["txtdim"] = int(state_dict["{}txtfusion.layerwise_blocks.0.prenorm.scale".format(key_prefix)].shape[0])
+        dit_config["heads"] = tensor_shape(state_dict, "{}blocks.0.attn.wq.weight".format(key_prefix))[0] // head_dim
+        dit_config["kvheads"] = tensor_shape(state_dict, "{}blocks.0.attn.wk.weight".format(key_prefix))[0] // head_dim
+        dit_config["txtlayers"] = tensor_shape(state_dict, "{}txtfusion.projector.weight".format(key_prefix))[1]
+        dit_config["txtdim"] = tensor_shape(state_dict, "{}txtfusion.layerwise_blocks.0.prenorm.scale".format(key_prefix))[0]
         return dit_config
 
     if "{}layers.0.mlp.linear_fc2.weight".format(key_prefix) in state_dict_keys:  # Ernie Image

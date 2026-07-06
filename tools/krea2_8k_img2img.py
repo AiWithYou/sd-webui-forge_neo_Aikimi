@@ -1,0 +1,206 @@
+import argparse
+import base64
+import io
+import json
+import math
+import os
+import time
+from datetime import datetime
+from pathlib import Path
+
+import requests
+from PIL import Image
+
+
+DEFAULT_API = "http://127.0.0.1:7861"
+DEFAULT_OUTPUT_ROOT = "output"
+
+
+def multiple_of(value: float, multiple: int) -> int:
+    return max(multiple, int(round(value / multiple)) * multiple)
+
+
+def target_size(width: int, height: int, long_edge: int, explicit_width: int | None, explicit_height: int | None) -> tuple[int, int]:
+    if explicit_width and explicit_height:
+        return multiple_of(explicit_width, 64), multiple_of(explicit_height, 64)
+    if width >= height:
+        return multiple_of(long_edge, 64), multiple_of(height * long_edge / width, 64)
+    return multiple_of(width * long_edge / height, 64), multiple_of(long_edge, 64)
+
+
+def image_to_b64_png(image: Image.Image) -> str:
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def decode_b64_image(data: str) -> Image.Image:
+    if "," in data:
+        data = data.split(",", 1)[1]
+    return Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
+
+
+def prompt_from_png(path: Path) -> tuple[str, str]:
+    image = Image.open(path)
+    params = image.info.get("parameters", "")
+    if not params:
+        return "", ""
+    negative = ""
+    prompt_block = params
+    if "\nNegative prompt:" in params:
+        prompt_block, rest = params.split("\nNegative prompt:", 1)
+        negative = rest.split("\nSteps:", 1)[0].strip()
+    elif "\nSteps:" in params:
+        prompt_block = params.split("\nSteps:", 1)[0]
+    return prompt_block.strip(), negative
+
+
+def recent_saved_images(root: Path, started_at: float) -> list[Path]:
+    candidates: list[Path] = []
+    for subdir in [root / "img2img-images", root]:
+        if not subdir.exists():
+            continue
+        for pattern in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+            for path in subdir.rglob(pattern):
+                try:
+                    if path.stat().st_mtime >= started_at - 2:
+                        candidates.append(path)
+                except OSError:
+                    pass
+    return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Krea2 8K img2img upscale via Forge MultiDiffusion.")
+    parser.add_argument("--input", required=True, help="Input image path.")
+    parser.add_argument("--api", default=DEFAULT_API, help="Forge API base URL.")
+    parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT, help="Output root directory.")
+    parser.add_argument("--prompt", default=None, help="Prompt. Defaults to PNG infotext prompt.")
+    parser.add_argument("--negative-prompt", default=None, help="Negative prompt. Defaults to PNG infotext negative prompt.")
+    parser.add_argument("--long-edge", type=int, default=8192, help="Target long edge when width/height are not set.")
+    parser.add_argument("--width", type=int, default=None, help="Explicit target width.")
+    parser.add_argument("--height", type=int, default=None, help="Explicit target height.")
+    parser.add_argument("--steps", type=int, default=12)
+    parser.add_argument("--sampler", default="DPM++ SDE")
+    parser.add_argument("--scheduler", default="Simple")
+    parser.add_argument("--cfg", type=float, default=1.0)
+    parser.add_argument("--distilled-cfg", type=float, default=1.15)
+    parser.add_argument("--denoise", type=float, default=0.28)
+    parser.add_argument("--seed", type=int, default=-1)
+    parser.add_argument("--tile-width", type=int, default=768)
+    parser.add_argument("--tile-height", type=int, default=768)
+    parser.add_argument("--tile-overlap", type=int, default=96)
+    parser.add_argument("--tile-batch-size", type=int, default=1)
+    parser.add_argument("--method", default="Mixture of Diffusers", choices=["MultiDiffusion", "Mixture of Diffusers"])
+    parser.add_argument("--timeout", type=int, default=43200, help="HTTP timeout in seconds.")
+    parser.add_argument("--return-image", action="store_true", help="Return image over API instead of relying on Forge save.")
+    parser.add_argument("--dry-run", action="store_true", help="Write resized input and request preview, but do not call Forge.")
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        raise FileNotFoundError(input_path)
+
+    source = Image.open(input_path).convert("RGB")
+    target_w, target_h = target_size(source.width, source.height, args.long_edge, args.width, args.height)
+
+    png_prompt, png_negative = prompt_from_png(input_path)
+    prompt = args.prompt if args.prompt is not None else png_prompt
+    negative_prompt = args.negative_prompt if args.negative_prompt is not None else png_negative
+    if not prompt:
+        raise ValueError("Prompt is empty. Pass --prompt or use a PNG with Forge infotext.")
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = Path(args.output_root) / f"krea2_8k_img2img_{stamp}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    resized = source.resize((target_w, target_h), Image.Resampling.LANCZOS)
+    resized_path = output_dir / "resized_input.png"
+    resized.save(resized_path)
+
+    payload = {
+        "init_images": [image_to_b64_png(resized)],
+        "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "seed": args.seed,
+        "sampler_name": args.sampler,
+        "scheduler": args.scheduler,
+        "steps": args.steps,
+        "cfg_scale": args.cfg,
+        "distilled_cfg_scale": args.distilled_cfg,
+        "width": target_w,
+        "height": target_h,
+        "resize_mode": 0,
+        "denoising_strength": args.denoise,
+        "n_iter": 1,
+        "batch_size": 1,
+        "restore_faces": False,
+        "tiling": False,
+        "send_images": bool(args.return_image),
+        "save_images": True,
+        "include_init_images": False,
+        "alwayson_scripts": {
+            "multidiffusion integrated": {
+                "args": [
+                    True,
+                    args.method,
+                    args.tile_width,
+                    args.tile_height,
+                    args.tile_overlap,
+                    args.tile_batch_size,
+                ]
+            }
+        },
+    }
+
+    preview = dict(payload)
+    preview["init_images"] = [f"<base64 PNG omitted: {target_w}x{target_h}>"]
+    preview["input_path"] = str(input_path)
+    preview["resized_input"] = str(resized_path)
+    preview_path = output_dir / "request_preview.json"
+    preview_path.write_text(json.dumps(preview, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"OUTPUT_DIR={output_dir}")
+    print(f"INPUT={input_path}")
+    print(f"TARGET={target_w}x{target_h} ({target_w * target_h / 1_000_000:.1f} MP)")
+    print(f"RESIZED_INPUT={resized_path}")
+    print(f"REQUEST_PREVIEW={preview_path}")
+
+    if args.dry_run:
+        print("DRY_RUN=1")
+        return 0
+
+    started_at = time.time()
+    response = requests.post(f"{args.api}/sdapi/v1/img2img", json=payload, timeout=args.timeout)
+    print(f"HTTP={response.status_code}")
+    if response.status_code != 200:
+        print(response.text[:4000])
+        return 1
+
+    data = response.json()
+    info_path = output_dir / "response_info.txt"
+    info_path.write_text(str(data.get("info", "")), encoding="utf-8")
+    print(f"INFO={info_path}")
+
+    if args.return_image and data.get("images"):
+        image = decode_b64_image(data["images"][0])
+        output_path = output_dir / "krea2_8k_img2img.png"
+        image.save(output_path)
+        print(f"IMAGE={output_path}")
+    else:
+        saved = recent_saved_images(Path(args.output_root), started_at)
+        manifest = {
+            "started_at": started_at,
+            "latest_saved_images": [str(p) for p in saved[:10]],
+            "output_dir": str(output_dir),
+        }
+        manifest_path = output_dir / "saved_images_manifest.json"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"SAVED_IMAGES_MANIFEST={manifest_path}")
+        if saved:
+            print(f"LATEST_SAVED_IMAGE={saved[0]}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

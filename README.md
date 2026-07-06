@@ -1,448 +1,403 @@
-<h1 align="center">Stable Diffusion WebUI Forge - Neo</h1>
+# Stable Diffusion WebUI Forge - NeoW 日本語README
 
-<p align="center"><sup>
-[ <b>Neo</b> | <a href="https://github.com/Haoming02/sd-webui-forge-classic/tree/classic#stable-diffusion-webui-forge---classic">Classic</a> ]
-</sup></p>
+このリポジトリは、`Stable Diffusion WebUI Forge - Neo` をベースにした作業forkです。
 
-<p align="center"><img src="html\ui.webp" width=512 alt="UI"></p>
+主目的は、Forge Neoの最新系を使いながら、Krea2、低ビット量子化モデル、巨大解像度のimg2img/upscale、モデルマージまわりを実用しやすくすることです。
 
-<blockquote><i>
-<b>Stable Diffusion WebUI Forge</b> is a platform on top of the original <a href="https://github.com/AUTOMATIC1111/stable-diffusion-webui">Stable Diffusion WebUI</a> by <ins>AUTOMATIC1111</ins>, to make development easier, optimize resource management, speed up inference, and study experimental features.<br>
-The name "Forge" is inspired by "Minecraft Forge". This project aims to become the Forge of Stable Diffusion WebUI.<br>
-<p align="right">- <b>lllyasviel</b><br>
-<sup>(paraphrased)</sup></p>
-</i></blockquote>
-
-<br>
-
-"**Neo**" mainly serves as an continuation for the "`latest`" version of Forge, which was built on [Gradio](https://github.com/gradio-app/gradio) `4.40.0` before lllyasviel became too busy... Additionally, this fork is focused on optimization and usability, with the main goal of being able to run the latest popular models via an easy-to-use GUI.
-
-> [!Tip]
-> [How to Install](#installation)
-
-<br>
-
-## Features [Jun.]
-> Most base features of the original [Automatic1111 Webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) should still function
-
-#### New Features
-
-- [X] Support [Anima](https://huggingface.co/circlestone-labs/Anima)
-- [X] Support [Flux.2-Klein](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B)
-    - `4B` / `9B` (**not** `FLUX.2-Dev`)
-
-> [!Important]
-> To use `Flux.2-Klein` for regular `img2img`, toggle the functionality in **Settings/Stable Diffusion**
-
-- [X] Support [Ernie-Image](https://huggingface.co/baidu/ERNIE-Image)
-    - `ernie-image` / `ernie-image-turbo`
-- [X] Support [PiD](https://huggingface.co/nvidia/PiD)
-    - `sdxl` / `qwen` / `flux1` / `flux2` (**not** `PixelDiT`)
-    - only `img2img` is supported currently
-- [X] Support [Z-Image](https://huggingface.co/Tongyi-MAI/Z-Image)
-    - `z-image` / `z-image-turbo`
-- [X] Support [Wan 2.2](https://github.com/Wan-Video/Wan2.2)
-    - `14B` (**not** `5B`)
-    - use `Refiner` to achieve **High Noise** / **Low Noise** switching
-        - enable `Refiner` in **Settings/Refiner**
-
-> [!Important]
-> To export a video, you need to have **[FFmpeg](https://ffmpeg.org/)** installed
-
-- [X] Support [Mugen](https://huggingface.co/CabalResearch/Mugen)
-    - display the `Shift` slider for `xl` preset in **Settings/Presets/XL**
-- [X] Support advanced **SDXL** models
-
-> [!Note]
-> - **v-prediction:** `state_dict` must include "`v_pred`"
-> - **Zero Terminal SNR:** `state_dict` must include "`ztsnr`"
-> - **Rectified Flow:** the model must include "`rectified`" in its path *(**e.g.** file name or folder name)*
-
-- [X] Support [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image) / [Qwen-Image-Edit](https://huggingface.co/Qwen/Qwen-Image-Edit-2509)
-
-> [!Note]
-> To be detected as an **Edit** model, the model must include "`qwen`" and "`edit`" in its path *(**e.g.** file name or folder name)*
-
-- [X] Support [Flux Kontext](https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev)
-
-> [!Note]
-> To be detected as a **Kontext** model, the model must include "`kontext`" in its path *(**e.g.** file name or folder name)*
-
-- Implement `ImageStitch Integrated`
-    - [X] support Multi-Image Inputs for `flux.2-klein` / `flux-kontext` / `qwen-image-edit`
-    - [X] support FirstLastFrameToVideo for `wan 2.2`
-- [X] Support [Nunchaku](https://github.com/nunchaku-tech/nunchaku) (`SVDQ`) Models
-    - `flux-dev`, `flux-krea`, `flux-kontext`, `qwen-image`, `qwen-image-edit`, `z-image-turbo`
-    - only `Flux` and `Qwen` support LoRA currently
-    - see [Commandline](#by-neo)
-- [X] Support [Lumina-Image-2.0](https://huggingface.co/Alpha-VLLM/Lumina-Image-2.0)
-    - `Neta-Lumina` / `NetaYume-Lumina`
-- [X] Support [Chroma1-HD](https://huggingface.co/lodestones/Chroma1-HD)
-- [X] Support **MixedPrecision** Models
-    - `fp4mixed` / `fp8mixed` / `mxfp8` / `nvfp4` / `fp8_scaled`
-- [X] Support [Flux.2-Small-Decoder](https://huggingface.co/black-forest-labs/FLUX.2-small-decoder/blob/main/full_encoder_small_decoder.safetensors) & [Qwen2D VAE](https://huggingface.co/Anzhc/Qwen2D-VAE/blob/main/Qwen2D_VAE.safetensors)
-
-<br>
-
-> [!Tip]
-> Check out [Download Models](https://github.com/Haoming02/sd-webui-forge-classic/wiki/Download-Models) for where to get each model and the accompanying modules
-
-> [!Tip]
-> Check out [Inference References](https://github.com/Haoming02/sd-webui-forge-classic/wiki/Inference-References) for how to use each model and the recommended parameters
-
-<br>
-
-- [X] Rewrite Preset System
-    - now save the checkpoint/module selection and parameters per each Preset
-
-> [!Note]
-> This overrides the `UI Defaults` for the controlled parameters
-
-<br>
-
-- [X] Enforce Resolution Steps
-    - dimensions must be multiples of `64` by default
-    - adjust in **Settings/System**
-- [X] Support [uv](https://github.com/astral-sh/uv) package manager
-    - drastically speed up installation
-    - require **manually** installing [uv](https://github.com/astral-sh/uv/releases)
-    - see [Commandline](#by-neo)
-- [X] Support [SageAttention](https://github.com/thu-ml/SageAttention), [FlashAttention](https://github.com/Dao-AILab/flash-attention), `fp16_accumulation`, `torch._scaled_mm`
-    - see [Commandline](#by-neo)
-- [X] Implement Triton Kernel for `matmul` in `torch.int8`
-    - speed up inference after quantization
-    - enable by selecting `int8` in the `Diffusion in Low Bits`
-- [X] Implement [Radial Attention](https://github.com/mit-han-lab/radial-attention)
-    - speed up `Wan 2.2`
-    - require **manually** installing [SpargeAttn](https://github.com/thu-ml/SpargeAttn)
-- [X] Implement fast `state_dict` switching for Refiner
-    - enable in **Settings/Refiner**
-- [X] Implement RescaleCFG
-    - reduce burnt colors; mainly for `v-pred` checkpoints
-    - enable in **Settings/UI Alternatives**
-- [X] Implement MaHiRo
-    - alternative CFG calculation; improve prompt adherence
-    - enable in **Settings/UI Alternatives**
-- [X] Implement [Spectrum](https://github.com/hanjq17/Spectrum)
-    - training-free acceleration for all models
-- [X] Implement [Epsilon Scaling](https://github.com/comfyanonymous/ComfyUI/pull/10132)
-    - enable in **Settings/Stable Diffusion**
-- [X] Implement `torch.compile`
-    - speed up inference after compilation
-- [X] Implement alternative Prompt Box layouts
-- [X] Implement tiled `Conv2d` for VAE
-    - reduce memory usage; reduce speed
-    - see [Commandline](#by-neo)
-- [X] Implement full precision calculation for `Mask blur` blending
-    - enable in **Settings/img2img**
-- [X] Support TAESD / TAEHV live preview for all models
-- [X] Support video previews for ExtraNetworks
-- [X] Support loading upscalers in `half` precision
-    - speed up; reduce quality
-    - enable in **Settings/Upscaling**
-- [X] Support running tile composition on GPU
-    - enable in **Settings/Upscaling**
-- [X] Support (short) videos in **Extras** tab
-- [X] Add support for `.avif`, `.heif`, and `.jxl` image formats
-- [X] Automatically determine the optimal row count for `X/Y/Z Plot`
-- [X] Update **LLLite** Controlnet
-    - [SDXL](https://huggingface.co/kohya-ss/controlnet-lllite/tree/main) / [Anima](https://huggingface.co/kohya-ss/Anima-LLLite/tree/main)
-- [X] Support **Union** Controlnet
-    - [SDXL](https://huggingface.co/xinsir/controlnet-union-sdxl-1.0) / [Chenkin](https://civitai.com/models/2527960/chenkin-unicontrol-xl)
-
-#### Removed Features
-
-- [X] SD2
-- [X] SD3
-- [X] Forge Spaces
-- [X] Hypernetworks
-- [X] CLIP Interrogator
-- [X] Deepbooru Interrogator
-- [X] Textual Inversion Training
-- [X] Some built-in Extensions
-- [X] Some built-in Scripts
-- [X] Some Samplers & Schedulers
-- [X] Some Compatibility Settings
-- [X] Stealth Infotext
-
-#### Optimizations
-
-- [X] **[Comfy]** Rewrite the Backend *(`memory_management.py`, `ModelPatcher`, `attention.py`, etc.)*
-- [X] No longer `git` `clone` any repository on fresh install
-- [X] No longer install `open-clip`
-- [X] Fix memory leak when switching checkpoints
-- [X] Restore the ability to drag-and-drop images onto `gr.Image` that already contains image
-- [X] Speed up launch time
-- [X] Improve timer logs
-- [X] Remove unused `cmd_args`
-- [X] Remove unused `args_parser`
-- [X] Remove unused `shared_options`
-- [X] Remove legacy codes
-- [X] Fix some typos
-- [X] Fix automatic `Tiled VAE` fallback
-- [X] Fix `Tiling` for SD1 and SDXL
-- [X] Pad conditioning for SDXL
-- [X] Remove duplicated upscaler codes
-- [X] Update [spandrel](https://github.com/chaiNNer-org/spandrel)
-    - support new upscaler architectures
-
-> [!Important]
-> Put every upscaler (`.pth` / `.safetensors`) inside the `ESRGAN` folder
-
-> [!Tip]
-> Check out [OpenModelDB](https://openmodeldb.info/) for where to get upscalers
-
-- [X] Improve `ForgeCanvas`
-    - brush adjustments
-    - customization
-    - deobfuscate
-    - eraser
-    - hotkeys
-    - mobile friendly
-- [X] Optimize upscaler logics
-- [X] Optimize certain operations in `Spandrel`
-- [X] Optimize certain operations for `VAE`
-- [X] Speed up model loading
-- [X] Improve color correction
-- [X] Improve memory management
-- [X] Unload all models on `OutOfMemory`
-- [X] Update the implementation for `X/Y/Z Plot`
-- [X] Update the implementation for `Soft Inpainting`
-- [X] Update the implementation for `MultiDiffusion`
-- [X] Update the implementation for `uni_pc` and `LCM` samplers
-- [X] Update the implementation of LoRAs
-- [X] Revamp settings
-    - improve formatting
-    - update descriptions
-- [X] Check for Extension updates in parallel
-- [X] Move `embeddings` folder into `models` folder
-- [X] Infotext Rewrite
-    - allow switching Models and Modules
-    - save `emphasis` properly
-    - correct default values
-- [X] ControlNet Rewrite
-    - change Units to `gr.Tab`
-    - improve `masks` & `buttons`
-    - remove multi-inputs, as they are "[misleading](https://github.com/lllyasviel/stable-diffusion-webui-forge/discussions/932)"
-- [X] Disable Refiner by default
-    - enable again in **Settings/Refiner**
-- [X] No longer install `bitsandbytes` by default
-    - see [Commandline](#by-neo)
-- [X] Improved non-Nvidia support
-- [X] Lint & Format
-- [X] Update `Pillow`
-    - faster image processing
-- [X] Update `protobuf`
-    - faster `insightface` loading
-- [X] Update to latest PyTorch
-    - `torch==2.11.0+cu130`
-
-> [!Note]
-> If your GPU does not support the latest PyTorch, manually [install](https://github.com/Haoming02/sd-webui-forge-classic/wiki/Extra-Installations#older-pytorch) older version of PyTorch
-
-- [X] Update some packages to newer versions
-- [X] Update recommended Python to `3.13.12`
-- [X] many more... :tm:
-
-<br>
-
-## Commandline
-> These flags can be added after the `set COMMANDLINE_ARGS=` line in the `webui-user.bat` *(in the same line ; separate each flag with space)*
-
-> [!Tip]
-> Use `python launch.py --help` to see all available flags
-
-- `--xformers`: Install the `xformers` package to speed up generation
-
-> [!Warning]
-> `xformers` does **not** support `RTX 50s`
-
-- `--port`: Specify a server port to use
-    - defaults to `7860`
-- `--api`: Enable [API](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API) access
-
-#### by. Neo
-
-- `--cuda-malloc`: Improve memory allocation
-- `--cuda-stream`: Enable async weight offloading
-- `--pin-shared-memory`: Improve RAM utilization
-- `--expandable-segments`: Enable experimental PyTorch allocator *(may prevent `OutOfMemory` errors on certain platforms)*
-
-<br>
-
-- `--uv`: Replace the `python -m pip` calls with `uv pip` to massively speed up package installation
-    - requires **uv** to be installed first *(see [Extra Installations](https://github.com/Haoming02/sd-webui-forge-classic/wiki/Extra-Installations))*
-- `--uv-symlink`: Same as above; but additionally pass `--link-mode symlink` to the commands
-    - significantly reduces installation size (`~7 GB` to `~100 MB`)
-- `--uv-local-cache`: Same as above; but additionally set `UV_CACHE_DIR` to a `.uv-cache` folder within WebUI directory
-    - speed up installation on non-default drive *(**i.e.** not `C:` on Windows)*
-    - allow clean uninstallation by simply deleting the WebUI directory
-
-> [!Important]
-> `symlink` means it will directly access the packages from the cache folder instead of copying the packages over ; refrain from clearing the cache when using this option
-
-<br>
-
-- `--model-ref`: Points to a central `models` folder that contains all your models
-    - said folder should contain subfolders like `Stable-diffusion`, `Lora`, `VAE`, `ESRGAN`, etc.
-
-> [!Important]
-> This simply **replaces** the `models` folder rather than adding on top of it
-
-<br>
-
-- `--forge-ref-a1111-home`: Point to an Automatic1111 installation to load its `models` folders
-    - **i.e.** `Stable-diffusion`, `text_encoder`, etc.
-
-- `--forge-ref-comfy-home`: Point to a ComfyUI installation to load its `models` folders
-    - **i.e.** `diffusion_models`, `clip`, etc.
-- `--forge-ref-comfy-yaml`: Point to the ComfyUI `extra_model_paths.yaml` to load its configurations
-    - **i.e.** `base_path`, `checkpoints`, etc.
-
-<br>
-
-- `--sage`: Install the `sageattention` package to speed up generation
-    - will also attempt to install `triton` automatically
-- `--flash`: Install the `flash_attn` package to speed up generation
-- `--nunchaku`: Install the `nunchaku` package to inference SVDQ models
-- `--bnb`: Install the `bitsandbytes` package to do low-bits (`nf4`) inference
-- `--onnxruntime-gpu`: Install the `onnxruntime` with the latest GPU support
-
-<br>
-
-- `--fast-fp8`: Use the `torch._scaled_mm` function when the model type is `float8_e4m3fn`
-- `--fast-fp16`: Enable the `allow_fp16_accumulation` option
-- `--autotune`: Enable the `torch.backends.cudnn.benchmark` option
-    - this is slower in my experience...
-- `--tiled-conv2d`: Replace `Conv2d` ops with tiled variants
-    - has greater reduction for **SD1** and **SDXL** VAE; less for **Wan** VAE
-    - `64` / `128` / `256` / `512`
-
-<br>
-
-## Installation
-
-0. Install **[git](https://git-scm.com/downloads)**
-1. Clone the Repo
-    ```bash
-    git clone https://github.com/Haoming02/sd-webui-forge-classic sd-webui-forge-neo --branch neo
-    ```
-
-2. Setup Python
-
-<br>
-
-<details>
-<summary>Recommended Method</summary>
-
-- Install **[uv](https://github.com/astral-sh/uv#installation)**
-- Set up **venv**
-    ```bash
-    cd sd-webui-forge-neo
-    uv venv venv --python 3.13 --seed
-    ```
-- Add the `--uv` flag to `webui-user.bat`
-
-</details>
-
-<br>
-
-<details>
-<summary>Deprecated Method</summary>
-
-- Install **[Python 3.13.12](https://www.python.org/downloads/release/python-31312/)**
-    - Remember to enable `Add Python to PATH`
-
-</details>
-
-<br>
-
-3. **(Optional)** Configure [Commandline](#commandline)
-4. Launch the WebUI via `webui-user.bat`
-5. During the first launch, it will automatically install all the requirements
-6. Once the installation is finished, the WebUI will start in a browser automatically
-
-<br>
-
-> [!Tip]
-> - For **AMD**, refer to <a href="https://github.com/CS1o/Stable-Diffusion-Info/wiki/Webui-Installation-Guides#amd-forge-neo-with-rocm"><ins>CS1o</ins> 's Guide</a>
-> - For **Linux** and **macOS**, refer to [Wiki](https://github.com/Haoming02/sd-webui-forge-classic/wiki/Unix)
-> - For **Docker** (`Nvidia`), refer to [Docker](docker/)
-
-<br>
-
-> [!Tip]
-> Check out [Extra Installations](https://github.com/Haoming02/sd-webui-forge-classic/wiki/Extra-Installations) for how to install `git`, `uv`, and `FFmpeg`
-
-<br>
-
-## Attention Functions
-
-> [!Important]
-> The `--xformers`, `--flash`, and `--sage` args are only responsible for installing the packages, **not** whether its respective attention is used *(this also means you can remove them once the packages are successfully installed)*
-
-> [!Caution]
-> Do **not** just blindly install all of them <br>
-> Nowadays the native PyTorch `scaled_dot_product_attention` is usually as fast, and also more stable
-
-**Forge Neo** tries to import the packages and automatically choose the first available attention function in the following order:
-
-1. `SageAttention`
-2. `FlashAttention`
-3. `xformers`
-4. `PyTorch`
-5. `Basic`
-
-> [!Note]
-> To skip a specific attention, add the respective disable arg such as `--disable-sage`
-
-<br>
-
-## Issues & Requests
-
-- **Issues** about removed features will simply be ignored
-- **Issues** that is obviously user-error will simply be ignored
-- **Issues** regarding **AMD** GPU will simply be ignored
-- **Issues** running non-official models will simply be ignored
-    - do not just randomly download every single finetune/quant you find
-- **Issues** about 3rd-party Extensions will simply be ignored
-    - extension should support the UI, not the other way around
-- **Issues** caused by [StabilityMatrix](https://github.com/LykosAI/StabilityMatrix) will simply be ignored
-    - only open an Issue if you can reproduce it on a clean install following the official [Installation](#installation) instruction
-
-> [!Caution]
-> - If you post **NSFW** images/videos, you will immediately be banned
->     - the sole discretion is on me ; if you are unsure, just generate `cats` and `dogs`...
-
-<hr>
-
-> [!Tip]
-> Check out the [Wiki](https://github.com/Haoming02/sd-webui-forge-classic/wiki) & [FAQ](https://github.com/Haoming02/sd-webui-forge-classic/issues/414)
-
-<br>
-
-<p align="center">
-Special thanks to <b>AUTOMATIC1111</b>, <b>lllyasviel</b>, and <b>comfyanonymous</b>, <b>kijai</b>, <b>city96</b>, <br>
-along with the rest of the contributors, <br>
-for their invaluable efforts in the open-source image generation community
-</p>
-
-<br>
-
-<p align="right">
-<sub><i>
-Buy me a <a href="https://ko-fi.com/Haoming">Coffee</a> ☕~
-</i></sub>
-<br>
-<sub><i>
-<a href="https://paypal.me/hmgamingdonation">PayPal</a> me 💳~
-</i></sub>
-</p>
-
-<br>
-
-<p align="center">
-	<a href="https://www.star-history.com/?repos=Haoming02%2Fsd-webui-forge-classic&type=date&legend=top-left">
-		<img src="https://api.star-history.com/chart?repos=Haoming02/sd-webui-forge-classic&type=date&legend=top-left">
-	</a>
-</p>
+## このforkの現在地
+
+- ベース: `Haoming02/sd-webui-forge-classic` の `neo` 系
+- 作業ブランチ: `neo`
+- WebUI: Forge Neo / Gradio 4系
+- 目的: Krea2、低ビット量子化、高解像度img2img/upscaleを扱いやすくする
+
+## このforkで追加・反映した主な変更
+
+### Krea2 bnb-nf4モデル検出
+
+Krea2のpre-quantized bitsandbytes safetensorsでは、通常の `tensor.shape` だけを見ると元の重みshapeではなく、量子化後のstorage shapeを拾ってしまうことがあります。
+
+このforkでは、`modules_forge/packages/huggingface_guess/detection.py` に `tensor_shape(...)` を追加し、bitsandbytesの `QuantState` から元shapeを復元してKrea2設定検出に使います。
+
+これにより、Krea2のbnb-nf4形式のpre-quantizedモデルをForgeが正しく検出できます。
+
+対象の修正:
+
+```text
+modules_forge/packages/huggingface_guess/detection.py
+```
+
+### Krea2 4bit運用
+
+このforkではKrea2を次の構成で使うことを想定しています。
+
+```text
+Preset: krea
+Diffusion model: Krea2系 bnb-nf4 safetensors
+Text Encoder: Krea2対応text encoder
+VAE: Krea2対応VAE
+Diffusion in Low Bits: bnb-nf4
+```
+
+Forge上では、Krea2の追加モジュールとして以下の2つを選びます。
+
+```text
+Krea2対応text encoder
+Krea2対応VAE
+```
+
+生成infotextでは、おおむね次のように記録されます。
+
+```text
+Model: Krea2 bnb-nf4 model
+Module 1: Krea2 VAE
+Module 2: Krea2 text encoder
+Diffusion in Low Bits: bnb-nf4
+```
+
+### Krea2 8K img2img helper
+
+8K級の画像は、単純な `txt2img` の直接8192px生成ではVRAMを使い切りやすく、Tiled VAEだけでは安定しません。
+
+このforkでは、Krea2向けに次の流れで8K化するhelperを追加しています。
+
+```text
+元画像
+→ Lanczosで長辺8192へ拡大
+→ img2img
+→ MultiDiffusion Integratedで拡散処理をタイル化
+→ Forge側で保存
+```
+
+追加スクリプト:
+
+```text
+tools/krea2_8k_img2img.py
+```
+
+既定の実行:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>'
+```
+
+安全確認だけ行うdry-run:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --dry-run
+```
+
+既定値:
+
+```text
+Long edge: 8192
+Sampler: DPM++ SDE
+Scheduler: Simple
+Steps: 12
+CFG: 1.0
+Distilled CFG: 1.15
+Denoising strength: 0.28
+MultiDiffusion: enabled
+Tile: 768x768
+Overlap: 96
+Tile batch size: 1
+send_images: false
+save_images: true
+```
+
+正方形8Kを明示する場合:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --width 8192 --height 8192
+```
+
+ただし `8192x8192` は約67MPで、縦長の `5440x8192` よりかなり重いです。まずは長辺8192の比率維持を推奨します。
+
+### Tiled VAE / tiled Conv2d
+
+ForgeのVAE decodeは、通常は `Full` で実行され、VAE decode中にOOMした場合にTiled VAEへフォールバックします。
+
+重要な点:
+
+```text
+Tiled VAEはVAE encode/decodeのメモリ対策
+拡散ステップ本体のメモリ対策ではない
+8Kを安定させるにはMultiDiffusionなどで拡散自体をタイル化する必要がある
+```
+
+このforkの `webui-user.bat` では、VAE系のConv2dをタイル化するために次を追加しています。
+
+```text
+--tiled-conv2d 128
+```
+
+これは高解像度VAE処理のメモリを下げる目的です。速度は落ちます。
+
+### ModelMerger / Extras / Upscaler系の最新反映
+
+fork側の最新コミットとして、以下の更新も取り込んでいます。
+
+```text
+backend/diffusion_engine/base.py
+backend/diffusion_engine/sd15.py
+backend/diffusion_engine/sdxl.py
+modules/extras.py
+modules/ui_checkpoint_merger.py
+modules/upscaler_utils.py
+```
+
+主にModelMerger、Extras、アップスケール処理、SD1/SDXL系処理まわりの更新です。
+
+## 推奨起動
+
+Windowsでは通常のForge起動を使います。
+
+```powershell
+.\webui-user.bat
+```
+
+`webui-user.bat` では、必要に応じて以下のような引数を設定します。
+
+```text
+--uv
+--bnb
+--api
+--port 7861
+--theme dark
+--tiled-conv2d 128
+--forge-ref-comfy-yaml <path-to-model-paths-yaml>
+--esrgan-models-path <path-to-upscaler-models>
+```
+
+`--forge-ref-comfy-yaml` と `--esrgan-models-path` は環境に合わせて変更してください。
+
+## Krea2の基本設定
+
+Forge UIで以下を確認します。
+
+```text
+Preset: krea
+Checkpoint: Krea2 diffusion model
+VAE / Text Encoder:
+  Krea2 compatible VAE
+  Krea2 compatible text encoder
+Diffusion in Low Bits: bnb-nf4
+```
+
+Krea2 t2iの実用初期値:
+
+```text
+Sampler: Euler
+Scheduler: Simple
+Steps: 8
+CFG scale: 1.0
+Distilled CFG: 1.15
+```
+
+Krea2 i2i / upscaleでノイズを抑える初期値:
+
+```text
+Sampler: DPM++ SDE
+Scheduler: Simple
+Steps: 12-15
+CFG scale: 1.0
+Distilled CFG: 1.15
+Denoising strength: 0.27-0.30
+```
+
+元絵保持を優先する場合:
+
+```text
+Sampler: Euler
+Scheduler: Simple
+Steps: 15-30
+Denoising strength: 0.27-0.30
+```
+
+避ける設定:
+
+```text
+Denoising strength 0.6以上
+8Kの直接txt2img
+VAEタイル化だけに頼った巨大解像度生成
+```
+
+## Krea2 t2i API例
+
+Forge APIが `127.0.0.1:7861` で起動している前提です。
+
+```python
+import requests
+
+payload = {
+    "prompt": "your prompt here",
+    "negative_prompt": "",
+    "seed": -1,
+    "sampler_name": "Euler",
+    "scheduler": "Simple",
+    "steps": 8,
+    "cfg_scale": 1.0,
+    "distilled_cfg_scale": 1.15,
+    "width": 768,
+    "height": 1152,
+    "send_images": True,
+    "save_images": True,
+}
+
+response = requests.post("http://127.0.0.1:7861/sdapi/v1/txt2img", json=payload, timeout=1200)
+response.raise_for_status()
+```
+
+`CFG scale: 1.0` の場合、Forgeではnegative promptが無視されます。negative promptを効かせたい場合は `CFG scale` を上げてください。
+
+## Krea2 8K helperの使い方
+
+入力画像を明示して実行します。
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --dry-run
+```
+
+問題なければ本番:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>'
+```
+
+より保守的にする場合:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --denoise 0.24 --steps 10
+```
+
+より描き直す場合:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --denoise 0.33 --steps 12
+```
+
+## 代表的なコマンドライン引数
+
+このforkで特によく使うもの:
+
+```text
+--api
+  WebUI APIを有効化
+
+--port 7861
+  API/UIのポートを7861に固定
+
+--uv
+  uv経由で依存関係を高速インストール
+
+--bnb
+  bitsandbytesを有効化し、nf4などの低ビット推論に対応
+
+--tiled-conv2d 128
+  VAEなどのConv2d演算をタイル化してVRAM使用量を下げる
+
+--forge-ref-comfy-yaml
+  ComfyUI系のモデルパス設定をForgeから参照
+
+--esrgan-models-path
+  upscalerモデルの置き場所を指定
+```
+
+## インストール
+
+通常のfork利用:
+
+```bash
+git clone <repository-url> --branch neo
+cd <repository-directory>
+```
+
+Windowsでは `webui-user.bat` を編集し、必要ならモデルパスを自分の環境に合わせます。
+
+初回起動:
+
+```powershell
+.\webui-user.bat
+```
+
+`uv` を使う場合は、事前にuvを入れておきます。
+
+```powershell
+uv venv venv --python 3.13 --seed
+```
+
+## 対応モデル概要
+
+Neo系の画像生成モデル、編集モデル、低ビット量子化モデルに追従しています。
+
+このforkでは特にKrea2のbnb-nf4運用を重視しています。
+
+## 注意点
+
+- モデル、VAE、text encoderはリポジトリに含めません。
+- `logs/`、`output/`、ローカルYAML、生成画像は通常push対象外です。
+- `webui-user.bat` にはローカル環境向けパスが含まれる場合があります。
+- 巨大解像度は非常に時間がかかります。
+- 8Kはまずdry-runで入力サイズとリクエスト内容を確認してください。
+- 8K生成中にVRAMが張り付いた場合は `/sdapi/v1/interrupt`、`/sdapi/v1/skip`、`/sdapi/v1/unload-checkpoint` の順で止めます。
+
+## トラブルシュート
+
+### text encoderの読み込みで失敗する
+
+Krea2対応ではないtext encoderを選んでいる可能性があります。
+
+Krea2用のtext encoderを選びます。
+
+### Krea2 bnb-nf4でshape mismatchする
+
+このforkの `detection.py` 修正が入っているか確認してください。
+
+```text
+def tensor_shape(...)
+QuantState.from_dict(...)
+```
+
+が入っていれば、bitsandbytesの元shape復元に対応しています。
+
+### 8Kで止まる、またはVRAMが張り付く
+
+直接t2iで巨大解像度を作らず、`tools/krea2_8k_img2img.py` を使います。
+
+まずdry-run:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --dry-run
+```
+
+問題なければ本番:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>'
+```
+
+### white speckle / 粒状ノイズが乗る
+
+i2i upscaleではdenoiseが高すぎる可能性があります。
+
+まず以下を試します。
+
+```text
+Sampler: DPM++ SDE
+Scheduler: Simple
+Steps: 12-15
+Denoising strength: 0.27-0.30
+```
+
+`0.35` 以上は再描画が強くなり、肌や背景に粉っぽい再描画が出る場合があります。
+
+## upstreamへの敬意
+
+このforkは以下のプロジェクトをベースにしています。
+
+- AUTOMATIC1111 Stable Diffusion WebUI
+- lllyasviel Stable Diffusion WebUI Forge
+- Haoming02 sd-webui-forge-classic / Neo
+- ComfyUI系バックエンド実装
+
+元プロジェクトと関連コントリビューターに感謝します。
