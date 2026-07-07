@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 import unittest
 
-from modules_forge.krea2_upscale import target_size, two_stage_sizes
+from modules_forge.krea2_upscale import auto_first_pass_long_edge, target_size, two_stage_sizes
 from tools.krea2_8k_img2img import validate_args
 
 
@@ -10,7 +10,7 @@ def valid_args(**overrides):
         "long_edge": 8192,
         "width": None,
         "height": None,
-        "first_pass_long_edge": 4096,
+        "first_pass_long_edge": 0,
         "steps": 12,
         "tile_width": 768,
         "tile_height": 768,
@@ -65,10 +65,22 @@ class ArgumentValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "--width and --height"):
             validate_args(valid_args(width=8192))
 
+    def test_rejects_negative_first_pass_long_edge(self):
+        with self.assertRaisesRegex(ValueError, "--first-pass-long-edge"):
+            validate_args(valid_args(first_pass_long_edge=-64))
+
 
 class TwoStageSizeTests(unittest.TestCase):
     def test_uses_final_aspect_ratio_for_intermediate_size(self):
         self.assertEqual(two_stage_sizes(1000, 500, 8192, 8192, 4096), ((4096, 4096), (8192, 8192)))
+
+    def test_uses_auto_intermediate_size(self):
+        self.assertEqual(auto_first_pass_long_edge(1000, 500, 8192, 4096), 2880)
+        self.assertEqual(two_stage_sizes(1000, 500, 8192, 4096, 0), ((2880, 1408), (8192, 4096)))
+
+    def test_rejects_auto_when_no_intermediate_multiple_exists(self):
+        with self.assertRaisesRegex(ValueError, "too close"):
+            two_stage_sizes(8150, 4000, 8192, 4032, 0)
 
     def test_rejects_first_pass_smaller_than_source(self):
         with self.assertRaisesRegex(ValueError, "first pass long edge"):

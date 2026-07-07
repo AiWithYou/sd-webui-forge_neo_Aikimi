@@ -143,7 +143,7 @@ scripts/krea2_2stage_upscale.py
 ```text
 Upscale mode: two-stage
 Long edge: 8192
-Stage 1 long edge: 4096
+Stage 1 long edge: auto
 Sampler: DPM++ SDE
 Scheduler: Simple
 Steps: 12
@@ -328,7 +328,7 @@ response.raise_for_status()
 .\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>'
 ```
 
-既定では `--upscale-mode two-stage` で、中間パスは長辺4096、最終パスは長辺8192です。中間サイズを変える場合:
+既定では `--upscale-mode two-stage` で、中間パスは入力画像と最終サイズから自動計算し、最終パスは長辺8192です。中間サイズを固定する場合:
 
 ```powershell
 .\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --first-pass-long-edge 3072

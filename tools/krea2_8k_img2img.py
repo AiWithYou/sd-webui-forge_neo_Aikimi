@@ -34,7 +34,6 @@ def validate_args(args):
         (args.width, "--width"),
         (args.height, "--height"),
         (args.steps, "--steps"),
-        (args.first_pass_long_edge, "--first-pass-long-edge"),
         (args.tile_width, "--tile-width"),
         (args.tile_height, "--tile-height"),
         (args.tile_batch_size, "--tile-batch-size"),
@@ -42,6 +41,8 @@ def validate_args(args):
     ):
         require_positive_int(value, name)
 
+    if args.first_pass_long_edge < 0:
+        raise ValueError("--first-pass-long-edge must be >= 0.")
     if args.tile_overlap < 0:
         raise ValueError("--tile-overlap must be >= 0.")
     if not 0 <= args.denoise <= 1:
@@ -164,7 +165,7 @@ def main() -> int:
     parser.add_argument("--long-edge", type=int, default=8192, help="Target long edge when width/height are not set.")
     parser.add_argument("--width", type=int, default=None, help="Explicit target width. Must be passed with --height.")
     parser.add_argument("--height", type=int, default=None, help="Explicit target height. Must be passed with --width.")
-    parser.add_argument("--first-pass-long-edge", type=int, default=4096, help="Intermediate long edge for --upscale-mode two-stage.")
+    parser.add_argument("--first-pass-long-edge", type=int, default=0, help="Intermediate long edge for --upscale-mode two-stage. 0 selects an automatic size.")
     parser.add_argument("--steps", type=int, default=12)
     parser.add_argument("--sampler", default="DPM++ SDE")
     parser.add_argument("--scheduler", default="Simple")
@@ -233,6 +234,8 @@ def main() -> int:
     else:
         (stage1_w, stage1_h), _ = two_stage_sizes(source.width, source.height, target_w, target_h, args.first_pass_long_edge)
         emit(f"STAGE1_TARGET={stage1_w}x{stage1_h} ({stage1_w * stage1_h / 1_000_000:.1f} MP)")
+        if args.first_pass_long_edge == 0:
+            emit(f"STAGE1_LONG_EDGE=auto ({max(stage1_w, stage1_h)})")
 
         stage1_input = source.resize((stage1_w, stage1_h), Image.Resampling.LANCZOS)
         stage1_input_path = output_dir / "stage1_resized_input.png"

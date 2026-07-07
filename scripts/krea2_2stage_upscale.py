@@ -26,15 +26,15 @@ class KreaTwoStageUpscale(scripts.Script):
                 minimum=512,
                 maximum=8192,
                 step=64,
-                value=8192,
+                value=4096,
                 elem_id=self.elem_id("final_long_edge"),
             )
             first_pass_long_edge = gr.Slider(
-                label="Stage 1 Long Edge",
-                minimum=512,
+                label="Stage 1 Long Edge (0 = Auto)",
+                minimum=0,
                 maximum=8192,
                 step=64,
-                value=4096,
+                value=0,
                 elem_id=self.elem_id("first_pass_long_edge"),
             )
 
@@ -161,6 +161,7 @@ class KreaTwoStageUpscale(scripts.Script):
         save_stage1: bool,
     ):
         self._validate_run(p, first_pass_denoise, final_denoise)
+        original_script_args = p.script_args
         self._enable_multidiffusion(p, method, tile_width, tile_height, tile_overlap, tile_batch_size)
 
         processing.fix_seed(p)
@@ -169,59 +170,81 @@ class KreaTwoStageUpscale(scripts.Script):
         explicit_width, explicit_height = self._explicit_dimensions(final_width, final_height)
         target_w, target_h = target_size(source.width, source.height, int(final_long_edge), explicit_width, explicit_height)
         (stage1_w, stage1_h), _ = two_stage_sizes(source.width, source.height, target_w, target_h, int(first_pass_long_edge))
+        stage1_long_edge = max(stage1_w, stage1_h)
+        stage1_long_edge_label = f"Auto ({stage1_long_edge})" if int(first_pass_long_edge) == 0 else str(stage1_long_edge)
 
+        original_batch_size = p.batch_size
+        original_n_iter = p.n_iter
         original_do_not_save_samples = p.do_not_save_samples
         original_do_not_save_grid = p.do_not_save_grid
         original_resize_mode = p.resize_mode
+        original_width = p.width
+        original_height = p.height
+        original_denoising_strength = p.denoising_strength
+        original_init_images = p.init_images
 
-        p.batch_size = 1
-        p.n_iter = 1
-        p.resize_mode = 0
-        p.do_not_save_grid = True
+        try:
+            p.batch_size = 1
+            p.n_iter = 1
+            p.resize_mode = 0
+            p.do_not_save_grid = True
 
-        p.extra_generation_params.update(
-            {
-                "Krea2 2-Stage Upscale": "Stage 1/2",
-                "Krea2 2-Stage Stage 1 size": f"{stage1_w}x{stage1_h}",
-                "Krea2 2-Stage Final size": f"{target_w}x{target_h}",
-            }
-        )
-        p.width = stage1_w
-        p.height = stage1_h
-        p.denoising_strength = float(first_pass_denoise)
-        p.init_images = [source.resize((stage1_w, stage1_h), Image.Resampling.LANCZOS)]
-        p.do_not_save_samples = not save_stage1
-        state.job = "Krea2 2-Stage Upscale: Stage 1/2"
+            p.extra_generation_params.update(
+                {
+                    "Krea2 2-Stage Upscale": "Stage 1/2",
+                    "Krea2 2-Stage Stage 1 long edge": stage1_long_edge_label,
+                    "Krea2 2-Stage Stage 1 size": f"{stage1_w}x{stage1_h}",
+                    "Krea2 2-Stage Final size": f"{target_w}x{target_h}",
+                }
+            )
+            p.width = stage1_w
+            p.height = stage1_h
+            p.denoising_strength = float(first_pass_denoise)
+            p.init_images = [source.resize((stage1_w, stage1_h), Image.Resampling.LANCZOS)]
+            p.do_not_save_samples = not save_stage1
+            state.job = "Krea2 2-Stage Upscale: Stage 1/2"
+            state.textinfo = f"Krea2 2-Stage Stage 1/2: {stage1_w}x{stage1_h}"
 
-        stage1 = processing.process_images(p)
-        if state.interrupted or state.stopping_generation:
-            return stage1
-        if not stage1.images:
-            raise RuntimeError("Krea2 2-Stage Upscale Stage 1 returned no image.")
+            stage1 = processing.process_images(p)
+            if state.interrupted or state.skipped or state.stopping_generation:
+                return stage1
+            if not stage1.images:
+                raise RuntimeError("Krea2 2-Stage Upscale Stage 1 returned no image.")
 
-        stage1_image = images.flatten(stage1.images[0], opts.img2img_background_color)
-        p.latents_after_sampling.clear()
-        p.pixels_after_sampling.clear()
-        devices.torch_gc()
+            stage1_image = images.flatten(stage1.images[0], opts.img2img_background_color)
+            p.latents_after_sampling.clear()
+            p.pixels_after_sampling.clear()
+            devices.torch_gc()
 
-        p.extra_generation_params.update(
-            {
-                "Krea2 2-Stage Upscale": "Stage 2/2",
-                "Krea2 2-Stage Stage 1 size": f"{stage1_w}x{stage1_h}",
-                "Krea2 2-Stage Final size": f"{target_w}x{target_h}",
-            }
-        )
-        p.width = target_w
-        p.height = target_h
-        p.denoising_strength = float(final_denoise)
-        p.init_images = [stage1_image.resize((target_w, target_h), Image.Resampling.LANCZOS)]
-        p.do_not_save_samples = original_do_not_save_samples
-        p.do_not_save_grid = original_do_not_save_grid
-        state.job = "Krea2 2-Stage Upscale: Stage 2/2"
+            p.extra_generation_params.update(
+                {
+                    "Krea2 2-Stage Upscale": "Stage 2/2",
+                    "Krea2 2-Stage Stage 1 long edge": stage1_long_edge_label,
+                    "Krea2 2-Stage Stage 1 size": f"{stage1_w}x{stage1_h}",
+                    "Krea2 2-Stage Final size": f"{target_w}x{target_h}",
+                }
+            )
+            p.width = target_w
+            p.height = target_h
+            p.denoising_strength = float(final_denoise)
+            p.init_images = [stage1_image.resize((target_w, target_h), Image.Resampling.LANCZOS)]
+            p.do_not_save_samples = original_do_not_save_samples
+            p.do_not_save_grid = original_do_not_save_grid
+            state.job = "Krea2 2-Stage Upscale: Stage 2/2"
+            state.textinfo = f"Krea2 2-Stage Stage 2/2: {target_w}x{target_h}"
 
-        final = processing.process_images(p)
-        p.resize_mode = original_resize_mode
-
-        if final is None:
-            return Processed(p, [], p.seed, "")
-        return final
+            final = processing.process_images(p)
+            if final is None:
+                return Processed(p, [], p.seed, "")
+            return final
+        finally:
+            p.batch_size = original_batch_size
+            p.n_iter = original_n_iter
+            p.do_not_save_samples = original_do_not_save_samples
+            p.do_not_save_grid = original_do_not_save_grid
+            p.resize_mode = original_resize_mode
+            p.width = original_width
+            p.height = original_height
+            p.denoising_strength = original_denoising_strength
+            p.init_images = original_init_images
+            p.script_args = original_script_args
