@@ -151,11 +151,13 @@ CFG: 1.0
 Distilled CFG: 1.15
 Stage 1 denoising strength: 0.22
 Final denoising strength: 0.28
+Final diffusion long edge cap: 3584
+No-progress timeout: 600
 MultiDiffusion: enabled
 Tile: 768x768
 Overlap: 96
 Tile batch size: 1
-send_images: false
+send_images: true when the diffusion cap is below the final output size
 save_images: true
 ```
 
@@ -167,13 +169,13 @@ save_images: true
 
 ただし `8192x8192` は約67MPで、縦長の `5440x8192` よりかなり重いです。まずは長辺8192の比率維持を推奨します。
 
-6K以上で最終img2imgがVRAMを使い切る場合は、拡散パスだけを明示的に抑えて、最後にローカルで目標サイズへLanczosリサイズします。例: 6K出力を作るが、最終拡散は長辺4096で止める場合:
+6K以上では、拡散パスだけを安全側に抑えて、最後にローカルで目標サイズへLanczosリサイズします。例: 6K出力を作るが、最終拡散は長辺3584で止める場合:
 
 ```powershell
-.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --long-edge 6144 --diffusion-long-edge-cap 4096
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --long-edge 6144 --diffusion-long-edge-cap 3584
 ```
 
-進捗が一定時間変わらない場合にForgeへinterruptを送るには `--no-progress-timeout 600` のように明示します。
+`--diffusion-long-edge-cap 0` や4096以上の拡散は、RTX 3090 24GB環境でGPU driverが落ちる可能性があるため既定では拒否します。どうしても試す場合だけ `--allow-unsafe-large-diffusion` を明示します。
 
 従来の単段処理を明示する場合:
 
@@ -330,7 +332,7 @@ response.raise_for_status()
 .\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --dry-run
 ```
 
-問題なければ本番:
+問題なければ本番。既定では最終拡散の長辺を3584に抑え、指定された最終サイズへローカルで保存します。
 
 ```powershell
 .\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>'
@@ -348,13 +350,13 @@ response.raise_for_status()
 .\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --denoise 0.24 --steps 10
 ```
 
-6K以上で最終パスが止まる場合は、拡散する長辺を4096などに明示制限します。最終出力は指定した長辺へローカルで保存されます。
+6K以上では、拡散する長辺を3584などに明示制限します。最終出力は指定した長辺へローカルで保存されます。
 
 ```powershell
-.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --long-edge 6144 --diffusion-long-edge-cap 4096
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --long-edge 6144 --diffusion-long-edge-cap 3584
 ```
 
-無進捗時に自動停止したい場合は、例として `--no-progress-timeout 600` を追加します。
+無進捗時の自動停止は既定で600秒です。変える場合は `--no-progress-timeout 900` のように明示します。
 
 より描き直す場合:
 

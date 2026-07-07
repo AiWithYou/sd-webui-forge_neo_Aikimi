@@ -16,8 +16,10 @@ import requests
 from PIL import Image
 
 from modules_forge.krea2_upscale import (
+    SAFE_DIFFUSION_LONG_EDGE,
+    capped_diffusion_size,
     require_positive_int,
-    size_from_long_edge,
+    require_safe_diffusion_size,
     target_size,
     two_stage_sizes,
 )
@@ -81,24 +83,6 @@ def decode_b64_image(data: str) -> Image.Image:
         data = data.split(",", 1)[1]
     with Image.open(io.BytesIO(base64.b64decode(data))) as image:
         return image.convert("RGB")
-
-
-def capped_diffusion_size(
-    source_width: int,
-    source_height: int,
-    target_width: int,
-    target_height: int,
-    cap_long_edge: int,
-) -> tuple[int, int]:
-    if cap_long_edge == 0 or max(target_width, target_height) <= cap_long_edge:
-        return target_width, target_height
-
-    source_long_edge = max(source_width, source_height)
-    if cap_long_edge < source_long_edge:
-        raise ValueError(
-            "--diffusion-long-edge-cap must be >= source long edge when it caps the diffusion pass."
-        )
-    return size_from_long_edge(target_width, target_height, cap_long_edge)
 
 
 def prompt_from_png(path: Path) -> tuple[str, str]:
@@ -325,8 +309,13 @@ def main() -> int:
     parser.add_argument(
         "--diffusion-long-edge-cap",
         type=int,
-        default=0,
-        help="Maximum long edge used for the final diffusion pass. 0 disables the cap. When capped below the output target, the returned diffusion image is resized to the requested target locally.",
+        default=SAFE_DIFFUSION_LONG_EDGE,
+        help=f"Maximum long edge used for the final diffusion pass. Default is {SAFE_DIFFUSION_LONG_EDGE}. 0 disables the cap, but unsafe large diffusion is rejected unless --allow-unsafe-large-diffusion is set.",
+    )
+    parser.add_argument(
+        "--allow-unsafe-large-diffusion",
+        action="store_true",
+        help="Allow a final diffusion pass above the safe long-edge limit. This can crash the GPU driver on 24GB RTX 3090-class systems.",
     )
     parser.add_argument("--steps", type=int, default=12)
     parser.add_argument("--sampler", default="DPM++ SDE")
@@ -357,7 +346,7 @@ def main() -> int:
     parser.add_argument(
         "--no-progress-timeout",
         type=float,
-        default=0.0,
+        default=600.0,
         help="Interrupt Forge if progress does not change for this many seconds. 0 disables this watchdog.",
     )
     parser.add_argument(
@@ -384,6 +373,9 @@ def main() -> int:
     )
     diffusion_w, diffusion_h = capped_diffusion_size(
         source.width, source.height, target_w, target_h, args.diffusion_long_edge_cap
+    )
+    require_safe_diffusion_size(
+        diffusion_w, diffusion_h, args.allow_unsafe_large_diffusion
     )
     needs_final_resize = (diffusion_w, diffusion_h) != (target_w, target_h)
 

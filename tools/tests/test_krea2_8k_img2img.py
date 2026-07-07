@@ -2,11 +2,14 @@ from types import SimpleNamespace
 import unittest
 
 from modules_forge.krea2_upscale import (
+    SAFE_DIFFUSION_LONG_EDGE,
     auto_first_pass_long_edge,
+    capped_diffusion_size,
+    require_safe_diffusion_size,
     target_size,
     two_stage_sizes,
 )
-from tools.krea2_8k_img2img import capped_diffusion_size, validate_args
+from tools.krea2_8k_img2img import validate_args
 
 
 def valid_args(**overrides):
@@ -15,7 +18,8 @@ def valid_args(**overrides):
         "width": None,
         "height": None,
         "first_pass_long_edge": 0,
-        "diffusion_long_edge_cap": 0,
+        "diffusion_long_edge_cap": SAFE_DIFFUSION_LONG_EDGE,
+        "allow_unsafe_large_diffusion": False,
         "steps": 12,
         "tile_width": 768,
         "tile_height": 768,
@@ -27,7 +31,7 @@ def valid_args(**overrides):
         "cfg": 1.0,
         "distilled_cfg": 1.15,
         "progress_interval": 30.0,
-        "no_progress_timeout": 0.0,
+        "no_progress_timeout": 600.0,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -108,8 +112,24 @@ class DiffusionCapTests(unittest.TestCase):
         )
 
     def test_rejects_cap_below_source_long_edge(self):
-        with self.assertRaisesRegex(ValueError, "--diffusion-long-edge-cap"):
+        with self.assertRaisesRegex(ValueError, "diffusion long edge cap"):
             capped_diffusion_size(1254, 1254, 6144, 6144, 1024)
+
+    def test_accepts_safe_diffusion_size(self):
+        require_safe_diffusion_size(SAFE_DIFFUSION_LONG_EDGE, SAFE_DIFFUSION_LONG_EDGE)
+
+    def test_rejects_unsafe_diffusion_size(self):
+        with self.assertRaisesRegex(ValueError, "exceeds safe limit"):
+            require_safe_diffusion_size(
+                SAFE_DIFFUSION_LONG_EDGE + 64, SAFE_DIFFUSION_LONG_EDGE + 64
+            )
+
+    def test_accepts_unsafe_diffusion_size_when_explicitly_allowed(self):
+        require_safe_diffusion_size(
+            SAFE_DIFFUSION_LONG_EDGE + 64,
+            SAFE_DIFFUSION_LONG_EDGE + 64,
+            allow_unsafe=True,
+        )
 
 
 class TwoStageSizeTests(unittest.TestCase):
