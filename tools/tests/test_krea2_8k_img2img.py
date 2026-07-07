@@ -1,8 +1,12 @@
 from types import SimpleNamespace
 import unittest
 
-from modules_forge.krea2_upscale import auto_first_pass_long_edge, target_size, two_stage_sizes
-from tools.krea2_8k_img2img import validate_args
+from modules_forge.krea2_upscale import (
+    auto_first_pass_long_edge,
+    target_size,
+    two_stage_sizes,
+)
+from tools.krea2_8k_img2img import capped_diffusion_size, validate_args
 
 
 def valid_args(**overrides):
@@ -11,6 +15,7 @@ def valid_args(**overrides):
         "width": None,
         "height": None,
         "first_pass_long_edge": 0,
+        "diffusion_long_edge_cap": 0,
         "steps": 12,
         "tile_width": 768,
         "tile_height": 768,
@@ -21,6 +26,8 @@ def valid_args(**overrides):
         "first_pass_denoise": 0.22,
         "cfg": 1.0,
         "distilled_cfg": 1.15,
+        "progress_interval": 30.0,
+        "no_progress_timeout": 0.0,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -69,14 +76,53 @@ class ArgumentValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "--first-pass-long-edge"):
             validate_args(valid_args(first_pass_long_edge=-64))
 
+    def test_rejects_negative_diffusion_long_edge_cap(self):
+        with self.assertRaisesRegex(ValueError, "--diffusion-long-edge-cap"):
+            validate_args(valid_args(diffusion_long_edge_cap=-1))
+
+    def test_rejects_negative_progress_interval(self):
+        with self.assertRaisesRegex(ValueError, "--progress-interval"):
+            validate_args(valid_args(progress_interval=-0.1))
+
+    def test_rejects_negative_no_progress_timeout(self):
+        with self.assertRaisesRegex(ValueError, "--no-progress-timeout"):
+            validate_args(valid_args(no_progress_timeout=-0.1))
+
+    def test_rejects_no_progress_timeout_without_progress_polling(self):
+        with self.assertRaisesRegex(ValueError, "--no-progress-timeout requires"):
+            validate_args(valid_args(no_progress_timeout=120, progress_interval=0))
+
+
+class DiffusionCapTests(unittest.TestCase):
+    def test_returns_target_when_cap_is_disabled(self):
+        self.assertEqual(capped_diffusion_size(1254, 1254, 6144, 6144, 0), (6144, 6144))
+
+    def test_returns_target_when_target_is_below_cap(self):
+        self.assertEqual(
+            capped_diffusion_size(1254, 1254, 4096, 4096, 6144), (4096, 4096)
+        )
+
+    def test_caps_diffusion_size_to_requested_long_edge(self):
+        self.assertEqual(
+            capped_diffusion_size(1254, 1254, 6144, 6144, 4096), (4096, 4096)
+        )
+
+    def test_rejects_cap_below_source_long_edge(self):
+        with self.assertRaisesRegex(ValueError, "--diffusion-long-edge-cap"):
+            capped_diffusion_size(1254, 1254, 6144, 6144, 1024)
+
 
 class TwoStageSizeTests(unittest.TestCase):
     def test_uses_final_aspect_ratio_for_intermediate_size(self):
-        self.assertEqual(two_stage_sizes(1000, 500, 8192, 8192, 4096), ((4096, 4096), (8192, 8192)))
+        self.assertEqual(
+            two_stage_sizes(1000, 500, 8192, 8192, 4096), ((4096, 4096), (8192, 8192))
+        )
 
     def test_uses_auto_intermediate_size(self):
         self.assertEqual(auto_first_pass_long_edge(1000, 500, 8192, 4096), 2880)
-        self.assertEqual(two_stage_sizes(1000, 500, 8192, 4096, 0), ((2880, 1408), (8192, 4096)))
+        self.assertEqual(
+            two_stage_sizes(1000, 500, 8192, 4096, 0), ((2880, 1408), (8192, 4096))
+        )
 
     def test_rejects_auto_when_no_intermediate_multiple_exists(self):
         with self.assertRaisesRegex(ValueError, "too close"):

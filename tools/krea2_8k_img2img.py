@@ -3,6 +3,7 @@ import base64
 import io
 import json
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +15,12 @@ if str(ROOT) not in sys.path:
 import requests
 from PIL import Image
 
-from modules_forge.krea2_upscale import require_positive_int, target_size, two_stage_sizes
+from modules_forge.krea2_upscale import (
+    require_positive_int,
+    size_from_long_edge,
+    target_size,
+    two_stage_sizes,
+)
 
 
 DEFAULT_API = "http://127.0.0.1:7861"
@@ -23,6 +29,7 @@ DEFAULT_OUTPUT_ROOT = "output"
 
 def emit(message: str):
     sys.stdout.write(f"{message}\n")
+    sys.stdout.flush()
 
 
 def validate_args(args):
@@ -41,10 +48,18 @@ def validate_args(args):
     ):
         require_positive_int(value, name)
 
+    if args.diffusion_long_edge_cap < 0:
+        raise ValueError("--diffusion-long-edge-cap must be >= 0.")
     if args.first_pass_long_edge < 0:
         raise ValueError("--first-pass-long-edge must be >= 0.")
     if args.tile_overlap < 0:
         raise ValueError("--tile-overlap must be >= 0.")
+    if args.progress_interval < 0:
+        raise ValueError("--progress-interval must be >= 0.")
+    if args.no_progress_timeout < 0:
+        raise ValueError("--no-progress-timeout must be >= 0.")
+    if args.no_progress_timeout > 0 and args.progress_interval <= 0:
+        raise ValueError("--no-progress-timeout requires --progress-interval > 0.")
     if not 0 <= args.denoise <= 1:
         raise ValueError("--denoise must be between 0 and 1.")
     if args.cfg < 0:
@@ -66,6 +81,24 @@ def decode_b64_image(data: str) -> Image.Image:
         data = data.split(",", 1)[1]
     with Image.open(io.BytesIO(base64.b64decode(data))) as image:
         return image.convert("RGB")
+
+
+def capped_diffusion_size(
+    source_width: int,
+    source_height: int,
+    target_width: int,
+    target_height: int,
+    cap_long_edge: int,
+) -> tuple[int, int]:
+    if cap_long_edge == 0 or max(target_width, target_height) <= cap_long_edge:
+        return target_width, target_height
+
+    source_long_edge = max(source_width, source_height)
+    if cap_long_edge < source_long_edge:
+        raise ValueError(
+            "--diffusion-long-edge-cap must be >= source long edge when it caps the diffusion pass."
+        )
+    return size_from_long_edge(target_width, target_height, cap_long_edge)
 
 
 def prompt_from_png(path: Path) -> tuple[str, str]:
@@ -98,7 +131,17 @@ def recent_saved_images(root: Path, started_at: float) -> list[Path]:
     return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def build_img2img_payload(args, image: Image.Image, prompt: str, negative_prompt: str, width: int, height: int, denoise: float, send_images: bool, save_images: bool) -> dict:
+def build_img2img_payload(
+    args,
+    image: Image.Image,
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    denoise: float,
+    send_images: bool,
+    save_images: bool,
+) -> dict:
     return {
         "init_images": [image_to_b64_png(image)],
         "prompt": prompt,
@@ -135,18 +178,96 @@ def build_img2img_payload(args, image: Image.Image, prompt: str, negative_prompt
     }
 
 
-def write_payload_preview(output_dir: Path, name: str, payload: dict, init_image_description: str, extra: dict | None = None) -> Path:
+def write_payload_preview(
+    output_dir: Path,
+    name: str,
+    payload: dict,
+    init_image_description: str,
+    extra: dict | None = None,
+) -> Path:
     preview = dict(payload)
     preview["init_images"] = [init_image_description]
     if extra:
         preview.update(extra)
     preview_path = output_dir / name
-    preview_path.write_text(json.dumps(preview, ensure_ascii=False, indent=2), encoding="utf-8")
+    preview_path.write_text(
+        json.dumps(preview, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return preview_path
 
 
+def poll_progress(args, stage_name: str, stop_event: threading.Event):
+    last_error = ""
+    last_progress_key = None
+    last_progress_at = time.monotonic()
+    while not stop_event.wait(args.progress_interval):
+        try:
+            response = requests.get(
+                f"{args.api}/sdapi/v1/progress",
+                params={"skip_current_image": "true"},
+                timeout=5,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            if error != last_error:
+                emit(f"{stage_name}_PROGRESS_ERROR={error}")
+                last_error = error
+            continue
+
+        state = data.get("state") or {}
+        progress = data.get("progress")
+        progress_key = (
+            progress,
+            state.get("sampling_step"),
+            state.get("sampling_steps"),
+            state.get("job_timestamp"),
+        )
+        if progress_key != last_progress_key:
+            last_progress_key = progress_key
+            last_progress_at = time.monotonic()
+        elif (
+            args.no_progress_timeout > 0
+            and time.monotonic() - last_progress_at >= args.no_progress_timeout
+        ):
+            emit(f"{stage_name}_NO_PROGRESS_TIMEOUT={args.no_progress_timeout}")
+            try:
+                requests.post(f"{args.api}/sdapi/v1/interrupt", timeout=5)
+            except requests.RequestException as exc:
+                emit(f"{stage_name}_INTERRUPT_ERROR={type(exc).__name__}: {exc}")
+            stop_event.set()
+            return
+
+        if isinstance(progress, (int, float)):
+            progress_text = f"{progress:.4f}"
+        else:
+            progress_text = str(progress)
+        emit(
+            f"{stage_name}_PROGRESS={progress_text} "
+            f"STEP={state.get('sampling_step')}/{state.get('sampling_steps')} "
+            f"JOB={state.get('job')} ETA={data.get('eta_relative')}"
+        )
+
+
 def post_img2img(args, payload: dict, stage_name: str) -> dict:
-    response = requests.post(f"{args.api}/sdapi/v1/img2img", json=payload, timeout=args.timeout)
+    stop_event = None
+    progress_thread = None
+    if args.progress_interval > 0:
+        stop_event = threading.Event()
+        progress_thread = threading.Thread(
+            target=poll_progress, args=(args, stage_name, stop_event), daemon=True
+        )
+        progress_thread.start()
+    try:
+        response = requests.post(
+            f"{args.api}/sdapi/v1/img2img", json=payload, timeout=args.timeout
+        )
+    finally:
+        if stop_event is not None:
+            stop_event.set()
+        if progress_thread is not None:
+            progress_thread.join(timeout=1)
     emit(f"{stage_name}_HTTP={response.status_code}")
     if response.status_code != 200:
         emit(response.text[:4000])
@@ -155,17 +276,58 @@ def post_img2img(args, payload: dict, stage_name: str) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Krea2 8K img2img upscale via Forge MultiDiffusion.")
+    parser = argparse.ArgumentParser(
+        description="Krea2 8K img2img upscale via Forge MultiDiffusion."
+    )
     parser.add_argument("--input", required=True, help="Input image path.")
     parser.add_argument("--api", default=DEFAULT_API, help="Forge API base URL.")
-    parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT, help="Output root directory.")
-    parser.add_argument("--prompt", default=None, help="Prompt. Defaults to PNG infotext prompt.")
-    parser.add_argument("--negative-prompt", default=None, help="Negative prompt. Defaults to PNG infotext negative prompt.")
-    parser.add_argument("--upscale-mode", default="two-stage", choices=["single-stage", "two-stage"], help="Upscale flow to run.")
-    parser.add_argument("--long-edge", type=int, default=8192, help="Target long edge when width/height are not set.")
-    parser.add_argument("--width", type=int, default=None, help="Explicit target width. Must be passed with --height.")
-    parser.add_argument("--height", type=int, default=None, help="Explicit target height. Must be passed with --width.")
-    parser.add_argument("--first-pass-long-edge", type=int, default=0, help="Intermediate long edge for --upscale-mode two-stage. 0 selects an automatic size.")
+    parser.add_argument(
+        "--output-root", default=DEFAULT_OUTPUT_ROOT, help="Output root directory."
+    )
+    parser.add_argument(
+        "--prompt", default=None, help="Prompt. Defaults to PNG infotext prompt."
+    )
+    parser.add_argument(
+        "--negative-prompt",
+        default=None,
+        help="Negative prompt. Defaults to PNG infotext negative prompt.",
+    )
+    parser.add_argument(
+        "--upscale-mode",
+        default="two-stage",
+        choices=["single-stage", "two-stage"],
+        help="Upscale flow to run.",
+    )
+    parser.add_argument(
+        "--long-edge",
+        type=int,
+        default=8192,
+        help="Target long edge when width/height are not set.",
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=None,
+        help="Explicit target width. Must be passed with --height.",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=None,
+        help="Explicit target height. Must be passed with --width.",
+    )
+    parser.add_argument(
+        "--first-pass-long-edge",
+        type=int,
+        default=0,
+        help="Intermediate long edge for --upscale-mode two-stage. 0 selects an automatic size.",
+    )
+    parser.add_argument(
+        "--diffusion-long-edge-cap",
+        type=int,
+        default=0,
+        help="Maximum long edge used for the final diffusion pass. 0 disables the cap. When capped below the output target, the returned diffusion image is resized to the requested target locally.",
+    )
     parser.add_argument("--steps", type=int, default=12)
     parser.add_argument("--sampler", default="DPM++ SDE")
     parser.add_argument("--scheduler", default="Simple")
@@ -178,10 +340,36 @@ def main() -> int:
     parser.add_argument("--tile-height", type=int, default=768)
     parser.add_argument("--tile-overlap", type=int, default=96)
     parser.add_argument("--tile-batch-size", type=int, default=1)
-    parser.add_argument("--method", default="Mixture of Diffusers", choices=["MultiDiffusion", "Mixture of Diffusers"])
-    parser.add_argument("--timeout", type=int, default=43200, help="HTTP timeout in seconds.")
-    parser.add_argument("--return-image", action="store_true", help="Return image over API instead of relying on Forge save.")
-    parser.add_argument("--dry-run", action="store_true", help="Write resized input and request preview, but do not call Forge.")
+    parser.add_argument(
+        "--method",
+        default="Mixture of Diffusers",
+        choices=["MultiDiffusion", "Mixture of Diffusers"],
+    )
+    parser.add_argument(
+        "--timeout", type=int, default=43200, help="HTTP timeout in seconds."
+    )
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=30.0,
+        help="Seconds between Forge progress polling messages during API calls. 0 disables progress polling.",
+    )
+    parser.add_argument(
+        "--no-progress-timeout",
+        type=float,
+        default=0.0,
+        help="Interrupt Forge if progress does not change for this many seconds. 0 disables this watchdog.",
+    )
+    parser.add_argument(
+        "--return-image",
+        action="store_true",
+        help="Return image over API instead of relying on Forge save.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Write resized input and request preview, but do not call Forge.",
+    )
     args = parser.parse_args()
     validate_args(args)
 
@@ -191,13 +379,23 @@ def main() -> int:
 
     with Image.open(input_path) as image:
         source = image.convert("RGB")
-    target_w, target_h = target_size(source.width, source.height, args.long_edge, args.width, args.height)
+    target_w, target_h = target_size(
+        source.width, source.height, args.long_edge, args.width, args.height
+    )
+    diffusion_w, diffusion_h = capped_diffusion_size(
+        source.width, source.height, target_w, target_h, args.diffusion_long_edge_cap
+    )
+    needs_final_resize = (diffusion_w, diffusion_h) != (target_w, target_h)
 
     png_prompt, png_negative = prompt_from_png(input_path)
     prompt = args.prompt if args.prompt is not None else png_prompt
-    negative_prompt = args.negative_prompt if args.negative_prompt is not None else png_negative
+    negative_prompt = (
+        args.negative_prompt if args.negative_prompt is not None else png_negative
+    )
     if not prompt:
-        raise ValueError("Prompt is empty. Pass --prompt or use a PNG with Forge infotext.")
+        raise ValueError(
+            "Prompt is empty. Pass --prompt or use a PNG with Forge infotext."
+        )
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path(args.output_root) / f"krea2_8k_img2img_{stamp}"
@@ -207,19 +405,41 @@ def main() -> int:
     emit(f"INPUT={input_path}")
     emit(f"UPSCALE_MODE={args.upscale_mode}")
     emit(f"TARGET={target_w}x{target_h} ({target_w * target_h / 1_000_000:.1f} MP)")
+    if needs_final_resize:
+        emit(
+            f"DIFFUSION_TARGET={diffusion_w}x{diffusion_h} ({diffusion_w * diffusion_h / 1_000_000:.1f} MP)"
+        )
+        emit(f"FINAL_RESIZE_TARGET={target_w}x{target_h}")
 
     if args.upscale_mode == "single-stage":
-        resized = source.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        resized = source.resize((diffusion_w, diffusion_h), Image.Resampling.LANCZOS)
         resized_path = output_dir / "resized_input.png"
         resized.save(resized_path)
 
-        payload = build_img2img_payload(args, resized, prompt, negative_prompt, target_w, target_h, args.denoise, bool(args.return_image), True)
+        payload = build_img2img_payload(
+            args,
+            resized,
+            prompt,
+            negative_prompt,
+            diffusion_w,
+            diffusion_h,
+            args.denoise,
+            bool(args.return_image or needs_final_resize),
+            True,
+        )
         preview_path = write_payload_preview(
             output_dir,
             "request_preview.json",
             payload,
-            f"<base64 PNG omitted: {target_w}x{target_h}>",
-            {"input_path": str(input_path), "resized_input": str(resized_path), "upscale_mode": args.upscale_mode},
+            f"<base64 PNG omitted: {diffusion_w}x{diffusion_h}>",
+            {
+                "input_path": str(input_path),
+                "resized_input": str(resized_path),
+                "upscale_mode": args.upscale_mode,
+                "target_output": f"{target_w}x{target_h}",
+                "diffusion_target": f"{diffusion_w}x{diffusion_h}",
+                "final_resize": needs_final_resize,
+            },
         )
 
         emit(f"RESIZED_INPUT={resized_path}")
@@ -232,8 +452,16 @@ def main() -> int:
         started_at = time.time()
         data = post_img2img(args, payload, "FINAL")
     else:
-        (stage1_w, stage1_h), _ = two_stage_sizes(source.width, source.height, target_w, target_h, args.first_pass_long_edge)
-        emit(f"STAGE1_TARGET={stage1_w}x{stage1_h} ({stage1_w * stage1_h / 1_000_000:.1f} MP)")
+        (stage1_w, stage1_h), _ = two_stage_sizes(
+            source.width,
+            source.height,
+            diffusion_w,
+            diffusion_h,
+            args.first_pass_long_edge,
+        )
+        emit(
+            f"STAGE1_TARGET={stage1_w}x{stage1_h} ({stage1_w * stage1_h / 1_000_000:.1f} MP)"
+        )
         if args.first_pass_long_edge == 0:
             emit(f"STAGE1_LONG_EDGE=auto ({max(stage1_w, stage1_h)})")
 
@@ -241,7 +469,17 @@ def main() -> int:
         stage1_input_path = output_dir / "stage1_resized_input.png"
         stage1_input.save(stage1_input_path)
 
-        stage1_payload = build_img2img_payload(args, stage1_input, prompt, negative_prompt, stage1_w, stage1_h, args.first_pass_denoise, True, False)
+        stage1_payload = build_img2img_payload(
+            args,
+            stage1_input,
+            prompt,
+            negative_prompt,
+            stage1_w,
+            stage1_h,
+            args.first_pass_denoise,
+            True,
+            False,
+        )
         stage1_preview_path = write_payload_preview(
             output_dir,
             "stage1_request_preview.json",
@@ -251,16 +489,34 @@ def main() -> int:
                 "input_path": str(input_path),
                 "stage1_resized_input": str(stage1_input_path),
                 "upscale_mode": args.upscale_mode,
+                "target_output": f"{target_w}x{target_h}",
+                "diffusion_target": f"{diffusion_w}x{diffusion_h}",
+                "final_resize": needs_final_resize,
             },
         )
 
-        stage2_preview_payload = build_img2img_payload(args, Image.new("RGB", (64, 64)), prompt, negative_prompt, target_w, target_h, args.denoise, bool(args.return_image), True)
+        stage2_preview_payload = build_img2img_payload(
+            args,
+            Image.new("RGB", (64, 64)),
+            prompt,
+            negative_prompt,
+            diffusion_w,
+            diffusion_h,
+            args.denoise,
+            bool(args.return_image or needs_final_resize),
+            True,
+        )
         stage2_preview_path = write_payload_preview(
             output_dir,
             "stage2_request_preview.json",
             stage2_preview_payload,
-            f"<stage1 result resized to {target_w}x{target_h}>",
-            {"upscale_mode": args.upscale_mode},
+            f"<stage1 result resized to {diffusion_w}x{diffusion_h}>",
+            {
+                "upscale_mode": args.upscale_mode,
+                "target_output": f"{target_w}x{target_h}",
+                "diffusion_target": f"{diffusion_w}x{diffusion_h}",
+                "final_resize": needs_final_resize,
+            },
         )
 
         emit(f"STAGE1_RESIZED_INPUT={stage1_input_path}")
@@ -280,18 +536,36 @@ def main() -> int:
         stage1_image.save(stage1_output_path)
         emit(f"STAGE1_IMAGE={stage1_output_path}")
 
-        stage2_input = stage1_image.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        stage2_input = stage1_image.resize(
+            (diffusion_w, diffusion_h), Image.Resampling.LANCZOS
+        )
         stage2_input_path = output_dir / "stage2_resized_input.png"
         stage2_input.save(stage2_input_path)
         emit(f"STAGE2_RESIZED_INPUT={stage2_input_path}")
 
-        stage2_payload = build_img2img_payload(args, stage2_input, prompt, negative_prompt, target_w, target_h, args.denoise, bool(args.return_image), True)
+        stage2_payload = build_img2img_payload(
+            args,
+            stage2_input,
+            prompt,
+            negative_prompt,
+            diffusion_w,
+            diffusion_h,
+            args.denoise,
+            bool(args.return_image or needs_final_resize),
+            True,
+        )
         write_payload_preview(
             output_dir,
             "stage2_request_preview.json",
             stage2_payload,
-            f"<base64 PNG omitted: {target_w}x{target_h}>",
-            {"upscale_mode": args.upscale_mode, "stage2_resized_input": str(stage2_input_path)},
+            f"<base64 PNG omitted: {diffusion_w}x{diffusion_h}>",
+            {
+                "upscale_mode": args.upscale_mode,
+                "stage2_resized_input": str(stage2_input_path),
+                "target_output": f"{target_w}x{target_h}",
+                "diffusion_target": f"{diffusion_w}x{diffusion_h}",
+                "final_resize": needs_final_resize,
+            },
         )
 
         started_at = time.time()
@@ -301,8 +575,21 @@ def main() -> int:
     info_path.write_text(str(data.get("info", "")), encoding="utf-8")
     emit(f"INFO={info_path}")
 
-    if args.return_image and data.get("images"):
-        image = decode_b64_image(data["images"][0])
+    returned_images = data.get("images") or []
+    if needs_final_resize:
+        if not returned_images:
+            raise RuntimeError(
+                "FINAL img2img returned no image. --diffusion-long-edge-cap requires a returned image for local final resize."
+            )
+        image = decode_b64_image(returned_images[0])
+        diffusion_output_path = output_dir / "final_diffusion_img2img.png"
+        image.save(diffusion_output_path)
+        output_path = output_dir / "krea2_8k_img2img.png"
+        image.resize((target_w, target_h), Image.Resampling.LANCZOS).save(output_path)
+        emit(f"FINAL_DIFFUSION_IMAGE={diffusion_output_path}")
+        emit(f"IMAGE={output_path}")
+    elif args.return_image and returned_images:
+        image = decode_b64_image(returned_images[0])
         output_path = output_dir / "krea2_8k_img2img.png"
         image.save(output_path)
         emit(f"IMAGE={output_path}")
@@ -314,7 +601,9 @@ def main() -> int:
             "output_dir": str(output_dir),
         }
         manifest_path = output_dir / "saved_images_manifest.json"
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         emit(f"SAVED_IMAGES_MANIFEST={manifest_path}")
         if saved:
             emit(f"LATEST_SAVED_IMAGE={saved[0]}")

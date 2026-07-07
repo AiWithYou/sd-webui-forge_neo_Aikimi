@@ -167,6 +167,14 @@ save_images: true
 
 ただし `8192x8192` は約67MPで、縦長の `5440x8192` よりかなり重いです。まずは長辺8192の比率維持を推奨します。
 
+6K以上で最終img2imgがVRAMを使い切る場合は、拡散パスだけを明示的に抑えて、最後にローカルで目標サイズへLanczosリサイズします。例: 6K出力を作るが、最終拡散は長辺4096で止める場合:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --long-edge 6144 --diffusion-long-edge-cap 4096
+```
+
+進捗が一定時間変わらない場合にForgeへinterruptを送るには `--no-progress-timeout 600` のように明示します。
+
 従来の単段処理を明示する場合:
 
 ```powershell
@@ -339,6 +347,14 @@ response.raise_for_status()
 ```powershell
 .\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --denoise 0.24 --steps 10
 ```
+
+6K以上で最終パスが止まる場合は、拡散する長辺を4096などに明示制限します。最終出力は指定した長辺へローカルで保存されます。
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --long-edge 6144 --diffusion-long-edge-cap 4096
+```
+
+無進捗時に自動停止したい場合は、例として `--no-progress-timeout 600` を追加します。
 
 より描き直す場合:
 
