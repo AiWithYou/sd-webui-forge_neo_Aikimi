@@ -111,6 +111,8 @@ Diffusion in Low Bits: bnb-nf4
 
 ```text
 元画像
+→ Lanczosで中間サイズへ拡大
+→ img2img
 → Lanczosで長辺8192へ拡大
 → img2img
 → MultiDiffusion Integratedで拡散処理をタイル化
@@ -121,6 +123,7 @@ Diffusion in Low Bits: bnb-nf4
 
 ```text
 tools/krea2_8k_img2img.py
+scripts/krea2_2stage_upscale.py
 ```
 
 既定の実行:
@@ -138,13 +141,16 @@ tools/krea2_8k_img2img.py
 既定値:
 
 ```text
+Upscale mode: two-stage
 Long edge: 8192
+Stage 1 long edge: 4096
 Sampler: DPM++ SDE
 Scheduler: Simple
 Steps: 12
 CFG: 1.0
 Distilled CFG: 1.15
-Denoising strength: 0.28
+Stage 1 denoising strength: 0.22
+Final denoising strength: 0.28
 MultiDiffusion: enabled
 Tile: 768x768
 Overlap: 96
@@ -160,6 +166,14 @@ save_images: true
 ```
 
 ただし `8192x8192` は約67MPで、縦長の `5440x8192` よりかなり重いです。まずは長辺8192の比率維持を推奨します。
+
+従来の単段処理を明示する場合:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --upscale-mode single-stage
+```
+
+Forge UIから使う場合は、img2imgタブの `Script` で `Krea2 2-Stage Upscale` を選びます。通常のimg2img入力画像だけを対象にしており、Batch Count / Batch Size はどちらも1にします。
 
 ### Tiled VAE / tiled Conv2d
 
@@ -314,6 +328,12 @@ response.raise_for_status()
 .\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>'
 ```
 
+既定では `--upscale-mode two-stage` で、中間パスは長辺4096、最終パスは長辺8192です。中間サイズを変える場合:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --first-pass-long-edge 3072
+```
+
 より保守的にする場合:
 
 ```powershell
@@ -413,6 +433,7 @@ QuantState.from_dict(...)
 ### 8Kで止まる、またはVRAMが張り付く
 
 直接t2iで巨大解像度を作らず、`tools/krea2_8k_img2img.py` を使います。
+Forge UIだけで試す場合は、img2imgタブの `Script` から `Krea2 2-Stage Upscale` を選びます。
 
 まずdry-run:
 
