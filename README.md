@@ -1,5 +1,53 @@
 # Stable Diffusion WebUI Forge - NeoW 日本語README
 
+## まずこれだけ: Krea2 bnb-nf4一括セットアップ
+
+初学者向けに、Krea2 用のモデル、text encoder、VAE を自動でダウンロードして Forge 標準フォルダへ配置するスクリプトを用意しています。
+
+Windowsで次をダブルクリックします。
+
+```text
+download_krea2_bnb_nf4_models.bat
+```
+
+ダウンロードするもの:
+
+```text
+models/Stable-diffusion/Krea2_Center NF4 - Krea2.safetensors
+models/text_encoder/qwen3vl_4b_fp8_scaled.safetensors
+models/VAE/qwen_image_vae.safetensors
+```
+
+合計で約12.27GiBを Hugging Face からダウンロードします。途中で止まった場合は、同じbatをもう一度ダブルクリックすると `.part` から再開します。既に正しいサイズと safetensors ヘッダーのファイルがある場合は再ダウンロードしません。
+
+完了したら次をダブルクリックして起動します。
+
+```text
+webui-user.bat
+```
+
+Forge UIでは以下を選びます。
+
+```text
+Preset: krea
+Checkpoint: Krea2_Center NF4 - Krea2.safetensors
+VAE / Text Encoder:
+  qwen_image_vae.safetensors
+  qwen3vl_4b_fp8_scaled.safetensors
+Diffusion in Low Bits: bnb-nf4
+```
+
+選択後はそのまま `txt2img` で生成できます。まずは以下の初期値から試します。
+
+```text
+Sampler: Euler
+Scheduler: Simple
+Steps: 8
+CFG scale: 1.0
+Distilled CFG: 1.15
+Size: 768x1152
+```
+
 このリポジトリは、`Stable Diffusion WebUI Forge - Neo` をベースにした作業forkです。
 
 主目的は、Forge Neoの最新系を使いながら、Krea2、低ビット量子化モデル、巨大解像度のimg2img/upscale、モデルマージまわりを実用しやすくすることです。
