@@ -62,11 +62,16 @@ def make_checkpoint_manager_ui():
         if len(sd_models.checkpoints_list) > 0:
             shared.opts.set("sd_model_checkpoint", next(iter(sd_models.checkpoints_list.values())).name)
 
+    ckpt_list, vae_list = refresh_models()
+    current_preset = shared.opts.forge_preset
+    checkpoint_value = getattr(shared.opts, f"forge_checkpoint_{current_preset}", shared.opts.sd_model_checkpoint)
+    module_value = [os.path.basename(m) for m in getattr(shared.opts, f"forge_additional_modules_{current_preset}", shared.opts.forge_additional_modules)]
+
     ui_forge_preset = gr.Dropdown(label="UI Preset", value=lambda: shared.opts.forge_preset, choices=PresetArch.choices(), elem_id="forge_ui_preset")
 
-    ui_checkpoint = gr.Dropdown(label="Checkpoint", value=None, choices=None, elem_id="setting_sd_model_checkpoint", elem_classes=["model_selection"])
+    ui_checkpoint = gr.Dropdown(label="Checkpoint", value=checkpoint_value, choices=ckpt_list, elem_id="setting_sd_model_checkpoint", elem_classes=["model_selection"])
 
-    ui_vae = gr.Dropdown(label="VAE / Text Encoder", value=None, choices=None, multiselect=True, elem_id="setting_sd_modules", elem_classes=["model_selection"])
+    ui_vae = gr.Dropdown(label="VAE / Text Encoder", value=module_value, choices=vae_list, multiselect=True, elem_id="setting_sd_modules", elem_classes=["model_selection"])
 
     def refresh_model_list():
         ckpt_list, vae_list = refresh_models()
