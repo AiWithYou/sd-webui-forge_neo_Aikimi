@@ -191,7 +191,6 @@ def upscale_tensor_tiles(model: Callable, tensor: torch.Tensor, tile_size: int, 
             del tile, out
             pbar.update(1)
 
-    del last_mask
     return accum[:, :3].div_(accum[:, 3:].clamp_min_(1e-6))
 
 

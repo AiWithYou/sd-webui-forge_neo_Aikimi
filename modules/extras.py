@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from enum import Enum
@@ -15,6 +16,8 @@ from modules.ui_common import plaintext_to_html
 from modules_forge.packages.huggingface_guess.detection import (
     unet_prefix_from_state_dict,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def run_pnginfo(image):
@@ -128,7 +131,7 @@ def run_modelmerger(id_task, primary_model_name: str, secondary_model_name: str,
 
     if theta_func2:
         shared.state.textinfo = "Loading B"
-        print(f"Loading {secondary_model_info.filename}...")
+        logger.info(f"Loading {secondary_model_info.filename}...")
         _theta_1 = load_torch_file(secondary_model_info.filename)
         prefix_1 = unet_prefix_from_state_dict(_theta_1)
         theta_1 = state_dict_prefix_replace(_theta_1, {prefix_1: "model.diffusion_model."})
@@ -138,7 +141,7 @@ def run_modelmerger(id_task, primary_model_name: str, secondary_model_name: str,
 
     if theta_func1:
         shared.state.textinfo = "Loading C"
-        print(f"Loading {tertiary_model_info.filename}...")
+        logger.info(f"Loading {tertiary_model_info.filename}...")
         _theta_2 = load_torch_file(tertiary_model_info.filename)
         prefix_2 = unet_prefix_from_state_dict(_theta_2)
         theta_2 = state_dict_prefix_replace(_theta_2, {prefix_2: "model.diffusion_model."})
@@ -166,7 +169,7 @@ def run_modelmerger(id_task, primary_model_name: str, secondary_model_name: str,
             raise SystemError("Keys Mismatch between B & C...")
 
     shared.state.textinfo = f"Loading {primary_model_info.filename}..."
-    print(f"Loading {primary_model_info.filename}...")
+    logger.info(f"Loading {primary_model_info.filename}...")
     _theta_0 = load_torch_file(primary_model_info.filename)
     prefix_0 = unet_prefix_from_state_dict(_theta_0)
     theta_0 = state_dict_prefix_replace(_theta_0, {prefix_0: "model.diffusion_model."})
@@ -176,7 +179,7 @@ def run_modelmerger(id_task, primary_model_name: str, secondary_model_name: str,
         _keys = list(theta_0.keys())
         shared.state.textinfo = "Merging A and B"
         shared.state.sampling_steps = len(_keys)
-        print("Merging...")
+        logger.info("Merging...")
 
         total = len(_keys)
         missing = 0
@@ -215,7 +218,7 @@ def run_modelmerger(id_task, primary_model_name: str, secondary_model_name: str,
 
     shared.state.nextjob()
     shared.state.textinfo = "Saving"
-    print(f"Saving to {output_modelname}...")
+    logger.info(f"Saving to {output_modelname}...")
 
     metadata = {}
 
@@ -280,7 +283,7 @@ def run_modelmerger(id_task, primary_model_name: str, secondary_model_name: str,
         return sanitized
 
     save_file(theta_0, output_modelname, metadata=sanitize_metadata(metadata))
-    print(f"Checkpoint saved to {output_modelname}")
+    logger.info(f"Checkpoint saved to {output_modelname}")
 
     shared.state.textinfo = "Checkpoint saved"
     shared.state.end()
