@@ -189,6 +189,14 @@ save_images: true
 .\venv\Scripts\python.exe .\tools\krea2_tiled_refine.py --input '<2x-output-image>' --long-edge 5760 --tile-size 1024 --overlap 192 --denoise 0.08 --steps 4
 ```
 
+顔や体だけを描き直したい場合は、全体画像を再拡散せず、`tools/krea2_subject_refine.py` で指定領域だけをKrea2 img2imgしてフェザー合成します。処理に送るのは切り出した小さなcropだけなので、長辺6K級の画像でもGPU負荷を抑えられます。
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_subject_refine.py --input '<large-output-image>' --box 1650,520,2850,2150 --padding 160 --process-long-edge 1536 --denoise 0.10 --steps 4
+```
+
+`--box` は `left,top,right,bottom` のピクセル指定です。複数箇所を処理する場合は `--box` を複数回渡します。画像サイズに依存しない指定が必要な場合は `--box-normalized 0.286,0.208,0.495,0.861` のように0..1の正規化座標を使います。顔だけなら小さめのboxと `--mask-shape ellipse`、体全体なら少し広めのboxと既定の `rectangle` が扱いやすいです。
+
 Forge UIから使う場合は、img2imgタブの `Script` で `Krea2 2-Stage Upscale` を選びます。通常のimg2img入力画像だけを対象にしており、Batch Count / Batch Size はどちらも1にします。
 
 ### Tiled VAE / tiled Conv2d
