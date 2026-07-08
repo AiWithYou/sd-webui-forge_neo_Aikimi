@@ -183,6 +183,12 @@ save_images: true
 .\venv\Scripts\python.exe .\tools\krea2_8k_img2img.py --input '<input-image>' --upscale-mode single-stage
 ```
 
+さらに大きくする場合は、全体を一発で拡散せず、`tools/krea2_tiled_refine.py` で小タイルだけをKrea2 img2imgしてフェザー合成します。例: 既存の2x出力を長辺5760へ拡大し、各タイルは1024pxに制限する場合:
+
+```powershell
+.\venv\Scripts\python.exe .\tools\krea2_tiled_refine.py --input '<2x-output-image>' --long-edge 5760 --tile-size 1024 --overlap 192 --denoise 0.08 --steps 4
+```
+
 Forge UIから使う場合は、img2imgタブの `Script` で `Krea2 2-Stage Upscale` を選びます。通常のimg2img入力画像だけを対象にしており、Batch Count / Batch Size はどちらも1にします。
 
 ### Tiled VAE / tiled Conv2d
