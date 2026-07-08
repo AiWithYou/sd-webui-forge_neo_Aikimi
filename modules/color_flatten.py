@@ -6,7 +6,6 @@ from PIL import Image
 from skimage import color as skimage_color
 from skimage.segmentation import slic
 
-
 FAST_MODE = "Fast Lab Chroma"
 SUPERPIXEL_MODE = "Superpixel Lab Chroma"
 
@@ -56,15 +55,11 @@ def _edge_strength_map(l_channel: np.ndarray, strength: float) -> np.ndarray:
 
 
 def _light_bilateral_u8(channel: np.ndarray, sigma_space: float) -> np.ndarray:
-    return cv2.bilateralFilter(
-        channel, d=5, sigmaColor=10.0, sigmaSpace=max(3.0, sigma_space * 0.5)
-    )
+    return cv2.bilateralFilter(channel, d=5, sigmaColor=10.0, sigmaSpace=max(3.0, sigma_space * 0.5))
 
 
 def _light_bilateral_float(channel: np.ndarray) -> np.ndarray:
-    return cv2.bilateralFilter(
-        channel.astype(np.float32), d=5, sigmaColor=4.0, sigmaSpace=3.0
-    )
+    return cv2.bilateralFilter(channel.astype(np.float32), d=5, sigmaColor=4.0, sigmaSpace=3.0)
 
 
 def chroma_flatten_fast_bgr(
@@ -194,13 +189,9 @@ def color_flatten_pil(
     bgr = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2BGR)
 
     if mode == FAST_MODE:
-        result_bgr = chroma_flatten_fast_bgr(
-            bgr, strength, edge_protect, mean_shift_sp, mean_shift_sr
-        )
+        result_bgr = chroma_flatten_fast_bgr(bgr, strength, edge_protect, mean_shift_sp, mean_shift_sr)
     elif mode == SUPERPIXEL_MODE:
-        result_bgr = superpixel_chroma_flatten_bgr(
-            bgr, strength, edge_protect, n_segments, compactness
-        )
+        result_bgr = superpixel_chroma_flatten_bgr(bgr, strength, edge_protect, n_segments, compactness)
     else:
         raise ValueError(f"Unknown Color Flatten mode: {mode}")
 

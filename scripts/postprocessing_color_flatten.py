@@ -10,9 +10,7 @@ class ScriptPostprocessingColorFlatten(scripts_postprocessing.ScriptPostprocessi
     order = 900
 
     def ui(self):
-        with InputAccordion(
-            False, label="Color Flatten / 色ムラ補正", elem_id="extras_color_flatten"
-        ) as enable:
+        with InputAccordion(False, label="Color Flatten / 色ムラ補正", elem_id="extras_color_flatten") as enable:
             with FormRow():
                 mode = gr.Radio(
                     label="Mode",
