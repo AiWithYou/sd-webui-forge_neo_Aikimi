@@ -42,6 +42,8 @@ setup_logger(logger)
 opt_C = 4
 opt_f = 8
 
+_INPAINT_FULL_RES_OVERLAY_MASK = "inpaint_full_res_overlay_mask"
+
 
 def setup_color_correction(image: Image.Image) -> np.ndarray:
     correction_target = cv2.cvtColor(np.asarray(image.copy(), dtype=np.uint8), cv2.COLOR_RGB2LAB)
@@ -80,6 +82,25 @@ def apply_overlay(image: Image.Image, paste_loc: tuple[int], overlay: Image.Imag
     if high_prec:
         mask: np.ndarray = overlay[1]
         overlay: Image.Image = overlay[0]
+
+    if not high_prec and isinstance(overlay, Image.Image):
+        crop_mask = overlay.info.get(_INPAINT_FULL_RES_OVERLAY_MASK)
+        if crop_mask is not None:
+            if paste_loc is None:
+                raise ValueError("Inpaint full-resolution overlay mask requires a paste location.")
+            if not isinstance(crop_mask, Image.Image):
+                raise ValueError("Inpaint full-resolution overlay mask must be a PIL image.")
+
+            x, y, w, h = paste_loc
+            if crop_mask.size != (w, h):
+                raise ValueError(f"Inpaint full-resolution overlay mask size {crop_mask.size} does not match paste size {(w, h)}.")
+
+            image = images.resize_image(1, image, w, h).convert("RGB")
+            original_denoised_image = uncrop(image, overlay.size, paste_loc)
+
+            base_image = overlay.convert("RGB")
+            base_image.paste(image, (x, y), crop_mask.convert("L"))
+            return base_image, original_denoised_image
 
     if paste_loc is not None:
         image = uncrop(image, (overlay.width, overlay.height), paste_loc)
@@ -1790,9 +1811,14 @@ class StableDiffusionProcessingImg2Img(StableDiffusionProcessing):
                 if opts.img2img_inpaint_precise_mask:
                     self.overlay_images.append((image.copy(), orig_mask))
                 else:
-                    image_masked = Image.new("RGBa", (image.width, image.height))
-                    image_masked.paste(image.convert("RGBA").convert("RGBa"), mask=ImageOps.invert(self.mask_for_overlay.convert("L")))
-                    self.overlay_images.append(image_masked.convert("RGBA"))
+                    if crop_region is not None:
+                        overlay_image = image
+                        overlay_image.info[_INPAINT_FULL_RES_OVERLAY_MASK] = self.mask_for_overlay.crop(crop_region).convert("L")
+                        self.overlay_images.append(overlay_image)
+                    else:
+                        image_masked = Image.new("RGBa", (image.width, image.height))
+                        image_masked.paste(image.convert("RGBA").convert("RGBa"), mask=ImageOps.invert(self.mask_for_overlay.convert("L")))
+                        self.overlay_images.append(image_masked.convert("RGBA"))
 
             # crop_region is not None if we are doing inpaint full res
             if crop_region is not None:
