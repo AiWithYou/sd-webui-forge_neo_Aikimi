@@ -10,7 +10,7 @@ class ScriptPostprocessingColorFlatten(scripts_postprocessing.ScriptPostprocessi
     order = 900
 
     def ui(self):
-        with InputAccordion(False, label="Color Flatten / 色ムラ補正", elem_id="extras_color_flatten") as enable:
+        with InputAccordion(True, label="Color Flatten / 色ムラ補正", elem_id="extras_color_flatten") as enable:
             with FormRow():
                 mode = gr.Radio(
                     label="Mode",
@@ -23,7 +23,7 @@ class ScriptPostprocessingColorFlatten(scripts_postprocessing.ScriptPostprocessi
                     maximum=1.0,
                     step=0.01,
                     label="Strength",
-                    value=0.65,
+                    value=0.80,
                     elem_id="extras_color_flatten_strength",
                 )
                 edge_protect = gr.Checkbox(
@@ -38,7 +38,7 @@ class ScriptPostprocessingColorFlatten(scripts_postprocessing.ScriptPostprocessi
                     maximum=80,
                     step=1,
                     label="Mean Shift Spatial",
-                    value=10,
+                    value=12,
                     elem_id="extras_color_flatten_mean_shift_sp",
                 )
                 mean_shift_sr = gr.Slider(
@@ -46,7 +46,7 @@ class ScriptPostprocessingColorFlatten(scripts_postprocessing.ScriptPostprocessi
                     maximum=80,
                     step=1,
                     label="Mean Shift Color",
-                    value=18,
+                    value=24,
                     elem_id="extras_color_flatten_mean_shift_sr",
                 )
 
@@ -82,12 +82,12 @@ class ScriptPostprocessingColorFlatten(scripts_postprocessing.ScriptPostprocessi
     def process(
         self,
         pp: scripts_postprocessing.PostprocessedImage,
-        enable=False,
+        enable=True,
         mode=FAST_MODE,
-        strength=0.65,
+        strength=0.80,
         edge_protect=True,
-        mean_shift_sp=10,
-        mean_shift_sr=18,
+        mean_shift_sp=12,
+        mean_shift_sr=24,
         n_segments=1200,
         compactness=12.0,
     ):

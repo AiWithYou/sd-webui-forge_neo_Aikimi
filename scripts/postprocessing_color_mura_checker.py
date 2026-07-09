@@ -222,7 +222,7 @@ class ScriptPostprocessingColorMuraChecker(scripts_postprocessing.ScriptPostproc
     order = 1100
 
     def ui(self):
-        with InputAccordion(False, label="色むら確認 / Color Mura Checker", elem_id="extras_color_mura_checker") as enabled:
+        with InputAccordion(True, label="色むら確認 / Color Mura Checker", elem_id="extras_color_mura_checker") as enabled:
             with FormRow():
                 output_modes = gr.CheckboxGroup(
                     choices=["Overlay", "Heatmap"],
@@ -309,8 +309,8 @@ class ScriptPostprocessingColorMuraChecker(scripts_postprocessing.ScriptPostproc
     def process(
         self,
         pp: scripts_postprocessing.PostprocessedImage,
-        color_mura_enabled=False,
-        color_mura_outputs=None,
+        color_mura_enabled=True,
+        color_mura_outputs=("Overlay", "Heatmap"),
         color_mura_add_metrics=True,
         color_mura_ignore_near_white_bg=False,
         color_mura_blur_sigma=18,
