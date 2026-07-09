@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Optional
 
 import cv2
@@ -12,32 +11,56 @@ from modules import scripts_postprocessing
 from modules.ui_components import FormRow, InputAccordion
 
 
-@dataclass
 class MuraParams:
-    blur_sigma: float = 18.0
-    edge_percentile: float = 96.0
-    edge_dilate: int = 5
-    heat_max_delta_e: float = 12.0
-    overlay_alpha: float = 0.65
-    alpha_threshold: int = 8
-    ignore_near_white_bg: bool = False
-    white_bg_luma_threshold: int = 245
-    white_bg_chroma_threshold: float = 5.0
+    def __init__(
+        self,
+        blur_sigma: float = 18.0,
+        edge_percentile: float = 96.0,
+        edge_dilate: int = 5,
+        heat_max_delta_e: float = 12.0,
+        overlay_alpha: float = 0.65,
+        alpha_threshold: int = 8,
+        ignore_near_white_bg: bool = False,
+        white_bg_luma_threshold: int = 245,
+        white_bg_chroma_threshold: float = 5.0,
+    ):
+        self.blur_sigma = blur_sigma
+        self.edge_percentile = edge_percentile
+        self.edge_dilate = edge_dilate
+        self.heat_max_delta_e = heat_max_delta_e
+        self.overlay_alpha = overlay_alpha
+        self.alpha_threshold = alpha_threshold
+        self.ignore_near_white_bg = ignore_near_white_bg
+        self.white_bg_luma_threshold = white_bg_luma_threshold
+        self.white_bg_chroma_threshold = white_bg_chroma_threshold
 
 
-@dataclass
 class MuraMetrics:
-    valid_area_pct: float
-    mean_delta_e: float
-    median_delta_e: float
-    p90_delta_e: float
-    p95_delta_e: float
-    p99_delta_e: float
-    max_delta_e: float
-    area_delta_e_gt_2_pct: float
-    area_delta_e_gt_5_pct: float
-    area_delta_e_gt_10_pct: float
-    rough_judgement: str
+    def __init__(
+        self,
+        valid_area_pct: float,
+        mean_delta_e: float,
+        median_delta_e: float,
+        p90_delta_e: float,
+        p95_delta_e: float,
+        p99_delta_e: float,
+        max_delta_e: float,
+        area_delta_e_gt_2_pct: float,
+        area_delta_e_gt_5_pct: float,
+        area_delta_e_gt_10_pct: float,
+        rough_judgement: str,
+    ):
+        self.valid_area_pct = valid_area_pct
+        self.mean_delta_e = mean_delta_e
+        self.median_delta_e = median_delta_e
+        self.p90_delta_e = p90_delta_e
+        self.p95_delta_e = p95_delta_e
+        self.p99_delta_e = p99_delta_e
+        self.max_delta_e = max_delta_e
+        self.area_delta_e_gt_2_pct = area_delta_e_gt_2_pct
+        self.area_delta_e_gt_5_pct = area_delta_e_gt_5_pct
+        self.area_delta_e_gt_10_pct = area_delta_e_gt_10_pct
+        self.rough_judgement = rough_judgement
 
 
 def rgb_to_lab_float(rgb: np.ndarray) -> np.ndarray:
