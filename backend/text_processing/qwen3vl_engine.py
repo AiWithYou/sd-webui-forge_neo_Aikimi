@@ -22,157 +22,129 @@ class PromptChunk:
 class Qwen3VLTextProcessingEngine:
     def __init__(self, text_encoder, tokenizer):
         self.emphasis = emphasis.get_current_option(opts.emphasis)()
-
         self.text_encoder = text_encoder
         self.tokenizer = tokenizer
-
         self.max_length = 99999999
         self.min_length = 1
         self.id_pad = 151643
         self.id_template = 151644
         self.id_image = 151655
-
         self.llama_template = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
         self.image_template = "<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>{}<|im_end|>\n<|im_start|>assistant\n"
         self.vision_block = "<|vision_start|><|image_pad|><|vision_end|>"
 
-    def tokenize(self, texts, images=[]):
-        llama_texts = [((self.image_template.replace(self.vision_block, self.vision_block * len(images), 1) if images else self.llama_template).format(text)) if text else " " for text in texts]
+    def tokenize(self, texts, images=None):
+        images = images or []
+        template = self.image_template.replace(self.vision_block, self.vision_block * len(images), 1) if images else self.llama_template
+        llama_texts = [template.format(text or " ") for text in texts]
         return self.tokenizer(llama_texts)["input_ids"]
 
-    def tokenize_line(self, line: str, images=[]):
+    def tokenize_line(self, line: str, images=None):
+        images = images or []
         parsed = parsing.parse_prompt_attention(line, self.emphasis.name)
         tokenized = self.tokenize([text for text, _ in parsed], images)
-
         chunks = []
         chunk = PromptChunk()
 
         def next_chunk():
             nonlocal chunk
-
             chunks.append(chunk)
             chunk = PromptChunk()
 
-        for tokens, (text, weight) in zip(tokenized, parsed):
+        for tokens, (_, weight) in zip(tokenized, parsed):
             embed_count = 0
-            position = 0
-            while position < len(tokens):
-                token = tokens[position]
-
+            for token in tokens:
                 if token == self.id_image:
+                    if embed_count >= len(images):
+                        raise ValueError("Qwen3VL tokenizer produced more image tokens than supplied images")
                     token = {"type": "image", "data": images[embed_count], "original_type": "image"}
                     embed_count += 1
-
                 chunk.tokens.append(token)
                 chunk.multipliers.append(weight)
-                position += 1
 
         if chunk.tokens or not chunks:
             next_chunk()
-
         return chunks
 
     def __call__(self, texts, images=None):
+        images = images or []
         self.emphasis = emphasis.get_current_option(opts.emphasis)()
-
         if any(emphasis.uses_emphasis(x) for x in texts):
             dynamic_args.last_extra_generation_params["Emphasis"] = self.emphasis.name
 
         zs = []
         cache = {}
-
         for line in texts:
-            if line in cache:
-                line_z_values = cache[line]
-            else:
-                chunks = self.tokenize_line(line, images)
+            if line not in cache:
                 line_z_values = []
-
-                for chunk in chunks:
-                    tokens = chunk.tokens
-                    multipliers = chunk.multipliers
-
-                    z = self.process_tokens([tokens], [multipliers])
-                    z = self.strip_template(z, tokens)
-                    line_z_values.append(z)
+                for chunk in self.tokenize_line(line, images):
+                    z = self.process_tokens([chunk.tokens], [chunk.multipliers])
+                    line_z_values.append(self.strip_template(z, chunk.tokens))
                 cache[line] = line_z_values
-
-            zs.extend(line_z_values)
-
+            zs.extend(cache[line])
         return zs
 
     def strip_template(self, out, tokens):
         template_end = 0
         count_im_start = 0
-
-        for i, v in enumerate(tokens):
+        for i, value in enumerate(tokens):
             try:
-                elem = int(v)
+                elem = int(value)
                 if elem == self.id_template and count_im_start < 2:
                     template_end = i
                     count_im_start += 1
             except TypeError:
                 continue
 
-        if out.shape[2] > (template_end + 3):
-            if int(tokens[template_end + 1]) == 872:
-                if int(tokens[template_end + 2]) == 198:
-                    template_end += 3
+        if len(tokens) > template_end + 2 and out.shape[2] > template_end + 3:
+            if int(tokens[template_end + 1]) == 872 and int(tokens[template_end + 2]) == 198:
+                template_end += 3
 
         out = out[:, :, template_end:]
-
-        b, n, seq, h = out.shape
-        out = out.permute(0, 2, 1, 3).reshape(b, seq, n * h)
-
-        return out
+        batch, taps, sequence, hidden = out.shape
+        return out.permute(0, 2, 1, 3).reshape(batch, sequence, taps * hidden)
 
     def process_embeds(self, batch_tokens):
         device = memory_management.text_encoder_device()
-
         embeds_out = []
         attention_masks = []
         num_tokens = []
+        embeds_info = []
 
         for tokens in batch_tokens:
             attention_mask = []
             tokens_temp = []
             other_embeds = []
             eos = False
-            index = 0
 
-            for t in tokens:
+            for index, value in enumerate(tokens):
                 try:
-                    token = int(t)
+                    token = int(value)
                     attention_mask.append(0 if eos else 1)
-                    tokens_temp += [token]
+                    tokens_temp.append(token)
                     if not eos and token == self.id_pad:
                         eos = True
                 except TypeError:
-                    other_embeds.append((index, t))
-                index += 1
+                    other_embeds.append((index, value))
 
             tokens_embed = torch.tensor([tokens_temp], device=device, dtype=torch.long)
             tokens_embed = self.text_encoder.get_input_embeddings()(tokens_embed)
-
-            index = 0
+            index_offset = 0
             embeds_info = []
 
-            for o in other_embeds:
-                emb, extra = self.text_encoder.preprocess_embed(o[1], device=device)
+            for original_index, embed_value in other_embeds:
+                emb, extra = self.text_encoder.preprocess_embed(embed_value, device=device)
                 if emb is None:
-                    index += -1
+                    index_offset -= 1
                     continue
-
-                ind = index + o[0]
+                insert_at = index_offset + original_index
                 emb = emb.view(1, -1, emb.shape[-1]).to(device=device, dtype=torch.float32)
                 emb_shape = emb.shape[1]
-
                 assert emb.shape[-1] == tokens_embed.shape[-1]
-                tokens_embed = torch.cat([tokens_embed[:, :ind], emb, tokens_embed[:, ind:]], dim=1)
-                attention_mask = attention_mask[:ind] + [1] * emb_shape + attention_mask[ind:]
-                index += emb_shape - 1
-                emb_type = o[1].get("type", None)
-                embeds_info.append({"type": emb_type, "index": ind, "size": emb_shape, "extra": extra})
+                tokens_embed = torch.cat([tokens_embed[:, :insert_at], emb, tokens_embed[:, insert_at:]], dim=1)
+                attention_mask = attention_mask[:insert_at] + [1] * emb_shape + attention_mask[insert_at:]
+                index_offset += emb_shape - 1
+                embeds_info.append({"type": embed_value.get("type"), "index": insert_at, "size": emb_shape, "extra": extra})
 
             embeds_out.append(tokens_embed)
             attention_masks.append(attention_mask)
@@ -182,12 +154,10 @@ class Qwen3VLTextProcessingEngine:
 
     def process_tokens(self, batch_tokens, batch_multipliers):
         embeds, mask, count, info = self.process_embeds(batch_tokens)
-
         self.emphasis.tokens = batch_tokens
         self.emphasis.multipliers = torch.asarray(batch_multipliers).to(embeds)
         self.emphasis.z = embeds
         self.emphasis.after_transformers()
         embeds = self.emphasis.z
-
         _, z = self.text_encoder(None, embeds=embeds, attention_mask=mask, num_tokens=count, embeds_info=info, intermediate_output=KREA2_TAP_LAYERS, final_layer_norm_intermediate=False)
         return z
