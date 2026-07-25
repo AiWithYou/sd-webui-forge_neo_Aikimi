@@ -294,6 +294,18 @@ class ProfileTests(unittest.TestCase):
             focused,
             (512, 384, 64, 1536, 6, 0.38, 2, 12.0, 3.0, 12.0, 2.0, 20.0),
         )
+        focused_with_summary = (
+            module.Krea2LocalSupersampleDetail._profile_values_with_summary(
+                "Focused Face Rewrite 1536",
+                "Focused ROI Rewrite",
+                "8,4,24,20",
+                False,
+                256,
+            )
+        )
+        self.assertEqual(focused_with_summary[:-1], focused)
+        self.assertIn("Focused ROI", focused_with_summary[-1])
+        self.assertIn("1 box", focused_with_summary[-1])
 
 
 class GUIFlowTests(unittest.TestCase):

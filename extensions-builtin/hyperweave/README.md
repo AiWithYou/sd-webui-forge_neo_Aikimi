@@ -8,7 +8,9 @@ HyperWeave は、通常の補間型超解像ではなく、現在 Forge に読�
 
 本機能は `extensions-builtin/hyperweave` の独立 Extension です。Forge 本体、通常 img2img、txt2img、Extras、既存 upscaler、VRAM Canvas、DetailWeave、ControlNet のコードパスへモード分岐を追加していません。
 
-Forge の img2img を開き、ページ下部の `Script` から `HyperWeave 4K/8K` を選択します。`Enable HyperWeave` をオフにした場合は、選択 Script 内から通常の `processing.process_images()` を呼び、WebUI と REST API の双方で通常 img2img と同じ経路へ戻ります。
+Forge の img2img を開き、ページ下部の `Script` から `HyperWeave 4K/8K` を選択します。画面上部で納品サイズ、再作画Preset、内容Profileを選ぶと、Exact Steps、lock、tile、accumulatorをライブプランで確認できます。Custom長辺またはCustom幅・高さは、そのtarget modeを選んだときだけ表示されます。8K、Max Overdraw、未入力のCustomサイズは注意表示へ切り替わります。低レベルのpass、mask、quality constraint、prompt suffix、debug値は折りたたみ内にあります。
+
+`HyperWeaveを有効化` をオフにした場合は、選択 Script 内から通常の `processing.process_images()` を呼び、WebUI と REST API の双方で通常 img2img と同じ経路へ戻ります。
 
 内部タイル生成は次を引き継ぎます。
 

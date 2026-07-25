@@ -206,6 +206,24 @@ class PositionalApiTests(unittest.TestCase):
         return_names = [element.id for element in ui_return.value.elts]
         self.assertEqual(return_names, LEGACY_ARGUMENTS + APPENDED_ARGUMENTS)
 
+    def test_quick_8k_target_includes_matching_live_summary(self):
+        module = load_script_module([], [])
+        values = module.KreaTwoStageUpscale._quick_target_values_with_summary(
+            8192,
+            "custom",
+            False,
+            0.10,
+            0.12,
+            768,
+            768,
+            96,
+            True,
+        )
+
+        self.assertEqual(values[:5], (8192, 0, 0, 0, 0))
+        self.assertIn("大判納品", values[-1])
+        self.assertIn("長辺 8192 px", values[-1])
+
     def test_legacy_thirteen_argument_call_uses_safe_new_defaults(self):
         snapshots = []
         saved_images = []

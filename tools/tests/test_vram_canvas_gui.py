@@ -384,6 +384,17 @@ class GUIFlowTests(unittest.TestCase):
         )
         self.assertEqual(quick_phaseweave_4k[4], 896)
         self.assertEqual(quick_phaseweave_4k[5:], phaseweave_4k)
+        quick_8k_with_summary = (
+            module.VRAMCanvasHighres._quick_profile_values_with_summary(
+                8192,
+                "Krea2 Dense Detail 8K",
+                0,
+                True,
+            )
+        )
+        self.assertEqual(quick_8k_with_summary[:-1], quick_8k)
+        self.assertIn("4K承認後", quick_8k_with_summary[-1])
+        self.assertIn("長辺 8192 px", quick_8k_with_summary[-1])
         with self.assertRaisesRegex(ValueError, "4096 or 8192"):
             module.VRAMCanvasHighres._quick_profile_values(
                 2048, "Structure Safe"

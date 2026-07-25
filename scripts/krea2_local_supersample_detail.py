@@ -24,6 +24,8 @@ from modules_forge.krea2_local_supersample import (
     MODE_FOCUSED_ROI_REWRITE,
     MODE_FULL_IMAGE_GRID,
     MODE_ROI_BOXES,
+    PROFILE_FOCUSED_FACE_1536,
+    PROFILE_ROI_ULTRA_2048,
     PROFILE_SAFE_1536,
     append_focused_face_guidance,
     append_local_detail_guidance,
@@ -52,6 +54,11 @@ from modules_forge.krea2_local_supersample import (
 )
 from modules_forge.krea2_upscale import replace_infotext_size
 from modules_forge.vram_canvas import replace_infotext_seed
+from modules_forge.workflow_ui import (
+    workflow_hero,
+    workflow_section,
+    workflow_summary,
+)
 
 PROFILE_OUTPUT_KEYS = (
     "payload",
@@ -82,11 +89,31 @@ class Krea2LocalSupersampleDetail(scripts.Script):
 
     def ui(self, is_img2img):
         defaults = get_profile(PROFILE_SAFE_1536)
-        gr.HTML("""<p align="center"><b>Krea2 Local Supersample Detail</b>: """ """通常modeは固定tileの安全なdetail残差を合成します。Focused ROI Rewriteは、""" """tight ROI全体と周辺contextを1枚の1536画像へ拡大し、顔を分割せず再生成して、""" """縮小後の書き直しをROI内だけへフェザー合成します。</p>""")
+        gr.HTML(
+            workflow_hero(
+                "Krea2 Local Supersample Detail",
+                "画像全体または指定領域だけを高解像度で再評価し、安全なディテール残差だけを元画像へ戻します。",
+                badges=("通常img2img", "Batch 1 × 1", "PNG metadata必須", "Krea2専用"),
+                steps=(
+                    "全体・ROI・顔の書き直しを選ぶ",
+                    "目的に合うプロファイルを選ぶ",
+                    "ROIが必要なモードは座標を入力する",
+                ),
+            ),
+            elem_classes=["neo-workflow-hero-host"],
+        )
 
-        with gr.Row():
+        gr.HTML(
+            workflow_section(
+                1,
+                "処理モード",
+                "全体はSafe 1536、顔はFocused Face Rewrite 1536が基準です。",
+            ),
+            elem_classes=["neo-workflow-section-host"],
+        )
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
             mode = gr.Radio(
-                label="Mode",
+                label="処理範囲",
                 choices=[
                     MODE_FULL_IMAGE_GRID,
                     MODE_ROI_BOXES,
@@ -96,148 +123,197 @@ class Krea2LocalSupersampleDetail(scripts.Script):
                 elem_id=self.elem_id("mode"),
             )
             profile = gr.Dropdown(
-                label="Profile",
+                label="品質プロファイル",
                 choices=list(LOCAL_SUPERSAMPLE_PROFILES),
                 value=PROFILE_SAFE_1536,
                 elem_id=self.elem_id("profile"),
+                tooltip="選択すると関連する処理パラメータをまとめて更新します。",
             )
-            apply_profile = gr.Button(
-                "Apply Profile",
-                elem_id=self.elem_id("apply_profile"),
-            )
-
-        roi_boxes = gr.Textbox(
-            label="ROI Boxes / Focus Targets (left,top,right,bottom; ...)",
-            value="",
-            placeholder="For a face, draw one tight box around the head/face",
-            elem_id=self.elem_id("roi_boxes"),
+        apply_profile = gr.Button(
+            "プロファイルを再適用",
+            elem_id=self.elem_id("apply_profile"),
+            elem_classes=["neo-workflow-action"],
         )
 
-        with gr.Row():
-            focused_context_scale = gr.Slider(
-                label="Focused Context Scale",
-                minimum=1.0,
-                maximum=4.0,
-                step=0.1,
-                value=defaults["context_scale"],
-                elem_id=self.elem_id("focused_context_scale"),
+        with gr.Group(visible=False) as roi_input_group:
+            gr.HTML(
+                workflow_section(
+                    2,
+                    "対象ROI",
+                    "1つ以上の left, top, right, bottom をセミコロンで区切ります。",
+                ),
+                elem_classes=["neo-workflow-section-host"],
             )
-            focused_rewrite_feather = gr.Slider(
-                label="Focused Rewrite Feather (source px)",
-                minimum=0,
-                maximum=64,
-                step=1,
-                value=defaults["rewrite_feather"],
-                elem_id=self.elem_id("focused_rewrite_feather"),
+            roi_boxes = gr.Textbox(
+                label="ROI座標 / Focus Targets",
+                value="",
+                placeholder="例: 120,80,420,380; 620,100,880,360",
+                elem_id=self.elem_id("roi_boxes"),
             )
 
-        with gr.Row():
-            crop_payload = gr.Slider(
-                label="Crop Payload",
-                minimum=256,
-                maximum=768,
-                step=16,
-                value=defaults["payload"],
-                elem_id=self.elem_id("crop_payload"),
-            )
-            core_size = gr.Slider(
-                label="Core Size",
-                minimum=128,
-                maximum=640,
-                step=16,
-                value=defaults["core"],
-                elem_id=self.elem_id("core_size"),
-            )
-            core_overlap = gr.Slider(
-                label="Core Overlap",
-                minimum=0,
-                maximum=256,
-                step=16,
-                value=defaults["overlap"],
-                elem_id=self.elem_id("core_overlap"),
-            )
+        with gr.Group(visible=False) as focused_settings_group:
+            with gr.Row(elem_classes=["neo-workflow-grid-2"]):
+                focused_context_scale = gr.Slider(
+                    label="周辺context倍率",
+                    minimum=1.0,
+                    maximum=4.0,
+                    step=0.1,
+                    value=defaults["context_scale"],
+                    elem_id=self.elem_id("focused_context_scale"),
+                )
+                focused_rewrite_feather = gr.Slider(
+                    label="ROI境界フェザー（source px）",
+                    minimum=0,
+                    maximum=64,
+                    step=1,
+                    value=defaults["rewrite_feather"],
+                    elem_id=self.elem_id("focused_rewrite_feather"),
+                )
 
-        with gr.Row():
-            process_edge = gr.Radio(
-                label="Process Edge",
-                choices=[1536, 2048],
-                value=defaults["process_edge"],
-                elem_id=self.elem_id("process_edge"),
-            )
-            steps = gr.Slider(
-                label="Steps",
-                minimum=1,
-                maximum=12,
-                step=1,
-                value=defaults["steps"],
-                elem_id=self.elem_id("steps"),
-            )
-            denoising_strength = gr.Slider(
-                label="Denoising Strength",
-                minimum=0.0,
-                maximum=0.60,
-                step=0.01,
-                value=defaults["denoise"],
-                elem_id=self.elem_id("denoising_strength"),
-            )
-            candidate_count = gr.Radio(
-                label="Candidate Count",
-                choices=[1, 2],
-                value=defaults["candidates"],
-                elem_id=self.elem_id("candidate_count"),
-            )
+        workflow_status = gr.HTML(
+            self._workflow_summary_html(
+                MODE_FULL_IMAGE_GRID,
+                PROFILE_SAFE_1536,
+                "",
+                defaults["process_edge"],
+                defaults["steps"],
+                defaults["denoise"],
+                defaults["candidates"],
+                defaults["payload"],
+                defaults["core"],
+                defaults["overlap"],
+                False,
+                256,
+            ),
+            elem_classes=["neo-workflow-summary-host"],
+        )
 
-        with gr.Row():
-            luma_residual_cap = gr.Slider(
-                label="Luma Residual Cap",
-                minimum=1,
-                maximum=32,
-                step=1,
-                value=defaults["luma_cap"],
-                elem_id=self.elem_id("luma_residual_cap"),
-            )
-            chroma_residual_cap = gr.Slider(
-                label="Chroma Residual Cap",
-                minimum=0.5,
-                maximum=12,
-                step=0.5,
-                value=defaults["chroma_cap"],
-                elem_id=self.elem_id("chroma_residual_cap"),
-            )
-            low_frequency_reject_radius = gr.Slider(
-                label="Low-frequency Reject Radius",
-                minimum=2,
-                maximum=32,
-                step=1,
-                value=defaults["low_frequency_reject_radius"],
-                elem_id=self.elem_id("low_frequency_reject_radius"),
-            )
+        with gr.Accordion(
+            "詳細設定 · タイル / 候補生成",
+            open=False,
+            elem_classes=["neo-workflow-accordion"],
+        ):
+            with gr.Row(elem_classes=["neo-workflow-grid-3"]):
+                crop_payload = gr.Slider(
+                    label="Crop payload",
+                    minimum=256,
+                    maximum=768,
+                    step=16,
+                    value=defaults["payload"],
+                    elem_id=self.elem_id("crop_payload"),
+                )
+                core_size = gr.Slider(
+                    label="Core size",
+                    minimum=128,
+                    maximum=640,
+                    step=16,
+                    value=defaults["core"],
+                    elem_id=self.elem_id("core_size"),
+                )
+                core_overlap = gr.Slider(
+                    label="Core overlap",
+                    minimum=0,
+                    maximum=256,
+                    step=16,
+                    value=defaults["overlap"],
+                    elem_id=self.elem_id("core_overlap"),
+                )
 
-        with gr.Row():
+            with gr.Row(elem_classes=["neo-workflow-grid-2"]):
+                process_edge = gr.Radio(
+                    label="処理解像度",
+                    choices=[1536, 2048],
+                    value=defaults["process_edge"],
+                    elem_id=self.elem_id("process_edge"),
+                )
+                steps = gr.Slider(
+                    label="Exact steps",
+                    minimum=1,
+                    maximum=12,
+                    step=1,
+                    value=defaults["steps"],
+                    elem_id=self.elem_id("steps"),
+                )
+            with gr.Row(elem_classes=["neo-workflow-grid-2"]):
+                denoising_strength = gr.Slider(
+                    label="Denoise",
+                    minimum=0.0,
+                    maximum=0.60,
+                    step=0.01,
+                    value=defaults["denoise"],
+                    elem_id=self.elem_id("denoising_strength"),
+                )
+                candidate_count = gr.Radio(
+                    label="候補数",
+                    choices=[1, 2],
+                    value=defaults["candidates"],
+                    elem_id=self.elem_id("candidate_count"),
+                )
+
+        with gr.Accordion(
+            "詳細設定 · 残差保護",
+            open=False,
+            elem_classes=["neo-workflow-accordion"],
+        ):
+            with gr.Row(elem_classes=["neo-workflow-grid-3"]):
+                luma_residual_cap = gr.Slider(
+                    label="輝度残差上限",
+                    minimum=1,
+                    maximum=32,
+                    step=1,
+                    value=defaults["luma_cap"],
+                    elem_id=self.elem_id("luma_residual_cap"),
+                )
+                chroma_residual_cap = gr.Slider(
+                    label="色差残差上限",
+                    minimum=0.5,
+                    maximum=12,
+                    step=0.5,
+                    value=defaults["chroma_cap"],
+                    elem_id=self.elem_id("chroma_residual_cap"),
+                )
+                low_frequency_reject_radius = gr.Slider(
+                    label="低周波reject半径",
+                    minimum=2,
+                    maximum=32,
+                    step=1,
+                    value=defaults["low_frequency_reject_radius"],
+                    elem_id=self.elem_id("low_frequency_reject_radius"),
+                )
+
+        gr.HTML(
+            workflow_section(
+                3,
+                "保護・保存",
+                "全体2048は高負荷です。必要な場合だけ明示的に許可します。",
+            ),
+            elem_classes=["neo-workflow-section-host"],
+        )
+        with gr.Row(elem_classes=["neo-workflow-grid-3"]):
             strong_edge_protection = gr.Checkbox(
-                label="Strong Edge Protection",
+                label="強い輪郭を保護",
                 value=True,
                 elem_id=self.elem_id("strong_edge_protection"),
             )
             append_guidance = gr.Checkbox(
-                label="Append mode-specific Krea2 guidance",
+                label="モード別Krea2指示を追加",
                 value=True,
                 elem_id=self.elem_id("append_guidance"),
             )
             save_qa_crops = gr.Checkbox(
-                label="Save QA crops",
+                label="QA cropを保存",
                 value=False,
                 elem_id=self.elem_id("save_qa_crops"),
             )
 
-        with gr.Row():
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
             allow_expensive_2048_full_grid = gr.Checkbox(
-                label="Allow expensive 2048 full-grid",
+                label="高負荷な2048全体処理を許可",
                 value=False,
                 elem_id=self.elem_id("allow_expensive_2048_full_grid"),
             )
             maximum_tile_count = gr.Slider(
-                label="Maximum Tile Count",
+                label="最大タイル数",
                 minimum=1,
                 maximum=512,
                 step=1,
@@ -259,18 +335,88 @@ class Krea2LocalSupersampleDetail(scripts.Script):
             focused_context_scale,
             focused_rewrite_feather,
         ]
+        summary_inputs = [
+            mode,
+            profile,
+            roi_boxes,
+            process_edge,
+            steps,
+            denoising_strength,
+            candidate_count,
+            crop_payload,
+            core_size,
+            core_overlap,
+            allow_expensive_2048_full_grid,
+            maximum_tile_count,
+        ]
         apply_profile.click(
-            fn=self._profile_values,
-            inputs=[profile],
-            outputs=profile_outputs,
+            fn=self._profile_values_with_summary,
+            inputs=[
+                profile,
+                mode,
+                roi_boxes,
+                allow_expensive_2048_full_grid,
+                maximum_tile_count,
+            ],
+            outputs=[*profile_outputs, workflow_status],
             show_progress="hidden",
         )
-        profile.change(
-            fn=self._profile_values,
-            inputs=[profile],
-            outputs=profile_outputs,
+        profile.input(
+            fn=self._profile_values_with_summary,
+            inputs=[
+                profile,
+                mode,
+                roi_boxes,
+                allow_expensive_2048_full_grid,
+                maximum_tile_count,
+            ],
+            outputs=[*profile_outputs, workflow_status],
             show_progress="hidden",
         )
+
+        mode.input(
+            fn=self._mode_visibility_updates,
+            inputs=[mode],
+            outputs=[roi_input_group, focused_settings_group],
+            show_progress="hidden",
+        )
+        mode.input(
+            fn=self._workflow_summary_html,
+            inputs=summary_inputs,
+            outputs=[workflow_status],
+            show_progress="hidden",
+        )
+        roi_boxes.blur(
+            fn=self._workflow_summary_html,
+            inputs=summary_inputs,
+            outputs=[workflow_status],
+            show_progress="hidden",
+        )
+        for slider in (
+            steps,
+            denoising_strength,
+            crop_payload,
+            core_size,
+            core_overlap,
+            maximum_tile_count,
+        ):
+            slider.input(
+                fn=self._workflow_summary_html,
+                inputs=summary_inputs,
+                outputs=[workflow_status],
+                show_progress="hidden",
+            )
+        for control in (
+            process_edge,
+            candidate_count,
+            allow_expensive_2048_full_grid,
+        ):
+            control.input(
+                fn=self._workflow_summary_html,
+                inputs=summary_inputs,
+                outputs=[workflow_status],
+                show_progress="hidden",
+            )
 
         return [
             mode,
@@ -296,9 +442,153 @@ class Krea2LocalSupersampleDetail(scripts.Script):
         ]
 
     @staticmethod
+    def _mode_visibility_updates(mode: str):
+        selected_mode = str(mode)
+        uses_roi = selected_mode in (MODE_ROI_BOXES, MODE_FOCUSED_ROI_REWRITE)
+        uses_focused_settings = selected_mode == MODE_FOCUSED_ROI_REWRITE
+        return (
+            gr.update(visible=uses_roi),
+            gr.update(visible=uses_focused_settings),
+        )
+
+    @staticmethod
+    def _workflow_summary_html(
+        mode,
+        profile,
+        roi_boxes,
+        process_edge,
+        steps,
+        denoising_strength,
+        candidate_count,
+        crop_payload,
+        core_size,
+        core_overlap,
+        allow_expensive_2048_full_grid,
+        maximum_tile_count,
+    ) -> str:
+        selected_mode = str(mode or MODE_FULL_IMAGE_GRID)
+        selected_profile = str(profile or PROFILE_SAFE_1536)
+        roi_text = str(roi_boxes or "").strip()
+        edge = int(float(process_edge or 0))
+        step_count = int(float(steps or 0))
+        candidates = int(float(candidate_count or 0))
+        payload = int(float(crop_payload or 0))
+        core = int(float(core_size or 0))
+        overlap = int(float(core_overlap or 0))
+        tile_limit = int(float(maximum_tile_count or 0))
+        allow_full_2048 = bool(allow_expensive_2048_full_grid)
+
+        mode_labels = {
+            MODE_FULL_IMAGE_GRID: "画像全体",
+            MODE_ROI_BOXES: "指定ROI",
+            MODE_FOCUSED_ROI_REWRITE: "Focused ROI",
+        }
+        status = "準備完了"
+        tone = "ready"
+        note = "変更候補が改善しない領域は採用せず、元画像を保ちます。"
+
+        requires_roi = selected_mode in (
+            MODE_ROI_BOXES,
+            MODE_FOCUSED_ROI_REWRITE,
+        )
+        profile_mismatch = (
+            selected_mode == MODE_FOCUSED_ROI_REWRITE
+            and selected_profile != PROFILE_FOCUSED_FACE_1536
+        ) or (
+            selected_mode != MODE_FOCUSED_ROI_REWRITE
+            and selected_profile == PROFILE_FOCUSED_FACE_1536
+        )
+        roi_profile_mismatch = selected_profile == PROFILE_ROI_ULTRA_2048 and (
+            selected_mode != MODE_ROI_BOXES or not roi_text
+        )
+        geometry_invalid = (
+            payload < core
+            or (payload - core) % 2 != 0
+            or overlap < 0
+            or overlap >= core
+        )
+
+        if requires_roi and not roi_text:
+            status = "ROIを入力"
+            tone = "caution"
+            note = "このモードは1つ以上のROI座標が必要です。"
+        elif profile_mismatch:
+            status = "プロファイル不一致"
+            tone = "caution"
+            note = (
+                "Focused ROI RewriteはFocused Face Rewrite 1536と組み合わせてください。"
+            )
+        elif roi_profile_mismatch:
+            status = "ROI設定を確認"
+            tone = "caution"
+            note = "ROI Ultra 2048はROI BoxesモードとROI座標が必要です。"
+        elif (
+            selected_mode == MODE_FULL_IMAGE_GRID
+            and edge == 2048
+            and not allow_full_2048
+        ):
+            status = "2048全体処理は未許可"
+            tone = "caution"
+            note = "1536へ戻すか、高負荷な2048全体処理を明示的に許可してください。"
+        elif geometry_invalid:
+            status = "タイル形状を確認"
+            tone = "caution"
+            note = "Payload >= Core、差は偶数、0 <= overlap < Coreにしてください。"
+        elif edge == 2048 or candidates > 1:
+            status = "高品質・高負荷"
+            tone = "experimental"
+            note = "候補数と処理解像度に比例して時間とVRAM使用量が増えます。"
+
+        roi_label = (
+            f"{len([item for item in roi_text.split(';') if item.strip()])} box"
+            if roi_text
+            else "なし"
+        )
+        return workflow_summary(
+            f"{mode_labels.get(selected_mode, selected_mode)} · {selected_profile}",
+            (
+                ("ROI", roi_label),
+                ("処理", f"{edge} px / {step_count} steps"),
+                ("候補", f"{candidates} / tile"),
+                ("Denoise", f"{float(denoising_strength or 0):.2f}"),
+                ("Tile", f"payload {payload} / core {core} / overlap {overlap}"),
+                ("上限", f"{tile_limit} tiles"),
+            ),
+            status=status,
+            note=note,
+            tone=tone,
+        )
+
+    @staticmethod
     def _profile_values(profile: str) -> tuple:
         values = get_profile(profile)
         return tuple(values[key] for key in PROFILE_OUTPUT_KEYS)
+
+    @classmethod
+    def _profile_values_with_summary(
+        cls,
+        profile,
+        mode,
+        roi_boxes,
+        allow_expensive_2048_full_grid,
+        maximum_tile_count,
+    ) -> tuple:
+        values = cls._profile_values(str(profile))
+        summary = cls._workflow_summary_html(
+            mode,
+            profile,
+            roi_boxes,
+            values[3],
+            values[4],
+            values[5],
+            values[6],
+            values[0],
+            values[1],
+            values[2],
+            allow_expensive_2048_full_grid,
+            maximum_tile_count,
+        )
+        return (*values, summary)
 
     @staticmethod
     def _validate_processing_input(p) -> None:

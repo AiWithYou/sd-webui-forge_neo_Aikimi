@@ -19,6 +19,11 @@ from modules_forge.krea2_upscale import (
     two_stage_sizes,
     validate_tile_geometry,
 )
+from modules_forge.workflow_ui import (
+    workflow_hero,
+    workflow_section,
+    workflow_summary,
+)
 
 
 class KreaTwoStageUpscale(scripts.Script):
@@ -30,52 +35,87 @@ class KreaTwoStageUpscale(scripts.Script):
 
     def ui(self, is_img2img):
         gr.HTML(
-            """<p align="center">Krea2は解像度proxy（Turboは2K、Rawは1K、customは安全側に2Kと仮定）でimg2imgし、最後に正確な4K納品寸法へ拡大します。</p>"""
+            workflow_hero(
+                "Krea2 2-Stage Upscale",
+                "Krea2の対応解像度内でimg2imgし、最後に指定した納品サイズへ正確に拡大する安全側のワークフローです。",
+                badges=("通常img2img", "Batch 1 × 1", "Turbo 2K proxy", "Raw 1K proxy"),
+                steps=(
+                    "基準画像とKrea2モデルを選ぶ",
+                    "モデル種別と4K / 8Kを選ぶ",
+                    "プラン表示を確認してGenerate",
+                ),
+            ),
+            elem_classes=["neo-workflow-hero-host"],
         )
 
-        with gr.Row():
+        gr.HTML(
+            workflow_section(
+                1,
+                "クイック設定",
+                "4Kは通常運用、8Kは大判納品向けです。どちらもnative 4K / 8K生成ではありません。",
+            ),
+            elem_classes=["neo-workflow-section-host"],
+        )
+        with gr.Row(elem_classes=["neo-workflow-preset-grid"]):
+            quick_4k = gr.Button(
+                "4K 納品\n長辺 4096",
+                variant="primary",
+                elem_classes=["neo-workflow-action"],
+                elem_id=self.elem_id("quick_4k"),
+            )
+            quick_8k = gr.Button(
+                "8K 納品\n長辺 8192",
+                elem_classes=["neo-workflow-action"],
+                elem_id=self.elem_id("quick_8k"),
+            )
+
+        workflow_status = gr.HTML(
+            self._workflow_summary_html(
+                4096,
+                0,
+                0,
+                0,
+                0,
+                "custom",
+                False,
+                KREA2_STAGE1_DENOISE,
+                KREA2_DEFAULT_DENOISE,
+                768,
+                768,
+                96,
+                True,
+            ),
+            elem_classes=["neo-workflow-summary-host"],
+        )
+
+        gr.HTML(
+            workflow_section(
+                2,
+                "納品サイズとモデル",
+                "幅・高さを0にすると入力比率を保ち、長辺を基準にします。",
+            ),
+            elem_classes=["neo-workflow-section-host"],
+        )
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
             final_long_edge = gr.Slider(
-                label="Final Long Edge",
+                label="最終長辺",
                 minimum=512,
                 maximum=8192,
                 step=64,
                 value=4096,
                 elem_id=self.elem_id("final_long_edge"),
             )
-            first_pass_long_edge = gr.Slider(
-                label="Stage 1 Long Edge (0 = Auto)",
-                minimum=0,
-                maximum=8192,
-                step=64,
-                value=0,
-                elem_id=self.elem_id("first_pass_long_edge"),
-            )
-
-        diffusion_long_edge_cap = gr.Slider(
-            label="Final Diffusion Long Edge Cap (0 = Profile Auto)",
-            minimum=0,
-            maximum=SAFE_DIFFUSION_LONG_EDGE,
-            step=64,
-            value=0,
-            elem_id=self.elem_id("diffusion_long_edge_cap"),
-        )
-
-        with gr.Row():
             model_profile = gr.Radio(
-                label="Krea2 Resolution Guard Profile",
+                label="Krea2モデル種別",
                 choices=("custom", "turbo", "raw"),
                 value="custom",
                 elem_id=self.elem_id("model_profile"),
-            )
-            allow_non_native_diffusion = gr.Checkbox(
-                label="Allow non-native diffusion above profile limit",
-                value=False,
-                elem_id=self.elem_id("allow_non_native_diffusion"),
+                tooltip="Turboは2K、Rawは1K、customは安全側に2Kを上限とします。",
             )
 
-        with gr.Row():
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
             final_width = gr.Slider(
-                label="Final Width",
+                label="最終幅（0 = 長辺指定）",
                 minimum=0,
                 maximum=8192,
                 step=16,
@@ -83,7 +123,7 @@ class KreaTwoStageUpscale(scripts.Script):
                 elem_id=self.elem_id("final_width"),
             )
             final_height = gr.Slider(
-                label="Final Height",
+                label="最終高さ（0 = 長辺指定）",
                 minimum=0,
                 maximum=8192,
                 step=16,
@@ -91,89 +131,229 @@ class KreaTwoStageUpscale(scripts.Script):
                 elem_id=self.elem_id("final_height"),
             )
 
-        with gr.Row():
-            first_pass_denoise = gr.Slider(
-                label="Stage 1 Denoising Strength",
-                minimum=0.0,
-                maximum=1.0,
-                step=0.01,
-                value=KREA2_STAGE1_DENOISE,
-                elem_id=self.elem_id("first_pass_denoise"),
+        with gr.Accordion(
+            "詳細設定 · proxy / タイル処理",
+            open=False,
+            elem_classes=["neo-workflow-accordion"],
+        ):
+            with gr.Row(elem_classes=["neo-workflow-grid-2"]):
+                first_pass_long_edge = gr.Slider(
+                    label="Stage 1 長辺（0 = 自動）",
+                    minimum=0,
+                    maximum=8192,
+                    step=64,
+                    value=0,
+                    elem_id=self.elem_id("first_pass_long_edge"),
+                )
+                diffusion_long_edge_cap = gr.Slider(
+                    label="最終拡散長辺上限（0 = モデル自動）",
+                    minimum=0,
+                    maximum=SAFE_DIFFUSION_LONG_EDGE,
+                    step=64,
+                    value=0,
+                    elem_id=self.elem_id("diffusion_long_edge_cap"),
+                )
+            allow_non_native_diffusion = gr.Checkbox(
+                label="モデル対応範囲を超える拡散を許可（非推奨）",
+                value=False,
+                elem_id=self.elem_id("allow_non_native_diffusion"),
             )
-            final_denoise = gr.Slider(
-                label="Final Denoising Strength",
-                minimum=0.0,
-                maximum=1.0,
-                step=0.01,
-                value=KREA2_DEFAULT_DENOISE,
-                elem_id=self.elem_id("final_denoise"),
+            with gr.Row(elem_classes=["neo-workflow-grid-2"]):
+                first_pass_denoise = gr.Slider(
+                    label="Stage 1 denoise",
+                    minimum=0.0,
+                    maximum=1.0,
+                    step=0.01,
+                    value=KREA2_STAGE1_DENOISE,
+                    elem_id=self.elem_id("first_pass_denoise"),
+                )
+                final_denoise = gr.Slider(
+                    label="最終拡散 denoise",
+                    minimum=0.0,
+                    maximum=1.0,
+                    step=0.01,
+                    value=KREA2_DEFAULT_DENOISE,
+                    elem_id=self.elem_id("final_denoise"),
+                )
+            method = gr.Radio(
+                label="MultiDiffusion方式",
+                choices=("MultiDiffusion", "Mixture of Diffusers"),
+                value="Mixture of Diffusers",
+                elem_id=self.elem_id("method"),
             )
+            with gr.Row(elem_classes=["neo-workflow-grid-2"]):
+                tile_width = gr.Slider(
+                    label="タイル幅",
+                    minimum=256,
+                    maximum=1280,
+                    step=64,
+                    value=768,
+                    elem_id=self.elem_id("tile_width"),
+                )
+                tile_height = gr.Slider(
+                    label="タイル高さ",
+                    minimum=256,
+                    maximum=1280,
+                    step=64,
+                    value=768,
+                    elem_id=self.elem_id("tile_height"),
+                )
+            with gr.Row(elem_classes=["neo-workflow-grid-2"]):
+                tile_overlap = gr.Slider(
+                    label="タイル重なり",
+                    minimum=0,
+                    maximum=1024,
+                    step=16,
+                    value=96,
+                    elem_id=self.elem_id("tile_overlap"),
+                )
+                tile_batch_size = gr.Number(
+                    label="Tile Batch Size（固定）",
+                    value=1,
+                    precision=0,
+                    interactive=False,
+                    elem_id=self.elem_id("tile_batch_size"),
+                )
 
-        method = gr.Radio(
-            label="MultiDiffusion Method",
-            choices=("MultiDiffusion", "Mixture of Diffusers"),
-            value="Mixture of Diffusers",
-            elem_id=self.elem_id("method"),
+        gr.HTML(
+            workflow_section(
+                3,
+                "仕上げと保存",
+                "Smart Finishは改善を確認できた補正だけを採用します。",
+            ),
+            elem_classes=["neo-workflow-section-host"],
         )
-
-        with gr.Row():
-            tile_width = gr.Slider(
-                label="Tile Width",
-                minimum=256,
-                maximum=1280,
-                step=64,
-                value=768,
-                elem_id=self.elem_id("tile_width"),
-            )
-            tile_height = gr.Slider(
-                label="Tile Height",
-                minimum=256,
-                maximum=1280,
-                step=64,
-                value=768,
-                elem_id=self.elem_id("tile_height"),
-            )
-
-        with gr.Row():
-            tile_overlap = gr.Slider(
-                label="Tile Overlap",
-                minimum=0,
-                maximum=1024,
-                step=16,
-                value=96,
-                elem_id=self.elem_id("tile_overlap"),
-            )
-            tile_batch_size = gr.Slider(
-                label="Tile Batch Size",
-                minimum=1,
-                maximum=1,
-                step=1,
-                value=1,
-                elem_id=self.elem_id("tile_batch_size"),
-            )
-
         save_stage1 = gr.Checkbox(
-            label="Save Stage 1 output", value=True, elem_id=self.elem_id("save_stage1")
+            label="Stage 1出力も保存",
+            value=True,
+            elem_id=self.elem_id("save_stage1"),
         )
 
-        with gr.Row():
+        with gr.Row(elem_classes=["neo-workflow-grid-3"]):
             smart_finish = gr.Checkbox(
-                label="Smart chroma finish（改善時のみ採用）",
+                label="Smart Finish",
                 value=True,
                 elem_id=self.elem_id("smart_finish"),
             )
             smart_despeckle = gr.Checkbox(
-                label="孤立粒を補修（雪・星・粒子ではOFF）",
+                label="孤立粒を補修",
                 value=False,
                 elem_id=self.elem_id("smart_despeckle"),
+                tooltip="雪・星・粒子が重要な画像ではOFFにします。",
             )
             smart_color_strength = gr.Slider(
-                label="Smart Chroma Strength",
+                label="色補正強度",
                 minimum=0.0,
                 maximum=1.0,
                 step=0.05,
                 value=0.80,
                 elem_id=self.elem_id("smart_color_strength"),
+            )
+
+        summary_inputs = [
+            final_long_edge,
+            first_pass_long_edge,
+            diffusion_long_edge_cap,
+            final_width,
+            final_height,
+            model_profile,
+            allow_non_native_diffusion,
+            first_pass_denoise,
+            final_denoise,
+            tile_width,
+            tile_height,
+            tile_overlap,
+            smart_finish,
+        ]
+        quick_4k.click(
+            fn=lambda profile_name, allow_non_native, stage1_denoise, stage2_denoise, tile_w, tile_h, overlap, finish_enabled: self._quick_target_values_with_summary(
+                4096,
+                profile_name,
+                allow_non_native,
+                stage1_denoise,
+                stage2_denoise,
+                tile_w,
+                tile_h,
+                overlap,
+                finish_enabled,
+            ),
+            inputs=[
+                model_profile,
+                allow_non_native_diffusion,
+                first_pass_denoise,
+                final_denoise,
+                tile_width,
+                tile_height,
+                tile_overlap,
+                smart_finish,
+            ],
+            outputs=[
+                final_long_edge,
+                first_pass_long_edge,
+                diffusion_long_edge_cap,
+                final_width,
+                final_height,
+                workflow_status,
+            ],
+            show_progress="hidden",
+        )
+        quick_8k.click(
+            fn=lambda profile_name, allow_non_native, stage1_denoise, stage2_denoise, tile_w, tile_h, overlap, finish_enabled: self._quick_target_values_with_summary(
+                8192,
+                profile_name,
+                allow_non_native,
+                stage1_denoise,
+                stage2_denoise,
+                tile_w,
+                tile_h,
+                overlap,
+                finish_enabled,
+            ),
+            inputs=[
+                model_profile,
+                allow_non_native_diffusion,
+                first_pass_denoise,
+                final_denoise,
+                tile_width,
+                tile_height,
+                tile_overlap,
+                smart_finish,
+            ],
+            outputs=[
+                final_long_edge,
+                first_pass_long_edge,
+                diffusion_long_edge_cap,
+                final_width,
+                final_height,
+                workflow_status,
+            ],
+            show_progress="hidden",
+        )
+
+        for slider in (
+            final_long_edge,
+            first_pass_long_edge,
+            diffusion_long_edge_cap,
+            final_width,
+            final_height,
+            first_pass_denoise,
+            final_denoise,
+            tile_width,
+            tile_height,
+            tile_overlap,
+        ):
+            slider.input(
+                fn=self._workflow_summary_html,
+                inputs=summary_inputs,
+                outputs=[workflow_status],
+                show_progress="hidden",
+            )
+        for control in (model_profile, allow_non_native_diffusion, smart_finish):
+            control.input(
+                fn=self._workflow_summary_html,
+                inputs=summary_inputs,
+                outputs=[workflow_status],
+                show_progress="hidden",
             )
 
         return [
@@ -196,6 +376,113 @@ class KreaTwoStageUpscale(scripts.Script):
             smart_despeckle,
             smart_color_strength,
         ]
+
+    @staticmethod
+    def _quick_target_values(long_edge: int) -> tuple[int, int, int, int, int]:
+        target = int(long_edge)
+        if target not in (4096, 8192):
+            raise ValueError("Krea2 quick target must be 4096 or 8192.")
+        return target, 0, 0, 0, 0
+
+    @classmethod
+    def _quick_target_values_with_summary(
+        cls,
+        long_edge,
+        model_profile,
+        allow_non_native_diffusion,
+        first_pass_denoise,
+        final_denoise,
+        tile_width,
+        tile_height,
+        tile_overlap,
+        smart_finish,
+    ) -> tuple:
+        values = cls._quick_target_values(int(long_edge))
+        summary = cls._workflow_summary_html(
+            values[0],
+            values[1],
+            values[2],
+            values[3],
+            values[4],
+            model_profile,
+            allow_non_native_diffusion,
+            first_pass_denoise,
+            final_denoise,
+            tile_width,
+            tile_height,
+            tile_overlap,
+            smart_finish,
+        )
+        return (*values, summary)
+
+    @staticmethod
+    def _workflow_summary_html(
+        final_long_edge,
+        first_pass_long_edge,
+        diffusion_long_edge_cap,
+        final_width,
+        final_height,
+        model_profile,
+        allow_non_native_diffusion,
+        first_pass_denoise,
+        final_denoise,
+        tile_width,
+        tile_height,
+        tile_overlap,
+        smart_finish,
+    ) -> str:
+        long_edge = int(float(final_long_edge or 0))
+        first_pass = int(float(first_pass_long_edge or 0))
+        requested_cap = int(float(diffusion_long_edge_cap or 0))
+        width = int(float(final_width or 0))
+        height = int(float(final_height or 0))
+        profile = str(model_profile or "custom")
+        profile_cap = native_diffusion_long_edge(profile)
+        effective_cap = requested_cap if requested_cap > 0 else profile_cap
+        tile_w = int(float(tile_width or 0))
+        tile_h = int(float(tile_height or 0))
+        overlap = int(float(tile_overlap or 0))
+
+        explicit_size_is_partial = (width > 0) != (height > 0)
+        output_label = (
+            f"{width} × {height} px"
+            if width > 0 and height > 0
+            else f"長辺 {long_edge} px・入力比率を維持"
+        )
+        status = "安全側プラン"
+        tone = "ready"
+        note = (
+            "拡散はモデル上限内のproxyで行い、最後にLanczosで納品寸法へ合わせます。"
+        )
+        if long_edge >= 8192:
+            status = "大判納品"
+            tone = "caution"
+            note = "8Kはproxy拡散後の納品拡大です。細部は4K出力も併せて確認してください。"
+        if bool(allow_non_native_diffusion):
+            status = "上限超過を許可"
+            tone = "caution"
+            note = "モデルの対応解像度を超える拡散が有効です。OOMと品質低下を個別に確認してください。"
+        if explicit_size_is_partial:
+            status = "サイズ要確認"
+            tone = "caution"
+            note = "最終幅と最終高さは、両方を0にするか両方を1以上にしてください。"
+
+        return workflow_summary(
+            f"{profile} · {output_label}",
+            (
+                ("Stage 1", "自動" if first_pass <= 0 else f"長辺 {first_pass} px"),
+                ("拡散上限", f"長辺 {effective_cap} px"),
+                (
+                    "Denoise",
+                    f"{float(first_pass_denoise):.2f} → {float(final_denoise):.2f}",
+                ),
+                ("Tile", f"{tile_w} × {tile_h} / overlap {overlap}"),
+                ("仕上げ", "Smart Finish ON" if bool(smart_finish) else "補正なし"),
+            ),
+            status=status,
+            note=note,
+            tone=tone,
+        )
 
     @staticmethod
     def _explicit_dimensions(width: int, height: int) -> tuple[int | None, int | None]:

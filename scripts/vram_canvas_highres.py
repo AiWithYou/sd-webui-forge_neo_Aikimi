@@ -23,6 +23,11 @@ from modules_forge.krea2_highres import (
     krea2_vram_canvas_profile,
 )
 from modules_forge.krea2_upscale import replace_infotext_size, target_size
+from modules_forge.workflow_ui import (
+    workflow_hero,
+    workflow_section,
+    workflow_summary,
+)
 from modules_forge.vram_canvas import (
     CONSENSUS_MERGE_MODE,
     DEFAULT_NOVEL_DETAIL_CONSENSUS_SIGMA,
@@ -32,12 +37,7 @@ from modules_forge.vram_canvas import (
     DEFAULT_NOVEL_DETAIL_STRUCTURE_SIGMA,
     GIB,
     PHASE_WEAVE_CONTEXT_RADIUS,
-    PHASE_WEAVE_DETAIL_FLOOR,
-    PHASE_WEAVE_FEATHER_RADIUS,
     PHASE_WEAVE_MERGE_MODE,
-    PHASE_WEAVE_QUALITY_RADIUS,
-    PHASE_WEAVE_SELECTION_MARGIN,
-    PHASE_WEAVE_SUPPORT_MIX,
     adaptive_step_count,
     balanced_virtual_axis_origin,
     consensus_gated_residual,
@@ -81,29 +81,104 @@ class VRAMCanvasHighres(scripts.Script):
         default_profile = krea2_vram_canvas_profile(
             QUALITY_PROFILE_NAMES[DEFAULT_QUALITY_PROFILE_LABEL]
         )
-        gr.HTML("""<p align="center"><b>VRAM-Canvas</b>: 全体像を段階拡大し、VRAM予算内のhalo tileを1枚ずつimg2imgします。<br>低周波構造・基準像の局所detail・重複tile間の合意で高周波残差をgateし、全体構図と色を保ちながら4K/8Kの局所detailを追加します。<br><b>Krea2 PhaseWeave 4K</b>は画像外を端画素で補った等間隔の2格子を半ストライドずらし、端の切れ幅が極端に細くならない起点へ自動調整して別々に完成させます。その後、局所的に優れた候補を選んで境界だけを接続します。格子間の一致が低くても選択候補の細線を消し切りません。<br><b>Texture Rich 4K</b>は、より高いdenoiseと緩い合意gateで書き込み量を増やす実験モードです。粒状感や局所的な創作も増えるため、通常版とは別に比較してください。<br><b>推奨:</b> Krea2のnative画像からまず4Kを確認し、合格した4Kだけを入力にして8Kへ進めます。CFG 1.0ではnegative promptが無視されるため、重要な禁止条件はpositive prompt側にも含めてください。</p>""")
+        gr.HTML(
+            workflow_hero(
+                "VRAM-Canvas 4K / 8K",
+                "入力の構図と色を基準に固定し、VRAM予算内のタイルを段階処理して局所ディテールを追加します。",
+                badges=("通常img2img", "Batch 1 × 1", "Krea2推奨", "4Kから確認"),
+                steps=(
+                    "img2imgへ基準画像を入れる",
+                    "まず「4K Smart」を適用する",
+                    "4Kを確認後、その画像から8Kへ進む",
+                ),
+            ),
+            elem_classes=["neo-workflow-hero-host"],
+        )
 
-        with gr.Row():
+        gr.HTML(
+            workflow_section(
+                1,
+                "クイック設定",
+                "推奨は4K Smart。実験プロファイルは通常版と別に比較してください。",
+            ),
+            elem_classes=["neo-workflow-section-host"],
+        )
+        with gr.Row(elem_classes=["neo-workflow-preset-grid"]):
+            quick_4k = gr.Button(
+                "4K Smart\n推奨・構図優先",
+                variant="primary",
+                elem_id=self.elem_id("quick_4k"),
+                elem_classes=["neo-workflow-action"],
+            )
+            quick_phaseweave_4k = gr.Button(
+                "PhaseWeave 4K\n細線・境界を比較",
+                elem_id=self.elem_id("quick_phaseweave_4k"),
+                elem_classes=["neo-workflow-action"],
+            )
+        with gr.Row(elem_classes=["neo-workflow-preset-grid"]):
+            quick_texture_4k = gr.Button(
+                "Texture Rich 4K\n書き込み強め・実験",
+                elem_id=self.elem_id("quick_texture_4k"),
+                elem_classes=["neo-workflow-action"],
+            )
+            quick_8k = gr.Button(
+                "8K Smart\n承認済み4Kから正確に2倍",
+                elem_id=self.elem_id("quick_8k"),
+                elem_classes=["neo-workflow-action"],
+            )
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
+            quality_profile = gr.Dropdown(
+                label="品質プロファイル",
+                choices=list(QUALITY_PROFILE_NAMES),
+                value=DEFAULT_QUALITY_PROFILE_LABEL,
+                elem_id=self.elem_id("quality_profile"),
+                tooltip="選択すると関連する品質設定をまとめて更新します。",
+            )
+            apply_quality_profile = gr.Button(
+                "プロファイルを再適用",
+                elem_id=self.elem_id("apply_quality_profile"),
+                elem_classes=["neo-workflow-action"],
+            )
+
+        workflow_status = gr.HTML(
+            self._workflow_summary_html(
+                4096,
+                0,
+                0,
+                DEFAULT_QUALITY_PROFILE_LABEL,
+                0,
+                0,
+                default_profile["phase_count"],
+                default_profile["minimum_steps"],
+                default_profile["maximum_steps"],
+                True,
+                default_profile["merge_mode"],
+            ),
+            elem_classes=["neo-workflow-summary-host"],
+        )
+
+        gr.HTML(
+            workflow_section(
+                2,
+                "納品サイズ",
+                "幅・高さを0にすると入力比率を保ち、長辺を基準にします。",
+            ),
+            elem_classes=["neo-workflow-section-host"],
+        )
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
             final_long_edge = gr.Slider(
-                label="Final Long Edge (8192 mode = exact 2x approved 4K)",
+                label="最終長辺",
                 minimum=512,
                 maximum=8192,
                 step=64,
                 value=4096,
                 elem_id=self.elem_id("final_long_edge"),
-            )
-            max_stage_scale = gr.Slider(
-                label="Maximum Scale per Stage",
-                minimum=1.25,
-                maximum=2.0,
-                step=0.05,
-                value=2.0,
-                elem_id=self.elem_id("max_stage_scale"),
+                tooltip="8192は承認済み4Kを入力にした正確な2倍モードです。",
             )
 
-        with gr.Row():
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
             final_width = gr.Slider(
-                label="Final Width (0 = use long edge)",
+                label="最終幅（0 = 長辺指定）",
                 minimum=0,
                 maximum=8192,
                 step=16,
@@ -111,7 +186,7 @@ class VRAMCanvasHighres(scripts.Script):
                 elem_id=self.elem_id("final_width"),
             )
             final_height = gr.Slider(
-                label="Final Height (0 = use long edge)",
+                label="最終高さ（0 = 長辺指定）",
                 minimum=0,
                 maximum=8192,
                 step=16,
@@ -119,45 +194,26 @@ class VRAMCanvasHighres(scripts.Script):
                 elem_id=self.elem_id("final_height"),
             )
 
-        with gr.Row():
-            quick_4k = gr.Button(
-                "4K Smart - long edge 4096 + profile",
-                elem_id=self.elem_id("quick_4k"),
-            )
-            quick_texture_4k = gr.Button(
-                "4K Texture Rich - more detail/noise",
-                elem_id=self.elem_id("quick_texture_4k"),
-            )
-            quick_phaseweave_4k = gr.Button(
-                KREA2_PHASEWEAVE_PRODUCT_NAME,
-                elem_id=self.elem_id("quick_phaseweave_4k"),
-            )
-            quick_8k = gr.Button(
-                "8K Smart - exact 2x approved 4K + profile",
-                elem_id=self.elem_id("quick_8k"),
-            )
-            quality_profile = gr.Dropdown(
-                label="Quality Profile",
-                choices=list(QUALITY_PROFILE_NAMES),
-                value=DEFAULT_QUALITY_PROFILE_LABEL,
-                elem_id=self.elem_id("quality_profile"),
-            )
-            apply_quality_profile = gr.Button(
-                "Apply Profile",
-                elem_id=self.elem_id("apply_quality_profile"),
-            )
-
-        with gr.Row():
+        gr.HTML(
+            workflow_section(
+                3,
+                "品質とメモリ",
+                "0は自動。RTX 3090ではまず自動設定のまま試せます。",
+            ),
+            elem_classes=["neo-workflow-section-host"],
+        )
+        with gr.Row(elem_classes=["neo-workflow-grid-3"]):
             vram_budget_gib = gr.Slider(
-                label="Total VRAM Budget GiB (0 = Auto)",
+                label="VRAM予算 GiB（0 = 自動）",
                 minimum=0,
                 maximum=48,
                 step=0.5,
                 value=0,
                 elem_id=self.elem_id("vram_budget_gib"),
+                tooltip="GPUの総VRAMに合わせて自動計算する場合は0のままにします。",
             )
             model_reserve_gib = gr.Slider(
-                label="Model / Runtime Reserve GiB",
+                label="モデル予約 GiB",
                 minimum=0,
                 maximum=16,
                 step=0.25,
@@ -165,27 +221,28 @@ class VRAMCanvasHighres(scripts.Script):
                 elem_id=self.elem_id("model_reserve_gib"),
             )
             tile_size = gr.Dropdown(
-                label="Diffusion Tile Edge (0 = Auto)",
+                label="拡散タイル辺（0 = 自動）",
                 choices=[0, 384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1024, 1088, 1152, 1216, 1280],
                 value=0,
                 elem_id=self.elem_id("tile_size"),
             )
 
-        with gr.Row():
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
             phase_count = gr.Radio(
-                label="Grid Phases",
+                label="グリッド位相数",
                 choices=(1, 2),
                 value=default_profile["phase_count"],
                 elem_id=self.elem_id("phase_count"),
             )
             merge_mode = gr.Dropdown(
-                label="Phase Merge Mode",
+                label="位相マージ方式",
                 choices=(CONSENSUS_MERGE_MODE, PHASE_WEAVE_MERGE_MODE),
                 value=default_profile["merge_mode"],
                 elem_id=self.elem_id("merge_mode"),
             )
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
             minimum_steps = gr.Slider(
-                label="Minimum Steps",
+                label="最小ステップ",
                 minimum=1,
                 maximum=12,
                 step=1,
@@ -193,7 +250,7 @@ class VRAMCanvasHighres(scripts.Script):
                 elem_id=self.elem_id("minimum_steps"),
             )
             maximum_steps = gr.Slider(
-                label="Maximum Steps",
+                label="最大ステップ",
                 minimum=1,
                 maximum=20,
                 step=1,
@@ -201,9 +258,9 @@ class VRAMCanvasHighres(scripts.Script):
                 elem_id=self.elem_id("maximum_steps"),
             )
 
-        with gr.Row():
+        with gr.Row(elem_classes=["neo-workflow-grid-3"]):
             coarse_denoise = gr.Slider(
-                label="Coarse Stage Denoising",
+                label="粗段階 denoise",
                 minimum=0.0,
                 maximum=1.0,
                 step=0.01,
@@ -211,7 +268,7 @@ class VRAMCanvasHighres(scripts.Script):
                 elem_id=self.elem_id("coarse_denoise"),
             )
             final_denoise = gr.Slider(
-                label="Final Stage Denoising",
+                label="最終 denoise",
                 minimum=0.0,
                 maximum=1.0,
                 step=0.01,
@@ -219,12 +276,24 @@ class VRAMCanvasHighres(scripts.Script):
                 elem_id=self.elem_id("final_denoise"),
             )
             save_stages = gr.Checkbox(
-                label="Save intermediate stage PNGs",
+                label="中間段階PNGを保存",
                 value=False,
                 elem_id=self.elem_id("save_stages"),
             )
 
-        with gr.Accordion("Advanced frequency merge", open=False):
+        with gr.Accordion(
+            "詳細設定 · 段階拡大と周波数マージ",
+            open=False,
+            elem_classes=["neo-workflow-accordion"],
+        ):
+            max_stage_scale = gr.Slider(
+                label="1段階あたりの最大拡大率",
+                minimum=1.25,
+                maximum=2.0,
+                step=0.05,
+                value=2.0,
+                elem_id=self.elem_id("max_stage_scale"),
+            )
             with gr.Row():
                 detail_knee = gr.Slider(
                     label="Adaptive Steps Detail Knee",
@@ -344,25 +413,29 @@ class VRAMCanvasHighres(scripts.Script):
                     elem_id=self.elem_id("novel_detail_consensus_strength"),
                 )
 
-        with gr.Accordion("Krea2 prompt and Smart Finish", open=True):
+        with gr.Accordion(
+            "仕上げ · Krea2 guidance / Smart Finish",
+            open=False,
+            elem_classes=["neo-workflow-accordion"],
+        ):
             append_krea2_detail_prompt = gr.Checkbox(
-                label="Append geometry-preserving Krea2 dense-detail guidance",
+                label="構図を守るKrea2ディテール指示を追加",
                 value=True,
                 elem_id=self.elem_id("append_krea2_detail_prompt"),
             )
             with gr.Row():
                 smart_finish = gr.Checkbox(
-                    label="Smart Finish (adaptive chroma + coherent detail)",
+                    label="Smart Finish（色ムラ + coherent detail）",
                     value=True,
                     elem_id=self.elem_id("smart_finish"),
                 )
                 detail_guard = gr.Checkbox(
-                    label="Coherent Detail Guard",
+                    label="ディテール保護",
                     value=True,
                     elem_id=self.elem_id("detail_guard"),
                 )
                 smart_color_strength = gr.Slider(
-                    label="Smart Chroma Strength",
+                    label="色補正強度",
                     minimum=0.0,
                     maximum=1.0,
                     step=0.05,
@@ -430,8 +503,27 @@ class VRAMCanvasHighres(scripts.Script):
             append_krea2_detail_prompt,
             merge_mode,
         ]
+        summary_inputs = [
+            final_long_edge,
+            final_width,
+            final_height,
+            quality_profile,
+            vram_budget_gib,
+            tile_size,
+            phase_count,
+            minimum_steps,
+            maximum_steps,
+            smart_finish,
+            merge_mode,
+        ]
         quick_4k.click(
-            fn=lambda: self._quick_profile_values(4096, "Krea2 Dense Detail 4K"),
+            fn=lambda vram_budget, finish_enabled: self._quick_profile_values_with_summary(
+                4096,
+                "Krea2 Dense Detail 4K",
+                vram_budget,
+                finish_enabled,
+            ),
+            inputs=[vram_budget_gib, smart_finish],
             outputs=[
                 final_long_edge,
                 final_width,
@@ -439,13 +531,18 @@ class VRAMCanvasHighres(scripts.Script):
                 quality_profile,
                 tile_size,
                 *profile_outputs,
+                workflow_status,
             ],
             show_progress="hidden",
         )
         quick_texture_4k.click(
-            fn=lambda: self._quick_profile_values(
-                4096, "Krea2 Texture Rich 4K (Experimental)"
+            fn=lambda vram_budget, finish_enabled: self._quick_profile_values_with_summary(
+                4096,
+                "Krea2 Texture Rich 4K (Experimental)",
+                vram_budget,
+                finish_enabled,
             ),
+            inputs=[vram_budget_gib, smart_finish],
             outputs=[
                 final_long_edge,
                 final_width,
@@ -453,13 +550,18 @@ class VRAMCanvasHighres(scripts.Script):
                 quality_profile,
                 tile_size,
                 *profile_outputs,
+                workflow_status,
             ],
             show_progress="hidden",
         )
         quick_phaseweave_4k.click(
-            fn=lambda: self._quick_profile_values(
-                4096, "Krea2 PhaseWeave 4K (Experimental)"
+            fn=lambda vram_budget, finish_enabled: self._quick_profile_values_with_summary(
+                4096,
+                "Krea2 PhaseWeave 4K (Experimental)",
+                vram_budget,
+                finish_enabled,
             ),
+            inputs=[vram_budget_gib, smart_finish],
             outputs=[
                 final_long_edge,
                 final_width,
@@ -467,11 +569,18 @@ class VRAMCanvasHighres(scripts.Script):
                 quality_profile,
                 tile_size,
                 *profile_outputs,
+                workflow_status,
             ],
             show_progress="hidden",
         )
         quick_8k.click(
-            fn=lambda: self._quick_profile_values(8192, "Krea2 Dense Detail 8K"),
+            fn=lambda vram_budget, finish_enabled: self._quick_profile_values_with_summary(
+                8192,
+                "Krea2 Dense Detail 8K",
+                vram_budget,
+                finish_enabled,
+            ),
+            inputs=[vram_budget_gib, smart_finish],
             outputs=[
                 final_long_edge,
                 final_width,
@@ -479,21 +588,60 @@ class VRAMCanvasHighres(scripts.Script):
                 quality_profile,
                 tile_size,
                 *profile_outputs,
+                workflow_status,
             ],
             show_progress="hidden",
         )
         apply_quality_profile.click(
-            fn=self._quality_profile_values,
-            inputs=[quality_profile],
-            outputs=profile_outputs,
+            fn=self._quality_profile_values_with_summary,
+            inputs=[
+                quality_profile,
+                final_long_edge,
+                final_width,
+                final_height,
+                vram_budget_gib,
+                tile_size,
+                smart_finish,
+            ],
+            outputs=[*profile_outputs, workflow_status],
             show_progress="hidden",
         )
-        quality_profile.change(
-            fn=self._quality_profile_values,
-            inputs=[quality_profile],
-            outputs=profile_outputs,
+        quality_profile.select(
+            fn=self._quality_profile_values_with_summary,
+            inputs=[
+                quality_profile,
+                final_long_edge,
+                final_width,
+                final_height,
+                vram_budget_gib,
+                tile_size,
+                smart_finish,
+            ],
+            outputs=[*profile_outputs, workflow_status],
             show_progress="hidden",
         )
+
+        for slider in (
+            final_long_edge,
+            final_width,
+            final_height,
+            vram_budget_gib,
+            minimum_steps,
+            maximum_steps,
+        ):
+            slider.input(
+                fn=self._workflow_summary_html,
+                inputs=summary_inputs,
+                outputs=[workflow_status],
+                show_progress="hidden",
+            )
+        for control in (tile_size, phase_count, smart_finish, merge_mode):
+            control.select(
+                fn=self._workflow_summary_html,
+                inputs=summary_inputs,
+                outputs=[workflow_status],
+                show_progress="hidden",
+            )
 
         return [
             final_long_edge,
@@ -535,6 +683,75 @@ class VRAMCanvasHighres(scripts.Script):
         ]
 
     @staticmethod
+    def _workflow_summary_html(
+        final_long_edge,
+        final_width,
+        final_height,
+        quality_profile,
+        vram_budget_gib,
+        tile_size,
+        phase_count,
+        minimum_steps,
+        maximum_steps,
+        smart_finish,
+        merge_mode,
+    ) -> str:
+        long_edge = int(float(final_long_edge or 0))
+        width = int(float(final_width or 0))
+        height = int(float(final_height or 0))
+        budget = float(vram_budget_gib or 0)
+        tile = int(float(tile_size or 0))
+        phases = int(float(phase_count or 1))
+        minimum = int(float(minimum_steps or 1))
+        maximum = int(float(maximum_steps or minimum))
+        profile_label = str(quality_profile or DEFAULT_QUALITY_PROFILE_LABEL)
+
+        explicit_size_is_partial = (width > 0) != (height > 0)
+        if width > 0 and height > 0:
+            output_label = f"{width} × {height} px"
+        else:
+            output_label = f"長辺 {long_edge} px・入力比率を維持"
+
+        status = "推奨設定"
+        tone = "ready"
+        note = (
+            "通常img2img、Batch Count / Size = 1で実行します。"
+            "CFG 1.0では重要な禁止条件もpositive promptへ含めてください。"
+        )
+        if "Experimental" in profile_label:
+            status = "実験プロファイル"
+            tone = "experimental"
+            note = "通常の4K Smart出力と別に保存し、粒状感・細線・境界を比較してください。"
+        if long_edge >= 8192:
+            status = "4K承認後"
+            tone = "caution"
+            note = "入力には目視承認済みの4K画像を使います。native 8K生成ではありません。"
+        if explicit_size_is_partial:
+            status = "サイズ要確認"
+            tone = "caution"
+            note = "最終幅と最終高さは、両方を0にするか両方を1以上にしてください。"
+
+        step_label = (
+            f"{minimum} steps / tile"
+            if minimum == maximum
+            else f"{minimum}–{maximum} steps / tile"
+        )
+        return workflow_summary(
+            profile_label,
+            (
+                ("納品", output_label),
+                ("VRAM", "自動検出" if budget <= 0 else f"{budget:g} GiB"),
+                ("Tile", "自動" if tile <= 0 else f"{tile} px"),
+                ("処理", f"{phases} phase・{step_label}"),
+                ("Merge", str(merge_mode)),
+                ("仕上げ", "Smart Finish ON" if bool(smart_finish) else "補正なし"),
+            ),
+            status=status,
+            note=note,
+            tone=tone,
+        )
+
+    @staticmethod
     def _quality_profile_values(profile_label: str) -> tuple:
         try:
             profile_name = QUALITY_PROFILE_NAMES[profile_label]
@@ -570,6 +787,33 @@ class VRAMCanvasHighres(scripts.Script):
         )
 
     @classmethod
+    def _quality_profile_values_with_summary(
+        cls,
+        profile_label,
+        final_long_edge,
+        final_width,
+        final_height,
+        vram_budget_gib,
+        tile_size,
+        smart_finish,
+    ) -> tuple:
+        values = cls._quality_profile_values(str(profile_label))
+        summary = cls._workflow_summary_html(
+            final_long_edge,
+            final_width,
+            final_height,
+            profile_label,
+            vram_budget_gib,
+            tile_size,
+            values[0],
+            values[1],
+            values[2],
+            smart_finish,
+            values[-1],
+        )
+        return (*values, summary)
+
+    @classmethod
     def _quick_profile_values(cls, long_edge: int, profile_label: str) -> tuple:
         if int(long_edge) not in (4096, 8192):
             raise ValueError("Smart target long edge must be 4096 or 8192.")
@@ -591,6 +835,31 @@ class VRAMCanvasHighres(scripts.Script):
             ),
             *cls._quality_profile_values(profile_label),
         )
+
+    @classmethod
+    def _quick_profile_values_with_summary(
+        cls,
+        long_edge,
+        profile_label,
+        vram_budget_gib,
+        smart_finish,
+    ) -> tuple:
+        values = cls._quick_profile_values(int(long_edge), str(profile_label))
+        profile_values = values[5:]
+        summary = cls._workflow_summary_html(
+            values[0],
+            values[1],
+            values[2],
+            values[3],
+            vram_budget_gib,
+            values[4],
+            profile_values[0],
+            profile_values[1],
+            profile_values[2],
+            smart_finish,
+            profile_values[-1],
+        )
+        return (*values, summary)
 
     @staticmethod
     def _explicit_dimensions(width: int, height: int) -> tuple[int | None, int | None]:

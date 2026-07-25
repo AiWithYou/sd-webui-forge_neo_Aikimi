@@ -15,6 +15,11 @@ import modules.scripts as scripts
 from modules import devices, images, processing
 from modules.api import api
 from modules.shared import opts, state
+from modules_forge.workflow_ui import (
+    workflow_hero,
+    workflow_section,
+    workflow_summary,
+)
 
 from hyperweave.config import (
     AccumulatorMode,
@@ -161,6 +166,165 @@ def _preset_updates(name: str):
     )
 
 
+def _workflow_summary_html(
+    enabled,
+    target_mode,
+    custom_long_edge,
+    custom_width,
+    custom_height,
+    preset,
+    content_profile,
+    exact_steps,
+    overdraw_amount,
+    structural_lock,
+    tile_input_size,
+    core_size,
+    stride,
+    accumulator_mode,
+    maximum_ram_gib,
+) -> str:
+    selected_target = str(target_mode or TargetMode.LONG_EDGE_4K.value)
+    selected_preset = str(preset or HyperWeavePreset.OVERDRAW.value)
+    long_edge = int(float(custom_long_edge or 0))
+    width = int(float(custom_width or 0))
+    height = int(float(custom_height or 0))
+    tile = int(float(tile_input_size or 0))
+    core = int(float(core_size or 0))
+    tile_stride = int(float(stride or 0))
+
+    target_label = selected_target
+    if selected_target == TargetMode.CUSTOM_LONG_EDGE.value:
+        target_label = f"長辺 {long_edge} px"
+    elif selected_target == TargetMode.CUSTOM_SIZE.value:
+        target_label = f"{width} × {height} px"
+
+    status = "準備完了"
+    tone = "ready"
+    note = "入力を設計図として保持し、中～高周波の意味的ディテールを再作画します。"
+    if not bool(enabled):
+        status = "無効"
+        tone = "caution"
+        note = "HyperWeaveを使うには「Enable HyperWeave」をONにしてください。"
+    elif (
+        selected_target == TargetMode.CUSTOM_SIZE.value
+        and (width <= 0 or height <= 0)
+    ):
+        status = "サイズ要確認"
+        tone = "caution"
+        note = "Custom width and heightでは幅と高さを両方1以上にしてください。"
+    elif selected_target == TargetMode.LONG_EDGE_8K.value:
+        status = "大判・高負荷"
+        tone = "caution"
+        note = "8Kは処理時間と一時領域が大きくなります。まず4Kで設定を確認してください。"
+    elif selected_preset == HyperWeavePreset.MAX_OVERDRAW.value:
+        status = "強い再作画"
+        tone = "experimental"
+        note = "Max Overdrawは構図逸脱や新規ディテールが増えるため、通常presetと比較してください。"
+
+    return workflow_summary(
+        f"{selected_preset} · {target_label}",
+        (
+            ("内容", str(content_profile)),
+            ("Steps", f"{int(float(exact_steps or 0))} exact"),
+            (
+                "Lock",
+                f"structure {float(structural_lock or 0):.2f} / overdraw {float(overdraw_amount or 0):.2f}",
+            ),
+            ("Tile", f"{tile} / core {core} / stride {tile_stride}"),
+            (
+                "Accumulator",
+                f"{accumulator_mode} · RAM上限 {float(maximum_ram_gib or 0):g} GiB",
+            ),
+        ),
+        status=status,
+        note=note,
+        tone=tone,
+    )
+
+
+def _target_visibility_updates(target_mode):
+    selected_target = str(target_mode)
+    return (
+        gr.update(visible=selected_target == TargetMode.CUSTOM_LONG_EDGE.value),
+        gr.update(visible=selected_target == TargetMode.CUSTOM_SIZE.value),
+        gr.update(visible=selected_target == TargetMode.CUSTOM_SIZE.value),
+    )
+
+
+def _preset_updates_with_summary(
+    preset,
+    enabled,
+    target_mode,
+    custom_long_edge,
+    custom_width,
+    custom_height,
+    content_profile,
+    exact_steps,
+    tile_input_size,
+    core_size,
+    stride,
+    accumulator_mode,
+    maximum_ram_gib,
+):
+    values = _preset_updates(str(preset))
+    summary = _workflow_summary_html(
+        enabled,
+        target_mode,
+        custom_long_edge,
+        custom_width,
+        custom_height,
+        preset,
+        content_profile,
+        exact_steps,
+        values[0],
+        values[1],
+        tile_input_size,
+        core_size,
+        stride,
+        accumulator_mode,
+        maximum_ram_gib,
+    )
+    return (*values, summary)
+
+
+def _target_updates_with_summary(
+    enabled,
+    target_mode,
+    custom_long_edge,
+    custom_width,
+    custom_height,
+    preset,
+    content_profile,
+    exact_steps,
+    overdraw_amount,
+    structural_lock,
+    tile_input_size,
+    core_size,
+    stride,
+    accumulator_mode,
+    maximum_ram_gib,
+):
+    visibility = _target_visibility_updates(target_mode)
+    summary = _workflow_summary_html(
+        enabled,
+        target_mode,
+        custom_long_edge,
+        custom_width,
+        custom_height,
+        preset,
+        content_profile,
+        exact_steps,
+        overdraw_amount,
+        structural_lock,
+        tile_input_size,
+        core_size,
+        stride,
+        accumulator_mode,
+        maximum_ram_gib,
+    )
+    return (*visibility, summary)
+
+
 def _config_from_values(values: tuple[Any, ...]) -> HyperWeaveConfig:
     defaults = HyperWeaveConfig()
     data = {name: getattr(defaults, name) for name in UI_FIELDS}
@@ -213,60 +377,81 @@ class HyperWeaveScript(scripts.Script):
     def ui(self, is_img2img):
         default = HyperWeaveConfig()
         gr.HTML(
-            "<p><b>HyperWeave</b> は入力を設計図として、Forgeで選択中の生成"
-            "モデルを使い中～高周波の意味的ディテールを再作画します。元情報の"
-            "真の復元ではありません。Anime顔の自動検出モデルは同梱しないため、"
-            "顔passを確実に使う場合は Manual Face Core Mask を指定してください。</p>"
+            workflow_hero(
+                "HyperWeave 4K / 8K",
+                "入力を設計図として保持し、選択中の生成モデルで中～高周波の意味的ディテールを再作画します。",
+                badges=("通常img2img", "生成的overdraw", "4Kから確認", f"v{HYPERWEAVE_VERSION}"),
+                steps=(
+                    "入力画像と納品サイズを決める",
+                    "PresetとContent profileを選ぶ",
+                    "顔passは必要に応じてManual Face Maskを指定",
+                ),
+            ),
+            elem_classes=["neo-workflow-hero-host"],
+        )
+
+        gr.HTML(
+            workflow_section(
+                1,
+                "基本プラン",
+                "まず4K long edge / Overdrawで確認し、必要な場合だけ8Kへ進みます。",
+            ),
+            elem_classes=["neo-workflow-section-host"],
         )
         enabled = gr.Checkbox(
-            label="Enable HyperWeave",
+            label="HyperWeaveを有効化",
             value=True,
             elem_id=self.elem_id("enabled"),
         )
-        with gr.Row():
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
             target_mode = gr.Dropdown(
-                label="Target resolution",
+                label="納品サイズ",
                 choices=[item.value for item in TargetMode],
                 value=default.target_mode.value,
                 elem_id=self.elem_id("target_mode"),
             )
             custom_long_edge = gr.Slider(
-                label="Custom long edge",
+                label="Custom長辺",
                 minimum=512,
                 maximum=16384,
                 step=8,
                 value=4096,
+                visible=False,
                 elem_id=self.elem_id("custom_long_edge"),
             )
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
             custom_width = gr.Slider(
-                label="Custom width",
+                label="Custom幅",
                 minimum=0,
                 maximum=16384,
                 step=8,
                 value=0,
+                visible=False,
                 elem_id=self.elem_id("custom_width"),
             )
             custom_height = gr.Slider(
-                label="Custom height",
+                label="Custom高さ",
                 minimum=0,
                 maximum=16384,
                 step=8,
                 value=0,
+                visible=False,
                 elem_id=self.elem_id("custom_height"),
             )
-        with gr.Row():
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
             preset = gr.Dropdown(
-                label="Preset",
+                label="再作画Preset",
                 choices=[item.value for item in HyperWeavePreset],
                 value=default.preset.value,
                 elem_id=self.elem_id("preset"),
             )
             content_profile = gr.Dropdown(
-                label="Content profile",
+                label="内容Profile",
                 choices=[item.value for item in ContentProfile],
                 value=default.content_profile.value,
                 elem_id=self.elem_id("content_profile"),
             )
+        with gr.Row(elem_classes=["neo-workflow-grid-2"]):
             seed = gr.Number(
                 label="HyperWeave seed (-1 = random once)",
                 value=-1,
@@ -281,7 +466,7 @@ class HyperWeaveScript(scripts.Script):
                 value=6,
                 elem_id=self.elem_id("exact_steps"),
             )
-        with gr.Row():
+        with gr.Row(elem_classes=["neo-workflow-grid-3"]):
             overdraw_amount = gr.Slider(
                 label="Overdraw Amount",
                 minimum=0.0,
@@ -307,8 +492,12 @@ class HyperWeaveScript(scripts.Script):
                 elem_id=self.elem_id("low_frequency_lock"),
             )
 
-        with gr.Accordion("Tile and memory", open=False):
-            with gr.Row():
+        with gr.Accordion(
+            "詳細設定 · Tile / memory",
+            open=False,
+            elem_classes=["neo-workflow-accordion"],
+        ):
+            with gr.Row(elem_classes=["neo-workflow-grid-2"]):
                 tile_input_size = gr.Slider(
                     label="Tile input size",
                     minimum=256,
@@ -325,6 +514,7 @@ class HyperWeaveScript(scripts.Script):
                     value=960,
                     elem_id=self.elem_id("core_size"),
                 )
+            with gr.Row(elem_classes=["neo-workflow-grid-2"]):
                 context_size = gr.Slider(
                     label="Context size",
                     minimum=0,
@@ -341,7 +531,7 @@ class HyperWeaveScript(scripts.Script):
                     value=768,
                     elem_id=self.elem_id("stride"),
                 )
-            with gr.Row():
+            with gr.Row(elem_classes=["neo-workflow-grid-3"]):
                 accumulator_mode = gr.Dropdown(
                     label="Accumulator mode",
                     choices=[item.value for item in AccumulatorMode],
@@ -362,7 +552,32 @@ class HyperWeaveScript(scripts.Script):
                     elem_id=self.elem_id("maximum_ram_gib"),
                 )
 
-        with gr.Accordion("Pass strengths and candidates", open=False):
+        workflow_status = gr.HTML(
+            _workflow_summary_html(
+                True,
+                default.target_mode.value,
+                4096,
+                0,
+                0,
+                default.preset.value,
+                default.content_profile.value,
+                6,
+                default.overdraw_amount,
+                default.structural_lock,
+                1280,
+                960,
+                768,
+                default.accumulator_mode.value,
+                8,
+            ),
+            elem_classes=["neo-workflow-summary-host"],
+        )
+
+        with gr.Accordion(
+            "詳細設定 · Pass strengths / candidates",
+            open=False,
+            elem_classes=["neo-workflow-accordion"],
+        ):
             with gr.Row():
                 anchor_strength = gr.Slider(
                     label="Anchor strength",
@@ -732,13 +947,87 @@ class HyperWeaveScript(scripts.Script):
             material_candidates,
             flat_region_detail,
         ]
-        preset.change(
-            fn=_preset_updates,
-            inputs=[preset],
-            outputs=preset_outputs,
+        summary_inputs = [
+            enabled,
+            target_mode,
+            custom_long_edge,
+            custom_width,
+            custom_height,
+            preset,
+            content_profile,
+            exact_steps,
+            overdraw_amount,
+            structural_lock,
+            tile_input_size,
+            core_size,
+            stride,
+            accumulator_mode,
+            maximum_ram_gib,
+        ]
+        preset.input(
+            fn=_preset_updates_with_summary,
+            inputs=[
+                preset,
+                enabled,
+                target_mode,
+                custom_long_edge,
+                custom_width,
+                custom_height,
+                content_profile,
+                exact_steps,
+                tile_input_size,
+                core_size,
+                stride,
+                accumulator_mode,
+                maximum_ram_gib,
+            ],
+            outputs=[*preset_outputs, workflow_status],
             queue=False,
             show_progress=False,
         )
+        target_mode.input(
+            fn=_target_updates_with_summary,
+            inputs=summary_inputs,
+            outputs=[
+                custom_long_edge,
+                custom_width,
+                custom_height,
+                workflow_status,
+            ],
+            queue=False,
+            show_progress="hidden",
+        )
+        for slider in (
+            custom_long_edge,
+            custom_width,
+            custom_height,
+            exact_steps,
+            overdraw_amount,
+            structural_lock,
+            tile_input_size,
+            core_size,
+            stride,
+            maximum_ram_gib,
+        ):
+            slider.input(
+                fn=_workflow_summary_html,
+                inputs=summary_inputs,
+                outputs=[workflow_status],
+                queue=False,
+                show_progress="hidden",
+            )
+        for control in (
+            enabled,
+            content_profile,
+            accumulator_mode,
+        ):
+            control.input(
+                fn=_workflow_summary_html,
+                inputs=summary_inputs,
+                outputs=[workflow_status],
+                queue=False,
+                show_progress="hidden",
+            )
 
         controls = locals()
         result = [controls[name] for name in UI_FIELDS]

@@ -303,13 +303,16 @@ Forgeを再起動し、次の順で選びます。GUI経路はForge内部の処�
 img2img
 → 通常のimg2imgへ入力画像とpromptを設定
 → Script: VRAM-Canvas 4K/8K Highres
-→ 4K Smart - long edge 4096 + profile
-→ Total VRAM Budget GiB: 0（GPUから自動取得）
-→ Diffusion Tile Edge: 0（予算から自動計算）
+→ 4K Smart / 推奨・構図優先
+→ VRAM予算 GiB: 0（GPUから自動取得）
+→ 拡散タイル辺: 0（予算から自動計算）
+→ ライブプランが「推奨設定」になっていることを確認
 → Generate
 ```
 
-`4K Smart` buttonは4096長辺、Krea2 Dense Detail 4K profile、任意画像向けのgeometry-preserving guidanceを一括適用します。`Krea2 PhaseWeave 4K` buttonは同じ4096長辺に対し `Krea2 PhaseWeave 4K (Experimental)` / `phaseweave_4k` profileと `phase_weave` mergeを適用します。guidanceは人物の同一性・顔・手指・文字・物体数・構図を固定し、入力に実在する髪、虹彩、布、木、石、植生、透明物、線画などだけを材質と画風に応じて精密化します。写真風の毛穴をアニメやflat-color領域へ強制しません。profile dropdownを選ぶと対応sliderへ即時反映され、`Apply Profile` でも同じ値を再適用できます。4Kを目視確認した後、その4Kをimg2img入力へ入れ直し、`8K Smart - exact 2x approved 4K + profile` を押すと、1024 tile・正確な各辺2倍で8Kへ進めます。通常の品質profileは2 phases、3～4 adaptive steps、4K用denoise 0.16→0.13、8K用0.12→0.11、detail gain 1.25、novel detail 1.0/0.8、最大差±8/±6をまとめて設定します。PhaseWeave profileは2 phases、各tile 6 Exact Steps、denoise 0.20→0.16、detail gain 1.55、novel detail 1.4に固定します。Smart Finishは既定ON、入力の意図した色を守るためSmart Chromaは既定0です。coherent detail guardは平坦部・強輪郭・clipを保護します。
+`4K Smart` buttonは4096長辺、Krea2 Dense Detail 4K profile、任意画像向けのgeometry-preserving guidanceを一括適用します。`PhaseWeave 4K` buttonは同じ4096長辺に対し `Krea2 PhaseWeave 4K (Experimental)` / `phaseweave_4k` profileと `phase_weave` mergeを適用します。guidanceは人物の同一性・顔・手指・文字・物体数・構図を固定し、入力に実在する髪、虹彩、布、木、石、植生、透明物、線画などだけを材質と画風に応じて精密化します。写真風の毛穴をアニメやflat-color領域へ強制しません。profile dropdownを選ぶと対応sliderへ即時反映され、`プロファイルを再適用` でも同じ値を再適用できます。4Kを目視確認した後、その4Kをimg2img入力へ入れ直し、`8K Smart / 承認済み4Kから正確に2倍` を押すと、1024 tile・正確な各辺2倍で8Kへ進めます。通常の品質profileは2 phases、3～4 adaptive steps、4K用denoise 0.16→0.13、8K用0.12→0.11、detail gain 1.25、novel detail 1.0/0.8、最大差±8/±6をまとめて設定します。PhaseWeave profileは2 phases、各tile 6 Exact Steps、denoise 0.20→0.16、detail gain 1.55、novel detail 1.4に固定します。Smart Finishは既定ON、入力の意図した色を守るためSmart Chromaは既定0です。coherent detail guardは平坦部・強輪郭・clipを保護します。
+
+GUI上部のライブプランは、納品サイズ、VRAM、tile、phase、step、merge、仕上げの現在値をまとめて表示します。8K、実験profile、幅・高さの片側だけを指定した状態では注意表示へ切り替わります。詳細な周波数マージとSmart Finish値は折りたたみ内にあり、狭い画面ではプリセットと入力欄が1列へ並び替わります。
 
 GUIでもBatch Count / Batch Sizeは1、通常img2imgのみです。inpaint maskには対応しません。tileごとのCodeFormer/GFPGANによるidentity変化を避けるため、`Restore faces` とwrap-around `Tiling` は内部tile処理中だけ強制OFFにします。内部tileの間だけrequest-local overrideで `img2img_fix_steps=true` を有効にし、成功・例外・中断・skip・stop・OOMの全経路でprocessing objectと通常設定を元へ戻します。nested callでも受け取ったoverride objectを復元します。`Grid Phases = 2` は半strideずらした追加pass、`Save intermediate stage PNGs` は最終段より前の段階画像も保存します。各tileの生画像は保存せず、最終画像だけを通常のForge出力へ保存します。PNG infoが有効なら `parameters`、`vram_canvas`、`krea2_smart_highres`、`krea2_smart_finish` を保存し、PhaseWeaveではさらに `krea2_phaseweave` を保存します。manifestとPNG metadataの `exact_img2img_steps=true` / `exact_img2img_steps_scope=internal_tiles_only` は通常img2img設定を恒久変更したという意味ではありません。
 
@@ -362,6 +365,8 @@ CLIではprofileだけで共有値を適用できます。
 7. 100% cropで顔、目、髪、手、衣装、輪郭、tile境界を確認します。
 8. 2048は通常の `ROI Boxes` で必要な領域だけに使います。
 9. 局所仕上げ済み4Kを、必要に応じて既存8K経路へ渡します。
+
+GUIはROIを使うモードを選んだときだけ座標入力欄を表示し、`Focused ROI Rewrite` ではcontext倍率とフェザーも追加表示します。ライブプランはROI未入力、mode/profile不一致、未許可の2048全体処理、tile形状不正をGenerate前に注意表示します。低レベルのtile、候補生成、残差保護値は用途別の折りたたみ内にあります。
 
 `Safe 1536` は512 payload / 384 core / overlap 64 / 4 steps / denoise 0.10 / 1候補、`Ultra Detail 1536` は5 steps / denoise 0.15 / 2候補です。`Focused Face Rewrite 1536` は6 steps / denoise 0.38 / 2候補 / context scale 2.0 / source側20px inward featherです。Focused modeでは `Crop Payload`、`Core Size`、`Core Overlap` は計画に使わず、各targetの長辺×Context Scaleを正方形context辺とします。context辺が1536以上で実拡大にならない指定、target同士の重なり、target未指定はmodel処理前に拒否します。`ROI Ultra 2048` はROI指定とROI modeが必須です。Full Image Gridの2048は `Allow expensive 2048 full-grid` を明示しない限り開始前に停止します。長時間処理の前にKrea2 checkpoint、Qwen Image VAE、Qwen3-VL、tile上限、一時disk容量を検査し、OOM時に1536へ自動fallbackして画質を変えることはありません。
 
@@ -502,7 +507,7 @@ RTX 3090 24GiBとKrea2 NF4で、8192x6144、tile 1280、halo 160、2 phases（15
 
 `--box` は `left,top,right,bottom` のピクセル指定です。複数箇所を処理する場合は `--box` を複数回渡します。画像サイズに依存しない指定が必要な場合は `--box-normalized 0.286,0.208,0.495,0.861` のように0..1の正規化座標を使います。顔だけなら小さめのboxと `--mask-shape ellipse`、体全体なら少し広めのboxと既定の `rectangle` が扱いやすいです。
 
-Forge UIから使う場合は、img2imgタブの `Script` で `Krea2 2-Stage Upscale` を選びます。UI既定も最終長辺4096、profile連動proxy（Raw 1024、Turbo/custom 2048）、denoise 0.10/0.12、Smart chroma finish ON、孤立粒補修OFFです。通常のimg2img入力画像だけを対象にし、Batch Count / Batch Size / Tile Batch Sizeはいずれも1にします。
+Forge UIから使う場合は、img2imgタブの `Script` で `Krea2 2-Stage Upscale` を選び、`4K 納品` または `8K 納品` を押します。ライブプランにはmodel profile連動proxy（Raw 1024、Turbo/custom 2048）、Stage 1、denoise、tile、仕上げが表示されます。UI既定は最終長辺4096、denoise 0.10/0.12、Smart Finish ON、孤立粒補修OFFです。proxy、タイル、モデル上限超過の許可は折りたたみ内にあります。通常のimg2img入力画像だけを対象にし、Batch Count / Batch Size / Tile Batch Sizeはいずれも1にします。
 
 ### Tiled VAE / tiled Conv2d
 
