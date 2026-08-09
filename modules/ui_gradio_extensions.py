@@ -1,3 +1,4 @@
+import json
 import os
 
 import gradio as gr
@@ -24,7 +25,18 @@ def javascript_html():
         head += f'<script type="module" src="{webpath(script.path)}"></script>\n'
 
     if shared.cmd_opts.theme:
-        head += f'<script type="text/javascript">set_theme("{shared.cmd_opts.theme}");</script>\n'
+        theme = json.dumps(str(shared.cmd_opts.theme))
+        head += (
+            '<script type="text/javascript">'
+            '(function(){'
+            'const url=new URL(window.location.href);'
+            'if(!url.searchParams.has("__theme")){'
+            f'url.searchParams.set("__theme",{theme});'
+            'window.location.replace(url.toString());'
+            '}'
+            '})();'
+            '</script>\n'
+        )
 
     return head
 

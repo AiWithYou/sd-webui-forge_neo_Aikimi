@@ -200,4 +200,5 @@ function setupAllResizeHandles() {
     }
 }
 
+window.setupAllResizeHandles = setupAllResizeHandles;
 onUiLoaded(setupAllResizeHandles);

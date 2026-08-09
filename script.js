@@ -142,18 +142,23 @@ document.addEventListener("DOMContentLoaded", function () {
 // - Esc to interrupt a generation
 
 document.addEventListener("keydown", function (e) {
+    if (e.isComposing || e.keyCode === 229) return;
+
     const isEnter = e.key === "Enter" || e.code === "Enter";
     const isCtrlKey = e.metaKey || e.ctrlKey;
     const isAltKey = e.altKey;
     const isEsc = e.key === "Escape";
 
-    const generateButton = get_uiCurrentTabContent().querySelector("button[id$=_generate]");
-    const interruptButton = get_uiCurrentTabContent().querySelector("button[id$=_interrupt]");
-    const skipButton = get_uiCurrentTabContent().querySelector("button[id$=_skip]");
+    const currentTab = get_uiCurrentTabContent();
+    if (!currentTab) return;
 
-    if (isCtrlKey && isEnter) {
+    const generateButton = currentTab.querySelector("button[id$=_generate]");
+    const interruptButton = currentTab.querySelector("button[id$=_interrupt]");
+    const skipButton = currentTab.querySelector("button[id$=_skip]");
+
+    if (isCtrlKey && isEnter && generateButton) {
         e.preventDefault();
-        if (interruptButton.style.display === "block") {
+        if (interruptButton?.style.display === "block") {
             interruptButton.click();
             if (opts.ctrl_enter_interrupt) return;
             const callback = (mutationList) => {
@@ -173,7 +178,7 @@ document.addEventListener("keydown", function (e) {
         }
     }
 
-    if (isAltKey && isEnter) {
+    if (isAltKey && isEnter && skipButton) {
         skipButton.click();
         e.preventDefault();
     }
@@ -183,7 +188,7 @@ document.addEventListener("keydown", function (e) {
         const lightboxModal = document.querySelector("#lightboxModal");
         if (!globalPopup || globalPopup.style.display === "none") {
             if (document.activeElement === lightboxModal) return;
-            if (interruptButton.style.display === "block") {
+            if (interruptButton?.style.display === "block") {
                 interruptButton.click();
                 e.preventDefault();
             }
