@@ -222,6 +222,36 @@
     white-space: normal;
 }
 
+#h3-studio .h3-runtime-details {
+    min-width: 150px;
+    color: var(--h3-dim);
+    font-size: 11px;
+}
+
+#h3-studio .h3-runtime-details summary {
+    cursor: pointer;
+    color: var(--h3-muted);
+    font-weight: 650;
+}
+
+#h3-studio .h3-runtime-details dl {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 4px 8px;
+    margin: 8px 0 0;
+}
+
+#h3-studio .h3-runtime-details dt {
+    color: var(--h3-dim);
+}
+
+#h3-studio .h3-runtime-details dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--h3-muted);
+    overflow-wrap: anywhere;
+}
+
 #h3-studio .h3-runtime-card[data-tone="error"] {
     border-color: rgba(255, 99, 112, 0.3);
 }
@@ -494,6 +524,38 @@
 #h3-studio .h3-reference-note .h3-reference-issue {
     width: 100%;
     color: var(--h3-error);
+}
+
+#h3-studio .h3-speed-presets {
+    gap: 7px;
+    margin-bottom: 8px;
+}
+
+#h3-studio .h3-speed-presets button {
+    min-width: 0 !important;
+    min-height: 52px;
+    padding: 8px 10px !important;
+    white-space: pre-line;
+    font-size: 11px !important;
+    line-height: 1.35 !important;
+}
+
+#h3-studio .h3-speed-presets button[aria-pressed="true"] {
+    border-color: rgba(66, 215, 205, 0.48) !important;
+    background: rgba(66, 215, 205, 0.12) !important;
+    color: #effffd !important;
+    box-shadow: inset 0 0 0 1px rgba(66, 215, 205, 0.08), 0 8px 24px rgba(66, 215, 205, 0.08);
+}
+
+#h3-studio .h3-preset-state {
+    margin: 0 0 8px;
+    color: var(--h3-muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+#h3-studio .h3-preset-state strong {
+    color: var(--h3-ready);
 }
 
 #h3-studio .h3-settings-summary {
@@ -850,7 +912,9 @@
     }
 
     #h3-studio .h3-runtime-card p,
-    #h3-studio .h3-runtime-card code {
+    #h3-studio .h3-runtime-card code,
+    #h3-studio .h3-runtime-details {
+        width: 100%;
         max-width: 100%;
     }
 }
@@ -875,15 +939,13 @@
     }
 
     #h3-studio .h3-runtime-badges {
-        display: grid;
+        display: flex;
         width: 100%;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     #h3-studio .h3-runtime-badges span {
-        justify-content: flex-start;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        max-width: 100%;
+        white-space: normal;
     }
 
     #h3-studio .h3-compose,
@@ -904,6 +966,14 @@
     #h3-studio .h3-settings-summary {
         display: grid;
         grid-template-columns: 1fr;
+    }
+
+    #h3-studio .h3-speed-presets {
+        flex-direction: column;
+    }
+
+    #h3-studio .h3-speed-presets button {
+        width: 100%;
     }
 
     #h3-studio .h3-settings-summary strong {

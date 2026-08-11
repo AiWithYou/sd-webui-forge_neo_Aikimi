@@ -15,10 +15,13 @@ from modules_forge.minimax_h3_bridge import (
     MODE_KEYFRAMES,
     MODE_REFERENCES,
     MODE_TEXT,
+    RUNTIME_PROFILE_FAST,
+    RUNTIME_PROFILE_LOW_RAM,
     append_prompt_section,
     cache_history_video,
     cancel_generation,
     discover_runtime_root,
+    generation_preset_values,
     history_choices,
     history_html,
     inspect_readiness,
@@ -28,10 +31,11 @@ from modules_forge.minimax_h3_bridge import (
     prompt_template,
     readiness_html,
     reference_guide_html,
+    restart_runtime,
     resolve_runtime_root,
     run_generation,
     settings_summary_html,
-    start_runtime,
+    ensure_ready,
 )
 
 
@@ -55,10 +59,17 @@ MODE_HELP = {
 }
 
 QUALITY_LABELS = {
-    "draft": "下書き · 0.2 MP",
-    "preview": "プレビュー · 0.4 MP",
-    "balanced": "バランス · 0.5 MP",
-    "native": "Native · 768p",
+    "draft": "動作確認 · 約0.2 MP · 速い",
+    "preview": "おすすめ · 約0.4 MP",
+    "balanced": "バランス · 約0.5 MP",
+    "native": "最終出力 · Native 768p · 重い",
+}
+
+PRESET_STATE_LABELS = {
+    "quick": "動作確認",
+    "recommended": "おすすめ",
+    "final": "最終出力",
+    "custom": "カスタム",
 }
 
 
@@ -79,11 +90,12 @@ def _mode_help_html(mode: str) -> str:
 
 
 def _mode_updates(mode: str):
+    reference_mode = mode == MODE_REFERENCES
     return (
         gr.update(visible=mode == MODE_KEYFRAMES),
-        gr.update(visible=mode == MODE_REFERENCES),
+        gr.update(visible=reference_mode),
         _mode_help_html(mode),
-        gr.update(visible=mode == MODE_REFERENCES),
+        gr.update(visible=True) if reference_mode else gr.update(visible=False, value="match"),
     )
 
 
@@ -95,19 +107,62 @@ def _status_error(message: str) -> str:
     )
 
 
-def _connect_runtime(runtime_value: str, server_url: str) -> str:
+def _preset_state_html(preset: str) -> str:
+    label = PRESET_STATE_LABELS.get(preset, PRESET_STATE_LABELS["custom"])
+    safe_preset = preset if preset in PRESET_STATE_LABELS else "custom"
+    return (
+        f'<p class="h3-preset-state" data-h3-preset="{safe_preset}" '
+        'role="status" aria-live="polite" aria-atomic="true">'
+        f'現在の設定: <strong>{html.escape(label)}</strong></p>'
+    )
+
+
+def _apply_generation_preset(preset: str, aspect: str):
+    return (*generation_preset_values(preset, aspect), _preset_state_html(preset))
+
+
+def _mark_preset_custom() -> str:
+    return _preset_state_html("custom")
+
+
+def _connect_runtime(runtime_value: str, server_url: str, runtime_profile: str) -> str:
     try:
         root = resolve_runtime_root(runtime_value)
-        readiness = start_runtime(root, server_url, LOG_DIRECTORY)
-        return readiness_html(readiness)
+        readiness = ensure_ready(
+            root,
+            server_url,
+            LOG_DIRECTORY,
+            runtime_profile=runtime_profile,
+        )
+        return readiness_html(readiness, runtime_profile)
     except H3BridgeError as exc:
         return _status_error(str(exc))
 
 
-def _rescan_runtime(runtime_value: str, server_url: str) -> str:
+def _restart_runtime(runtime_value: str, server_url: str, runtime_profile: str) -> str:
     try:
         root = resolve_runtime_root(runtime_value)
-        return readiness_html(inspect_readiness(root, server_url))
+        readiness = restart_runtime(
+            root,
+            server_url,
+            LOG_DIRECTORY,
+            runtime_profile=runtime_profile,
+        )
+        readiness = ensure_ready(
+            root,
+            server_url,
+            LOG_DIRECTORY,
+            runtime_profile=runtime_profile,
+        )
+        return readiness_html(readiness, runtime_profile)
+    except H3BridgeError as exc:
+        return _status_error(str(exc))
+
+
+def _rescan_runtime(runtime_value: str, server_url: str, runtime_profile: str) -> str:
+    try:
+        root = resolve_runtime_root(runtime_value)
+        return readiness_html(inspect_readiness(root, server_url), runtime_profile)
     except H3BridgeError as exc:
         return _status_error(str(exc))
 
@@ -175,6 +230,7 @@ def _request_from_ui(
 def _generate(
     runtime_value,
     server_url,
+    runtime_profile,
     mode,
     prompt,
     first_frame,
@@ -222,6 +278,7 @@ def _generate(
             server_url,
             LOG_DIRECTORY,
             OUTPUT_DIRECTORY,
+            runtime_profile=runtime_profile,
         ):
             video_update = update.get("path") or gr.update()
             prompt_id = update.get("prompt_id") or ""
@@ -293,7 +350,10 @@ def _build_ui():
                 </section>
                 """
             )
-            runtime_status = gr.HTML(value=readiness_html(readiness), elem_id="h3-runtime-status")
+            runtime_status = gr.HTML(
+                value=readiness_html(readiness, RUNTIME_PROFILE_FAST),
+                elem_id="h3-runtime-status",
+            )
 
             with gr.Row(elem_classes=["h3-main-grid"]):
                 with gr.Column(scale=6, min_width=420, elem_classes=["h3-compose"]):
@@ -388,6 +448,27 @@ def _build_ui():
 
                     gr.HTML('<div class="h3-section-kicker"><span>02</span><strong>生成設定</strong></div>')
                     with gr.Group(elem_classes=["h3-settings-card"]):
+                        gr.Markdown("#### 用途で選ぶ\n解像度・5秒・20 Stepsをまとめて安全な値へ揃えます。")
+                        with gr.Row(elem_classes=["h3-speed-presets"]):
+                            quick_preset_button = gr.Button(
+                                "動作確認\n速い・低解像度",
+                                size="sm",
+                                elem_id="h3-preset-quick",
+                            )
+                            recommended_preset_button = gr.Button(
+                                "おすすめ\n公式Fast Preview相当",
+                                size="sm",
+                                elem_id="h3-preset-recommended",
+                            )
+                            final_preset_button = gr.Button(
+                                "最終出力\nNative・重い",
+                                size="sm",
+                                elem_id="h3-preset-final",
+                            )
+                        preset_state = gr.HTML(
+                            value=_preset_state_html("recommended"),
+                            elem_id="h3-preset-state",
+                        )
                         with gr.Row():
                             aspect = gr.Dropdown(
                                 choices=["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
@@ -398,7 +479,7 @@ def _build_ui():
                             quality = gr.Dropdown(
                                 choices=[(label, value) for value, label in QUALITY_LABELS.items()],
                                 value="preview",
-                                label="Quality",
+                                label="解像度・速度",
                                 elem_id="h3-quality",
                             )
                         duration = gr.Slider(
@@ -432,13 +513,20 @@ def _build_ui():
                                 )
                             with gr.Row():
                                 scheduler = gr.Dropdown(
-                                    choices=["simple", "beta", "normal"],
+                                    choices=[
+                                        ("simple · 公式workflow推奨", "simple"),
+                                        ("beta · 実験的", "beta"),
+                                        ("normal · 実験的", "normal"),
+                                    ],
                                     value="simple",
                                     label="Scheduler",
                                     elem_id="h3-scheduler",
                                 )
                                 ref_image_size = gr.Radio(
-                                    choices=[("Match · faster", "match"), ("Max · identity", "max")],
+                                    choices=[
+                                        ("Match · 推奨・高速", "match"),
+                                        ("Max · 同一性優先・非常に重い", "max"),
+                                    ],
                                     value="match",
                                     label="Reference image size",
                                     visible=False,
@@ -495,6 +583,27 @@ def _build_ui():
             with gr.Accordion("Runtime & models", open=False, elem_id="h3-runtime-setup"):
                 gr.Markdown(
                     "Forge Neo はローカルの ComfyUI H3 runtime を使用します。外部URLには素材を送信しません。"
+                    " H3だけにComfy Kitchen INT8 attentionを適用します。生成品質とは別に、"
+                    "高速または省RAMの起動profileを明示選択できます。"
+                )
+                runtime_profile = gr.Radio(
+                    choices=[
+                        (
+                            "高速・推奨 · Pinned Memory + Async 2",
+                            RUNTIME_PROFILE_FAST,
+                        ),
+                        (
+                            "省RAM・低速 · cacheなし + Pinned/Async無効",
+                            RUNTIME_PROFILE_LOW_RAM,
+                        ),
+                    ],
+                    value=RUNTIME_PROFILE_FAST,
+                    label="Runtime profile",
+                    elem_id="h3-runtime-profile",
+                )
+                gr.Markdown(
+                    "profile変更は選択しただけでは反映されません。キューが空のときに"
+                    "「選択設定で再起動」を押してください。外部起動processは自動停止しません。"
                 )
                 with gr.Row():
                     runtime_path = gr.Textbox(
@@ -510,6 +619,7 @@ def _build_ui():
                     )
                 with gr.Row():
                     connect_button = gr.Button("接続 / 起動", variant="primary", elem_id="h3-connect")
+                    restart_button = gr.Button("選択設定で再起動", elem_id="h3-restart")
                     rescan_button = gr.Button("状態を再確認", elem_id="h3-rescan")
                 gr.HTML(
                     """
@@ -544,7 +654,7 @@ def _build_ui():
         sfx_button.click(fn=lambda value: append_prompt_section(value, "sfx"), inputs=[prompt], outputs=[prompt], queue=False)
         music_button.click(fn=lambda value: append_prompt_section(value, "music"), inputs=[prompt], outputs=[prompt], queue=False)
 
-        summary_inputs = [aspect, quality, duration, steps]
+        summary_inputs = [aspect, quality, duration, steps, scheduler, ref_image_size]
         for component in summary_inputs:
             component.change(
                 fn=settings_summary_html,
@@ -553,14 +663,59 @@ def _build_ui():
                 queue=False,
             )
 
+        preset_outputs = [
+            quality,
+            duration,
+            steps,
+            scheduler,
+            ref_image_size,
+            settings_summary,
+            preset_state,
+        ]
+        quick_preset_button.click(
+            fn=lambda selected_aspect: _apply_generation_preset("quick", selected_aspect),
+            inputs=[aspect],
+            outputs=preset_outputs,
+            queue=False,
+        )
+        recommended_preset_button.click(
+            fn=lambda selected_aspect: _apply_generation_preset("recommended", selected_aspect),
+            inputs=[aspect],
+            outputs=preset_outputs,
+            queue=False,
+        )
+        final_preset_button.click(
+            fn=lambda selected_aspect: _apply_generation_preset("final", selected_aspect),
+            inputs=[aspect],
+            outputs=preset_outputs,
+            queue=False,
+        )
+        for component in [quality, duration, steps, scheduler, ref_image_size]:
+            component.input(
+                fn=_mark_preset_custom,
+                outputs=[preset_state],
+                queue=False,
+            )
+
         connect_button.click(
             fn=_connect_runtime,
-            inputs=[runtime_path, server_url],
+            inputs=[runtime_path, server_url, runtime_profile],
+            outputs=[runtime_status],
+        )
+        restart_button.click(
+            fn=_restart_runtime,
+            inputs=[runtime_path, server_url, runtime_profile],
             outputs=[runtime_status],
         )
         rescan_button.click(
             fn=_rescan_runtime,
-            inputs=[runtime_path, server_url],
+            inputs=[runtime_path, server_url, runtime_profile],
+            outputs=[runtime_status],
+            queue=False,
+        )
+        runtime_profile.change(
+            fn=_rescan_runtime,
+            inputs=[runtime_path, server_url, runtime_profile],
             outputs=[runtime_status],
             queue=False,
         )
@@ -581,6 +736,7 @@ def _build_ui():
             inputs=[
                 runtime_path,
                 server_url,
+                runtime_profile,
                 mode,
                 prompt,
                 first_frame,

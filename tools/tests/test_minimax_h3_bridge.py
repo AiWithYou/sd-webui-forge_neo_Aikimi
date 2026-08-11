@@ -1,29 +1,38 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
 from modules_forge.minimax_h3_bridge import (
+    ComfyH3Client,
     H3BridgeError,
     H3JobNotFound,
     H3Request,
     H3_AUDIO_VAE,
     H3_FL_MODEL,
+    H3_MINIMUM_COMFY_COMMIT,
     H3_REF_MODEL,
     H3_TEXT_ENCODER,
     H3_VIDEO_VAE,
     MODE_KEYFRAMES,
     MODE_REFERENCES,
     MODE_TEXT,
+    RUNTIME_PROFILE_FAST,
+    RUNTIME_PROFILE_LOW_RAM,
+    RuntimeReadiness,
     _cleanup_after_terminal,
     _copy_to_comfy_input,
     _is_cancelled_job,
     _mark_cancelled_job,
     _resolve_local_path,
+    _runtime_command,
+    _validate_request_runtime_constraints,
     append_prompt_section,
     build_workflow,
     cache_history_video,
@@ -31,7 +40,10 @@ from modules_forge.minimax_h3_bridge import (
     cleanup_stale_prepared_media,
     dimensions_for,
     discover_runtime_root,
+    ensure_ready,
     extract_history_video,
+    generation_preset_values,
+    h3_core_optimization_status,
     history_html,
     inspect_readiness,
     list_history,
@@ -41,8 +53,12 @@ from modules_forge.minimax_h3_bridge import (
     progress_html,
     prompt_template,
     reference_guide_html,
+    readiness_html,
+    relative_workload,
     resolve_runtime_root,
+    restart_runtime,
     run_generation,
+    runtime_profile_from_args,
     server_model_file_status,
     settings_summary_html,
     snap_h3_frames,
@@ -76,6 +92,43 @@ class MiniMaxH3GeometryTests(unittest.TestCase):
         self.assertIn("124 frames", rendered)
         self.assertIn("5.17 sec", rendered)
         self.assertIn("24fps stereo", rendered)
+        self.assertIn("相対負荷 1.00×", rendered)
+
+    def test_generation_presets_are_ordered_by_workload(self):
+        quick = generation_preset_values("quick", "16:9")
+        recommended = generation_preset_values("recommended", "16:9")
+        final = generation_preset_values("final", "16:9")
+        self.assertEqual(quick[:3], ("draft", 5.0, 20))
+        self.assertEqual(recommended[:3], ("preview", 5.0, 20))
+        self.assertEqual(final[:3], ("native", 5.0, 20))
+        self.assertEqual(quick[3:5], ("simple", "match"))
+        self.assertEqual(recommended[3:5], ("simple", "match"))
+        self.assertEqual(final[3:5], ("simple", "match"))
+        self.assertLess(
+            relative_workload("16:9", quick[0], quick[1], quick[2]),
+            relative_workload("16:9", recommended[0], recommended[1], recommended[2]),
+        )
+        self.assertLess(
+            relative_workload("16:9", recommended[0], recommended[1], recommended[2]),
+            relative_workload("16:9", final[0], final[1], final[2]),
+        )
+
+    def test_long_high_step_preview_warns_from_total_workload(self):
+        rendered = settings_summary_html("16:9", "preview", 15, 40)
+        self.assertIn('data-tone="warn"', rendered)
+        self.assertIn("相対負荷 5.84×", rendered)
+
+    def test_native_square_is_never_described_as_fast_preview(self):
+        rendered = settings_summary_html("1:1", "native", 5, 20)
+        self.assertIn('data-tone="warn"', rendered)
+        self.assertIn("Native最終出力", rendered)
+        self.assertNotIn("Fast Preview相当", rendered)
+
+    def test_experimental_advanced_values_override_recommended_copy(self):
+        rendered = settings_summary_html("16:9", "preview", 5, 20, "beta", "max")
+        self.assertIn('data-tone="warn"', rendered)
+        self.assertIn("Reference Max", rendered)
+        self.assertNotIn("Fast Preview相当", rendered)
 
     def test_progress_exposes_accessible_numeric_value(self):
         rendered = progress_html("running", "生成中", 0.42)
@@ -154,6 +207,12 @@ class MiniMaxH3WorkflowTests(unittest.TestCase):
         self.assertEqual(workflow["3"]["inputs"]["vae_name"], H3_VIDEO_VAE)
         self.assertEqual(workflow["4"]["inputs"]["vae_name"], H3_AUDIO_VAE)
         self.assertEqual(workflow["5"]["class_type"], "MiniMaxH3ImageToVideo")
+        self.assertEqual(
+            workflow["15"]["inputs"],
+            {"model": ["1", 0], "attention": "comfy kitchen attention"},
+        )
+        self.assertEqual(workflow["9"]["inputs"]["model"], ["15", 0])
+        self.assertEqual(workflow["8"]["inputs"]["model"], ["1", 0])
         self.assertEqual(workflow["5"]["inputs"]["length"], 124)
         self.assertEqual(workflow["10"]["inputs"]["latent_image"], ["5", 1])
         self.assertEqual(workflow["11"]["inputs"]["samples"], ["10", 0])
@@ -247,6 +306,271 @@ class MiniMaxH3WorkflowTests(unittest.TestCase):
 
 
 class MiniMaxH3RuntimeTests(unittest.TestCase):
+    @staticmethod
+    def ready_runtime(runtime_profile: str = RUNTIME_PROFILE_FAST) -> RuntimeReadiness:
+        files = {
+            name: True
+            for name in ("FL2VA", "Ref2VA", "Qwen3-VL 32B", "Video VAE", "Audio VAE")
+        }
+        return RuntimeReadiness(
+            runtime_root=Path("runtime").resolve(),
+            server_url="http://127.0.0.1:8188",
+            connected=True,
+            comfy_version="0.31.0",
+            package_versions={"comfy-kitchen": "0.2.30"},
+            ck_attention_available=True,
+            core_revision=H3_MINIMUM_COMFY_COMMIT,
+            h3_core_optimized=True,
+            runtime_profile=runtime_profile,
+            model_files=files,
+            server_model_files=files,
+        )
+
+    def test_runtime_command_uses_3090_optimized_offload_without_usb_disk_flags(self):
+        command = _runtime_command(
+            Path(r"C:\Python\python.exe"),
+            8188,
+            RUNTIME_PROFILE_FAST,
+        )
+        self.assertEqual(
+            command,
+            [
+                r"C:\Python\python.exe",
+                "main.py",
+                "--listen",
+                "127.0.0.1",
+                "--port",
+                "8188",
+                "--disable-all-custom-nodes",
+                "--disable-api-nodes",
+                "--reserve-vram",
+                "2",
+                "--preview-method",
+                "none",
+                "--async-offload",
+                "2",
+            ],
+        )
+        for harmful_flag in (
+            "--vram-headroom",
+            "--fast-disk",
+            "--disable-pinned-memory",
+            "--disable-async-offload",
+        ):
+            self.assertNotIn(harmful_flag, command)
+
+    def test_low_ram_runtime_command_disables_cache_pinning_and_async(self):
+        command = _runtime_command(
+            Path(r"C:\Python\python.exe"),
+            8188,
+            RUNTIME_PROFILE_LOW_RAM,
+        )
+        self.assertIn("--cache-none", command)
+        self.assertIn("--disable-pinned-memory", command)
+        self.assertIn("--disable-async-offload", command)
+        self.assertNotIn("--async-offload", command)
+        self.assertNotIn("--fast-disk", command)
+
+    def test_runtime_profile_parser_checks_values_conflicts_and_duplicates(self):
+        fast = _runtime_command(Path("python.exe"), 8188, RUNTIME_PROFILE_FAST)[1:]
+        low_ram = _runtime_command(Path("python.exe"), 8188, RUNTIME_PROFILE_LOW_RAM)[1:]
+        self.assertEqual(runtime_profile_from_args(fast, 8188), RUNTIME_PROFILE_FAST)
+        self.assertEqual(runtime_profile_from_args(low_ram, 8188), RUNTIME_PROFILE_LOW_RAM)
+        self.assertEqual(
+            runtime_profile_from_args([*fast, "--auto-launch"], 8188),
+            RUNTIME_PROFILE_FAST,
+        )
+        for invalid in (
+            [*fast[:-1], "1"],
+            [*fast, "--disable-async-offload"],
+            [*fast, "--async-offload", "2"],
+            [*fast, "--fast-disk"],
+            [*fast, "--vram-headroom", "12"],
+            [*fast, "--port", "8189"],
+            [*fast, "--cache-ram", "1", "2"],
+            [*fast, "--cpu-vae"],
+            [*fast, "--force-fp32"],
+            [*fast, "--use-sage-attention"],
+            [*fast, "--disable-xformers"],
+        ):
+            with self.subTest(invalid=invalid):
+                self.assertIsNone(runtime_profile_from_args(invalid, 8188))
+
+    def test_unknown_runtime_profile_fails_instead_of_falling_back(self):
+        with self.assertRaisesRegex(H3BridgeError, "未対応"):
+            _runtime_command(Path("python.exe"), 8188, "unknown")
+
+    def test_h3_core_optimization_requires_minimum_commit_ancestor(self):
+        revision = "a" * 40
+        completed = [
+            mock.Mock(returncode=0, stdout=revision + "\n"),
+            mock.Mock(returncode=0, stdout=""),
+        ]
+        with mock.patch("modules_forge.minimax_h3_bridge.subprocess.run", side_effect=completed) as run:
+            optimized, detected = h3_core_optimization_status(Path("runtime"))
+        self.assertTrue(optimized)
+        self.assertEqual(detected, revision)
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            ["git", "merge-base", "--is-ancestor", H3_MINIMUM_COMFY_COMMIT, revision],
+        )
+
+    @mock.patch("modules_forge.minimax_h3_bridge.inspect_readiness")
+    def test_ensure_ready_rejects_connected_profile_mismatch(self, inspect):
+        inspect.return_value = self.ready_runtime(RUNTIME_PROFILE_LOW_RAM)
+        with self.assertRaisesRegex(H3BridgeError, "起動設定が一致"):
+            ensure_ready(
+                Path("runtime"),
+                "http://127.0.0.1:8188",
+                Path("logs"),
+                runtime_profile=RUNTIME_PROFILE_FAST,
+            )
+
+    @mock.patch("modules_forge.minimax_h3_bridge._loopback_server_process")
+    @mock.patch("modules_forge.minimax_h3_bridge.ComfyH3Client")
+    @mock.patch("modules_forge.minimax_h3_bridge.server_runtime_root")
+    def test_restart_refuses_to_terminate_external_runtime(self, server_root, client_class, listener):
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary).resolve()
+            (runtime / "main.py").write_text("# test\n", encoding="utf-8")
+            (runtime / "models").mkdir()
+            server_root.return_value = runtime
+            client_class.return_value.queue_counts.return_value = (0, 0)
+            process = mock.Mock(pid=1234)
+            listener.return_value = process
+            with mock.patch("modules_forge.minimax_h3_bridge._MANAGED_PROCESS", None), mock.patch(
+                "modules_forge.minimax_h3_bridge._MANAGED_PROCESS_IDENTITY",
+                None,
+            ):
+                with self.assertRaisesRegex(H3BridgeError, "自動停止しません"):
+                    restart_runtime(
+                        runtime,
+                        "http://127.0.0.1:8188",
+                        Path("logs"),
+                        runtime_profile=RUNTIME_PROFILE_FAST,
+                    )
+        process.terminate.assert_not_called()
+
+    @mock.patch("modules_forge.minimax_h3_bridge.start_runtime")
+    @mock.patch("modules_forge.minimax_h3_bridge._loopback_server_process")
+    @mock.patch("modules_forge.minimax_h3_bridge.ComfyH3Client")
+    @mock.patch("modules_forge.minimax_h3_bridge.server_runtime_root")
+    def test_restart_managed_runtime_requires_idle_queue_and_restarts_selected_profile(
+        self,
+        server_root,
+        client_class,
+        listener,
+        start,
+    ):
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary).resolve()
+            (runtime / "main.py").write_text("# test\n", encoding="utf-8")
+            (runtime / "models").mkdir()
+            url = "http://127.0.0.1:8188"
+            server_root.return_value = runtime
+            client_class.return_value.queue_counts.return_value = (0, 0)
+            process = mock.Mock(pid=1234)
+            listener.side_effect = [process, None]
+            managed = mock.Mock(pid=1234)
+            managed.poll.return_value = None
+            expected = self.ready_runtime(RUNTIME_PROFILE_LOW_RAM)
+            start.return_value = expected
+            with mock.patch("modules_forge.minimax_h3_bridge._MANAGED_PROCESS", managed), mock.patch(
+                "modules_forge.minimax_h3_bridge._MANAGED_PROCESS_IDENTITY",
+                (runtime, url),
+            ):
+                actual = restart_runtime(
+                    runtime,
+                    url,
+                    Path("logs"),
+                    runtime_profile=RUNTIME_PROFILE_LOW_RAM,
+                    wait_seconds=1,
+                )
+        self.assertIs(actual, expected)
+        process.terminate.assert_called_once_with()
+        start.assert_called_once_with(
+            runtime,
+            url,
+            Path("logs"),
+            runtime_profile=RUNTIME_PROFILE_LOW_RAM,
+            wait_seconds=1,
+        )
+
+    def test_readiness_html_never_labels_async_one_as_fast_profile(self):
+        arguments = _runtime_command(Path("python.exe"), 8188, RUNTIME_PROFILE_FAST)[1:]
+        arguments[-1] = "1"
+        readiness = RuntimeReadiness(
+            runtime_root=Path("runtime"),
+            server_url="http://127.0.0.1:8188",
+            connected=True,
+            comfy_version="0.31.0",
+            package_versions={"comfy-kitchen": "0.2.30"},
+            runtime_args=tuple(arguments),
+            runtime_profile=runtime_profile_from_args(arguments, 8188),
+            ck_attention_available=True,
+            core_revision=H3_MINIMUM_COMFY_COMMIT,
+            h3_core_optimized=True,
+            model_files={name: True for name in ("FL2VA", "Ref2VA", "Qwen3-VL 32B", "Video VAE", "Audio VAE")},
+            server_model_files={name: True for name in ("FL2VA", "Ref2VA", "Qwen3-VL 32B", "Video VAE", "Audio VAE")},
+        )
+        rendered = readiness_html(readiness, RUNTIME_PROFILE_FAST)
+        self.assertIn("起動設定 未確認", rendered)
+        self.assertNotIn("高速 · Async 2", rendered)
+
+    def test_low_ram_readiness_says_async_is_disabled(self):
+        rendered = readiness_html(
+            self.ready_runtime(RUNTIME_PROFILE_LOW_RAM),
+            RUNTIME_PROFILE_LOW_RAM,
+        )
+        self.assertIn("省RAM · Async無効", rendered)
+        self.assertNotIn("省RAM · Async 2", rendered)
+
+    def test_native_fifteen_second_request_is_blocked_when_ram_headroom_is_too_low(self):
+        readiness = replace(self.ready_runtime(), ram_free_gib=7.0)
+        request = H3Request(
+            mode=MODE_TEXT,
+            prompt="A scene with stereo ambience.",
+            quality="native",
+            duration_seconds=15,
+        )
+        with self.assertRaisesRegex(H3BridgeError, "空きRAMが不足"):
+            _validate_request_runtime_constraints(request, readiness, RUNTIME_PROFILE_FAST)
+
+    def test_draft_request_passes_ram_preflight_at_same_free_memory(self):
+        readiness = replace(self.ready_runtime(), ram_free_gib=7.0)
+        request = H3Request(
+            mode=MODE_TEXT,
+            prompt="A scene with stereo ambience.",
+            quality="draft",
+            duration_seconds=5,
+        )
+        _validate_request_runtime_constraints(request, readiness, RUNTIME_PROFILE_FAST)
+
+    def test_object_info_fetches_only_requested_nodes_with_one_deadline(self):
+        client = ComfyH3Client()
+        with mock.patch.object(
+            client,
+            "_request_json",
+            side_effect=lambda path, timeout: {path.rsplit("/", 1)[-1]: {"input": {}}},
+        ) as request:
+            result = client.object_info(["VAELoader", "UNETLoader"], timeout=8.0)
+        self.assertEqual(set(result), {"UNETLoader", "VAELoader"})
+        self.assertEqual(
+            [call.args[0] for call in request.call_args_list],
+            ["/object_info/UNETLoader", "/object_info/VAELoader"],
+        )
+        self.assertTrue(all(call.kwargs["timeout"] <= 8.0 for call in request.call_args_list))
+
+    def test_object_info_total_deadline_fails_before_another_request(self):
+        client = ComfyH3Client()
+        with mock.patch(
+            "modules_forge.minimax_h3_bridge.time.monotonic",
+            side_effect=[100.0, 109.0],
+        ), mock.patch.object(client, "_request_json") as request:
+            with self.assertRaisesRegex(H3BridgeError, "時間切れ"):
+                client.object_info(["UNETLoader"], timeout=8.0)
+        request.assert_not_called()
+
     def test_server_model_status_uses_exact_loader_choices(self):
         nodes = {
             "UNETLoader": {"input": {"required": {"unet_name": [[H3_FL_MODEL, H3_REF_MODEL]]}}},
@@ -273,6 +597,57 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             readiness = inspect_readiness(selected, "http://127.0.0.1:8188")
             self.assertFalse(readiness.connected)
             self.assertIn("別のComfyUI", readiness.error or "")
+
+    @mock.patch("modules_forge.minimax_h3_bridge.cleanup_prepared_media")
+    @mock.patch("modules_forge.minimax_h3_bridge._schedule_deferred_cleanup")
+    @mock.patch("modules_forge.minimax_h3_bridge.ComfyH3Client")
+    @mock.patch("modules_forge.minimax_h3_bridge.build_workflow", return_value={"graph": {}})
+    @mock.patch("modules_forge.minimax_h3_bridge.prepare_media", return_value={"images": []})
+    @mock.patch("modules_forge.minimax_h3_bridge.ensure_ready")
+    def test_generation_rechecks_profile_and_submits_under_runtime_lifecycle_lock(
+        self,
+        ready,
+        _prepare,
+        _workflow,
+        client_class,
+        _schedule_cleanup,
+        _cleanup,
+    ):
+        class RecordingLock:
+            depth = 0
+
+            def __enter__(self):
+                self.depth += 1
+                return self
+
+            def __exit__(self, _type, _value, _traceback):
+                self.depth -= 1
+
+        lifecycle_lock = RecordingLock()
+        ready.return_value = self.ready_runtime()
+        client = client_class.return_value
+
+        def submit(_workflow_value):
+            self.assertGreater(lifecycle_lock.depth, 0)
+            return "locked-job"
+
+        client.submit.side_effect = submit
+        with mock.patch(
+            "modules_forge.minimax_h3_bridge._RUNTIME_LIFECYCLE_LOCK",
+            lifecycle_lock,
+        ):
+            updates = run_generation(
+                H3Request(mode=MODE_TEXT, prompt="A scene with stereo ambience."),
+                Path("runtime"),
+                "http://127.0.0.1:8188",
+                Path("logs"),
+                Path("output"),
+            )
+            self.assertEqual(next(updates)["stage"], "prepare")
+            self.assertEqual(next(updates)["stage"], "queued")
+            self.assertEqual(lifecycle_lock.depth, 0)
+            updates.close()
+        self.assertEqual(ready.call_count, 2)
 
     @mock.patch("modules_forge.minimax_h3_bridge.cleanup_prepared_media")
     @mock.patch("modules_forge.minimax_h3_bridge.ComfyH3Client")
@@ -447,6 +822,111 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             outside.write_bytes(b"video")
             with self.assertRaises(H3BridgeError):
                 cache_history_video(str(outside), [], output)
+
+
+@unittest.skipUnless(os.environ.get("MINIMAX_H3_LIVE_TEST") == "1", "set MINIMAX_H3_LIVE_TEST=1")
+class MiniMaxH3LiveRuntimeTests(unittest.TestCase):
+    def test_ck_attention_minimal_audio_video_smoke(self):
+        runtime = Path(
+            os.environ.get("MINIMAX_H3_RUNTIME", r"H:\AI\LTX 2.3 10Eros\ComfyUI")
+        ).resolve()
+        readiness = inspect_readiness(runtime)
+        self.assertTrue(readiness.ready_for_fl2va, readiness)
+        self.assertTrue(readiness.ck_attention_available)
+
+        configured_seed = os.environ.get("MINIMAX_H3_SMOKE_SEED")
+        seed = int(configured_seed) if configured_seed is not None else time.time_ns() % (2**53)
+        request = H3Request(
+            mode=MODE_TEXT,
+            prompt=(
+                "A single red paper lantern sways gently in a dark studio. "
+                "Static camera. Soft cloth rustle and quiet room ambience in stereo."
+            ),
+            seed=seed,
+            steps=2,
+        )
+        workflow = build_workflow(request, {}, seed=request.seed)
+        workflow["5"]["inputs"].update({"width": 320, "height": 192, "length": 5})
+        workflow["8"]["inputs"]["steps"] = 2
+        workflow["14"]["inputs"]["filename_prefix"] = "video/Forge_Neo_H3_CK_live_smoke"
+
+        client = ComfyH3Client()
+        prompt_id = client.submit(workflow)
+        started = time.monotonic()
+        terminal = False
+        try:
+            while time.monotonic() - started < 2700:
+                job = client.job(prompt_id)
+                status = str(job.get("status") or "pending").lower()
+                if status in {"completed", "success"}:
+                    terminal = True
+                    break
+                if status in {"failed", "error", "cancelled", "canceled"}:
+                    terminal = True
+                    self.fail(f"H3 live smoke ended as {status}: {job}")
+                time.sleep(5.0)
+            else:
+                self.fail("H3 live smoke did not finish within 45 minutes")
+
+            history = client.history(prompt_id)
+            entry = history.get(prompt_id) or {}
+            self.assertIsInstance(entry, dict)
+            messages = (entry.get("status") or {}).get("messages") or []
+            self.assertIsInstance(messages, list)
+            cached_nodes: set[str] = set()
+            for message in messages:
+                if (
+                    isinstance(message, (list, tuple))
+                    and len(message) >= 2
+                    and message[0] == "execution_cached"
+                    and isinstance(message[1], dict)
+                ):
+                    cached_nodes.update(str(node) for node in message[1].get("nodes") or [])
+            critical_nodes = {"10", "11", "12", "14"}
+            self.assertFalse(
+                critical_nodes & cached_nodes,
+                f"live smoke reused critical nodes from cache: {sorted(cached_nodes)}",
+            )
+            result = extract_history_video(history, prompt_id, runtime)
+            import av
+
+            with av.open(os.fspath(result)) as container:
+                self.assertTrue(container.streams.video)
+                self.assertTrue(container.streams.audio)
+                video_frames = list(container.decode(video=0))
+            self.assertGreaterEqual(len(video_frames), 5)
+            first_video_frame = video_frames[0].to_ndarray().astype("int16")
+            self.assertGreater(float(first_video_frame.std()), 0.0)
+            self.assertGreater(
+                max(
+                    float(abs(frame.to_ndarray().astype("int16") - first_video_frame).mean())
+                    for frame in video_frames[1:]
+                ),
+                0.0,
+                "generated video must change across frames",
+            )
+
+            with av.open(os.fspath(result)) as container:
+                audio_stream = container.streams.audio[0]
+                audio_frames = list(container.decode(audio=0))
+                self.assertEqual(audio_stream.codec_context.sample_rate, 32000)
+                self.assertEqual(audio_stream.codec_context.channels, 2)
+            self.assertTrue(audio_frames)
+            self.assertGreater(
+                max(float(abs(frame.to_ndarray()).max()) for frame in audio_frames),
+                0.0,
+                "generated audio must not be silent",
+            )
+            elapsed = time.monotonic() - started
+            sys.stderr.write(f"H3_LIVE_SEED={seed}\n")
+            sys.stderr.write(f"H3_LIVE_RESULT={result}\n")
+            sys.stderr.write(f"H3_LIVE_ELAPSED_SECONDS={elapsed:.1f}\n")
+        finally:
+            if not terminal:
+                try:
+                    client.cancel(prompt_id)
+                except H3BridgeError:
+                    pass
 
 
 class MiniMaxH3PromptHelperTests(unittest.TestCase):

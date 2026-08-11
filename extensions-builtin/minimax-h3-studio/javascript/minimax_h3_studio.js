@@ -1,4 +1,6 @@
 (function () {
+    const H3_PRESET_KEYS = ["quick", "recommended", "final"];
+
     function isH3StudioActive() {
         return get_uiCurrentTabContent()?.id === "tab_minimax_h3_studio";
     }
@@ -20,9 +22,22 @@
         if (studio && selected) studio.dataset.h3Mode = selected.value;
     }
 
+    function syncH3PresetState() {
+        const app = gradioApp();
+        const state = app.querySelector("#h3-preset-state [data-h3-preset]");
+        const selected = state?.dataset.h3Preset ?? "custom";
+        for (const key of H3_PRESET_KEYS) {
+            const button = app.querySelector(
+                `#h3-preset-${key} button, button#h3-preset-${key}`
+            );
+            if (button) button.setAttribute("aria-pressed", String(selected === key));
+        }
+    }
+
     function setupH3Studio() {
         syncH3StudioChrome();
         syncH3Mode();
+        syncH3PresetState();
         const app = gradioApp();
         if (app.dataset.h3ModeListener === "ready") return;
         app.dataset.h3ModeListener = "ready";
@@ -35,7 +50,9 @@
     onUiTabChange(function () {
         syncH3StudioChrome();
         syncH3Mode();
+        syncH3PresetState();
     });
+    onAfterUiUpdate(syncH3PresetState);
 
     document.addEventListener("keydown", function (event) {
         if (!isH3StudioActive() || event.isComposing || event.keyCode === 229) return;

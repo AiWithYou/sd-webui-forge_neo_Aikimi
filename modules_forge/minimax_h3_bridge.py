@@ -33,6 +33,15 @@ H3_REF_MODEL = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
 H3_TEXT_ENCODER = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
 H3_VIDEO_VAE = "minimax_h3_video_vae_fp16.safetensors"
 H3_AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
+H3_MINIMUM_COMFY_COMMIT = "62b3c94bd45154f6486c7abf1b9efcacee96ea69"
+
+RUNTIME_PROFILE_FAST = "fast"
+RUNTIME_PROFILE_LOW_RAM = "low_ram"
+RUNTIME_PROFILES = {RUNTIME_PROFILE_FAST, RUNTIME_PROFILE_LOW_RAM}
+RUNTIME_PROFILE_LABELS = {
+    RUNTIME_PROFILE_FAST: "高速（Pinned Memory + Async 2）",
+    RUNTIME_PROFILE_LOW_RAM: "省RAM（cacheなし + Pinned/Async無効）",
+}
 
 MODE_TEXT = "text"
 MODE_KEYFRAMES = "keyframes"
@@ -87,6 +96,7 @@ REQUIRED_NODE_TYPES = {
     "LoadVideo",
     "MiniMaxH3ImageToVideo",
     "MiniMaxH3ReferenceToVideo",
+    "ModelAttentionBackend",
     "RandomNoise",
     "SamplerCustomAdvanced",
     "SaveVideo",
@@ -107,6 +117,7 @@ MODEL_FILES = {
 _MANAGED_PROCESS: subprocess.Popen | None = None
 _MANAGED_PROCESS_IDENTITY: tuple[Path, str] | None = None
 _PROCESS_LOCK = threading.Lock()
+_RUNTIME_LIFECYCLE_LOCK = threading.RLock()
 _CANCELLED_JOB_LOCK = threading.Lock()
 _CANCELLED_JOB_IDS: set[str] = set()
 _LOG = logging.getLogger(__name__)
@@ -180,6 +191,14 @@ class RuntimeReadiness:
     comfy_version: str | None = None
     gpu_name: str | None = None
     vram_gib: float | None = None
+    package_versions: dict[str, str] = field(default_factory=dict)
+    runtime_args: tuple[str, ...] = ()
+    ck_attention_available: bool = False
+    core_revision: str | None = None
+    h3_core_optimized: bool = False
+    runtime_profile: str | None = None
+    ram_free_gib: float | None = None
+    ram_total_gib: float | None = None
     model_files: dict[str, bool] = field(default_factory=dict)
     server_model_files: dict[str, bool] = field(default_factory=dict)
     missing_nodes: tuple[str, ...] = ()
@@ -191,6 +210,8 @@ class RuntimeReadiness:
         return (
             self.connected
             and not self.missing_nodes
+            and self.ck_attention_available
+            and self.h3_core_optimized
             and all(self.model_files.get(name) for name in required)
             and all(self.server_model_files.get(name) for name in required)
         )
@@ -407,11 +428,182 @@ def server_model_file_status(nodes: dict[str, Any]) -> dict[str, bool]:
     }
 
 
+def ck_attention_available(nodes: dict[str, Any]) -> bool:
+    try:
+        values = nodes["ModelAttentionBackend"]["input"]["required"]["attention"][0]
+    except (KeyError, IndexError, TypeError):
+        return False
+    return "comfy kitchen attention" in values
+
+
 def _version_tuple(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in re.findall(r"\d+", version)[:3])
 
 
-def server_runtime_root(server_url: str) -> Path | None:
+def _cli_option_value(arguments: Sequence[str], option: str) -> str | None:
+    values = _cli_option_values(arguments, option)
+    return values[0] if len(values) == 1 else None
+
+
+def _cli_option_values(arguments: Sequence[str], option: str) -> tuple[str, ...]:
+    values: list[str] = []
+    for index, argument in enumerate(arguments):
+        if argument.startswith(f"{option}="):
+            values.append(argument.split("=", 1)[1])
+        if argument == option:
+            if index + 1 < len(arguments) and not arguments[index + 1].startswith("--"):
+                values.append(arguments[index + 1])
+            else:
+                values.append("")
+    return tuple(values)
+
+
+def _runtime_arguments_are_allowed(arguments: Sequence[str]) -> bool:
+    value_options = {
+        "--async-offload",
+        "--listen",
+        "--port",
+        "--preview-method",
+        "--reserve-vram",
+        "--vram-headroom",
+    }
+    flag_options = {
+        "--auto-launch",
+        "--cache-none",
+        "--disable-all-custom-nodes",
+        "--disable-api-nodes",
+        "--disable-async-offload",
+        "--disable-pinned-memory",
+    }
+    arguments = tuple(str(argument) for argument in arguments)
+    index = 0
+    saw_main = False
+    while index < len(arguments):
+        argument = arguments[index]
+        if not argument.startswith("--"):
+            if index == 0 and Path(argument).name.lower() == "main.py":
+                saw_main = True
+                index += 1
+                continue
+            return False
+        option, has_equals, _ = argument.partition("=")
+        if option in flag_options:
+            if has_equals:
+                return False
+            index += 1
+            continue
+        if option not in value_options:
+            return False
+        if has_equals:
+            index += 1
+            continue
+        if index + 1 < len(arguments) and not arguments[index + 1].startswith("--"):
+            index += 2
+            continue
+        if option == "--async-offload":
+            index += 1
+            continue
+        return False
+    return saw_main
+
+
+def runtime_profile_from_args(
+    arguments: Sequence[str],
+    expected_port: int | None = None,
+) -> str | None:
+    arguments = tuple(str(argument) for argument in arguments)
+    async_value = _cli_option_value(arguments, "--async-offload")
+    if async_value == "":
+        async_value = "2"
+    headroom_value = _cli_option_value(arguments, "--vram-headroom")
+    try:
+        reserve_matches = float(_cli_option_value(arguments, "--reserve-vram") or "nan") == 2.0
+        headroom_matches = headroom_value is None or float(headroom_value) == 0.0
+        port_matches = (
+            expected_port is None
+            or int(_cli_option_value(arguments, "--port") or "-1") == expected_port
+        )
+    except ValueError:
+        return None
+    forbidden = {
+        "--cpu",
+        "--disable-dynamic-vram",
+        "--fast",
+        "--fast-disk",
+        "--gpu-only",
+        "--highvram",
+        "--novram",
+    }
+    common_profile = (
+        _runtime_arguments_are_allowed(arguments)
+        and len(_cli_option_values(arguments, "--listen")) == 1
+        and _cli_option_value(arguments, "--listen") == "127.0.0.1"
+        and len(_cli_option_values(arguments, "--port")) == 1
+        and port_matches
+        and len(_cli_option_values(arguments, "--disable-all-custom-nodes")) == 1
+        and len(_cli_option_values(arguments, "--disable-api-nodes")) == 1
+        and len(_cli_option_values(arguments, "--reserve-vram")) == 1
+        and reserve_matches
+        and len(_cli_option_values(arguments, "--preview-method")) == 1
+        and _cli_option_value(arguments, "--preview-method") == "none"
+        and len(_cli_option_values(arguments, "--vram-headroom")) <= 1
+        and headroom_matches
+        and not any(_cli_option_values(arguments, option) for option in forbidden)
+    )
+    if not common_profile:
+        return None
+    cache_options = ("--cache-none", "--cache-lru", "--cache-classic")
+    if (
+        len(_cli_option_values(arguments, "--async-offload")) == 1
+        and async_value == "2"
+        and not _cli_option_values(arguments, "--disable-async-offload")
+        and not _cli_option_values(arguments, "--disable-pinned-memory")
+        and not any(_cli_option_values(arguments, option) for option in cache_options)
+    ):
+        return RUNTIME_PROFILE_FAST
+    if (
+        not _cli_option_values(arguments, "--async-offload")
+        and len(_cli_option_values(arguments, "--disable-async-offload")) == 1
+        and len(_cli_option_values(arguments, "--disable-pinned-memory")) == 1
+        and len(_cli_option_values(arguments, "--cache-none")) == 1
+        and not _cli_option_values(arguments, "--cache-lru")
+        and not _cli_option_values(arguments, "--cache-classic")
+    ):
+        return RUNTIME_PROFILE_LOW_RAM
+    return None
+
+
+def h3_core_optimization_status(runtime_root: Path) -> tuple[bool, str | None]:
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        revision_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=runtime_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            creationflags=creationflags,
+        )
+        revision = revision_result.stdout.strip() if revision_result.returncode == 0 else None
+        if not revision:
+            return False, None
+        ancestor_result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", H3_MINIMUM_COMFY_COMMIT, revision],
+            cwd=runtime_root,
+            check=False,
+            capture_output=True,
+            timeout=5,
+            creationflags=creationflags,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False, None
+    return ancestor_result.returncode == 0, revision
+
+
+def _loopback_server_process(server_url: str) -> Any | None:
     normalized_url = normalize_loopback_url(server_url)
     port = urllib.parse.urlsplit(normalized_url).port or 80
     try:
@@ -442,7 +634,21 @@ def server_runtime_root(server_url: str) -> Path | None:
     if connection.pid is None:
         raise H3BridgeError(f"port {port} を使用中のprocess IDを確認できません。")
     try:
-        process = psutil.Process(connection.pid)
+        return psutil.Process(connection.pid)
+    except psutil.Error as exc:
+        raise H3BridgeError(f"port {port} のprocessを確認できません: {exc}") from exc
+
+
+def server_runtime_root(server_url: str) -> Path | None:
+    process = _loopback_server_process(server_url)
+    if process is None:
+        return None
+    port = urllib.parse.urlsplit(normalize_loopback_url(server_url)).port or 80
+    try:
+        import psutil
+    except ImportError as exc:
+        raise H3BridgeError(f"H3 backend processを確認できません: {exc}") from exc
+    try:
         cwd = Path(process.cwd())
         for argument in process.cmdline()[1:]:
             candidate = Path(argument)
@@ -504,11 +710,37 @@ class ComfyH3Client:
             raise H3BridgeError("ComfyUI system_stats の形式が不正です。")
         return value
 
-    def object_info(self, timeout: float = 8.0) -> dict[str, Any]:
-        value = self._request_json("/object_info", timeout=timeout)
+    def queue_counts(self) -> tuple[int, int]:
+        value = self._request_json("/queue")
         if not isinstance(value, dict):
-            raise H3BridgeError("ComfyUI object_info の形式が不正です。")
-        return value
+            raise H3BridgeError("ComfyUI queue の形式が不正です。")
+        running = value.get("queue_running") or []
+        pending = value.get("queue_pending") or []
+        if not isinstance(running, list) or not isinstance(pending, list):
+            raise H3BridgeError("ComfyUI queue の形式が不正です。")
+        return len(running), len(pending)
+
+    def object_info(self, node_types: Sequence[str] | None = None, timeout: float = 8.0) -> dict[str, Any]:
+        if node_types is None:
+            value = self._request_json("/object_info", timeout=timeout)
+            if not isinstance(value, dict):
+                raise H3BridgeError("ComfyUI object_info の形式が不正です。")
+            return value
+
+        deadline = time.monotonic() + timeout
+        nodes: dict[str, Any] = {}
+        for class_type in sorted(set(node_types)):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise H3BridgeError("ComfyUI H3 node情報の取得が時間切れになりました。")
+            value = self._request_json(
+                f"/object_info/{urllib.parse.quote(class_type, safe='')}",
+                timeout=remaining,
+            )
+            if not isinstance(value, dict):
+                raise H3BridgeError(f"ComfyUI object_info/{class_type} の形式が不正です。")
+            nodes.update(value)
+        return nodes
 
     def submit(self, workflow: dict[str, Any]) -> str:
         prompt_id = str(uuid.uuid4())
@@ -581,19 +813,39 @@ def inspect_readiness(
         system = stats.get("system") or {}
         devices = stats.get("devices") or []
         version = str(system.get("comfyui_version") or "")
-        if _version_tuple(version) < (0, 30, 0):
-            raise H3BridgeError(f"MiniMax H3 には ComfyUI 0.30.0 以降が必要です（現在 {version or '不明'}）。")
-        nodes = client.object_info(timeout=object_timeout)
+        if _version_tuple(version) < (0, 31, 0):
+            raise H3BridgeError(
+                f"最新のMiniMax H3最適化には ComfyUI 0.31.0 以降が必要です（現在 {version or '不明'}）。"
+            )
+        nodes = client.object_info(REQUIRED_NODE_TYPES, timeout=object_timeout)
         missing_nodes = tuple(sorted(REQUIRED_NODE_TYPES - set(nodes)))
         server_files = server_model_file_status(nodes)
+        h3_core_optimized, core_revision = h3_core_optimization_status(selected_root)
+        packages = {
+            str(item.get("name")): str(item.get("installed"))
+            for item in system.get("comfy_package_versions") or []
+            if isinstance(item, dict) and item.get("name") and item.get("installed")
+        }
+        runtime_args = tuple(str(argument) for argument in system.get("argv") or ())
         device = devices[0] if devices else {}
         return RuntimeReadiness(
-            runtime_root=runtime_root,
+            runtime_root=selected_root,
             server_url=client.server_url,
             connected=True,
             comfy_version=version or None,
             gpu_name=str(device.get("name") or "") or None,
             vram_gib=(float(device["vram_total"]) / 1024**3) if device.get("vram_total") else None,
+            package_versions=packages,
+            runtime_args=runtime_args,
+            ck_attention_available=ck_attention_available(nodes),
+            core_revision=core_revision,
+            h3_core_optimized=h3_core_optimized,
+            runtime_profile=runtime_profile_from_args(
+                runtime_args,
+                expected_port=urllib.parse.urlsplit(client.server_url).port or 80,
+            ),
+            ram_free_gib=(float(system["ram_free"]) / 1024**3) if system.get("ram_free") else None,
+            ram_total_gib=(float(system["ram_total"]) / 1024**3) if system.get("ram_total") else None,
             model_files=files,
             server_model_files=server_files,
             missing_nodes=missing_nodes,
@@ -622,7 +874,41 @@ def _python_for_runtime(runtime_root: Path) -> Path:
     )
 
 
-def start_runtime(runtime_root: Path, server_url: str, log_directory: Path, wait_seconds: float = 120.0) -> RuntimeReadiness:
+def _runtime_command(
+    python: Path,
+    port: int,
+    runtime_profile: str = RUNTIME_PROFILE_FAST,
+) -> list[str]:
+    if runtime_profile not in RUNTIME_PROFILES:
+        raise H3BridgeError(f"未対応のH3 runtime profileです: {runtime_profile}")
+    command = [
+        os.fspath(python),
+        "main.py",
+        "--listen",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--disable-all-custom-nodes",
+        "--disable-api-nodes",
+        "--reserve-vram",
+        "2",
+        "--preview-method",
+        "none",
+    ]
+    if runtime_profile == RUNTIME_PROFILE_FAST:
+        command.extend(["--async-offload", "2"])
+    else:
+        command.extend(["--cache-none", "--disable-async-offload", "--disable-pinned-memory"])
+    return command
+
+
+def start_runtime(
+    runtime_root: Path,
+    server_url: str,
+    log_directory: Path,
+    runtime_profile: str = RUNTIME_PROFILE_FAST,
+    wait_seconds: float = 120.0,
+) -> RuntimeReadiness:
     global _MANAGED_PROCESS, _MANAGED_PROCESS_IDENTITY
     runtime_root = resolve_runtime_root(runtime_root)
     normalized_url = normalize_loopback_url(server_url)
@@ -648,24 +934,7 @@ def start_runtime(runtime_root: Path, server_url: str, log_directory: Path, wait
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     stdout_path = log_directory / f"minimax-h3-{stamp}.stdout.log"
     stderr_path = log_directory / f"minimax-h3-{stamp}.stderr.log"
-    command = [
-        os.fspath(python),
-        "main.py",
-        "--listen",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        "--disable-all-custom-nodes",
-        "--reserve-vram",
-        "2",
-        "--vram-headroom",
-        "12",
-        "--preview-method",
-        "none",
-        "--fast-disk",
-        "--disable-pinned-memory",
-        "--disable-async-offload",
-    ]
+    command = _runtime_command(python, port, runtime_profile)
 
     with _PROCESS_LOCK:
         if _MANAGED_PROCESS is not None and _MANAGED_PROCESS.poll() is None:
@@ -721,12 +990,154 @@ def _stop_managed_runtime() -> None:
 atexit.register(_stop_managed_runtime)
 
 
-def ensure_ready(runtime_root: Path, server_url: str, log_directory: Path) -> RuntimeReadiness:
+def _restart_runtime_locked(
+    runtime_root: Path,
+    server_url: str,
+    log_directory: Path,
+    runtime_profile: str = RUNTIME_PROFILE_FAST,
+    wait_seconds: float = 120.0,
+) -> RuntimeReadiness:
+    global _MANAGED_PROCESS, _MANAGED_PROCESS_IDENTITY
+    runtime_root = resolve_runtime_root(runtime_root)
+    normalized_url = normalize_loopback_url(server_url)
+    listening_root = server_runtime_root(normalized_url)
+    if listening_root is None:
+        return start_runtime(
+            runtime_root,
+            normalized_url,
+            log_directory,
+            runtime_profile=runtime_profile,
+            wait_seconds=wait_seconds,
+        )
+    if not _same_local_path(listening_root, runtime_root):
+        raise H3BridgeError(
+            "別のComfyUIは再起動できません。"
+            f" 選択: {runtime_root} / 接続中: {listening_root}"
+        )
+
+    running, pending = ComfyH3Client(normalized_url).queue_counts()
+    if running or pending:
+        raise H3BridgeError(
+            f"生成キューが空ではないため再起動しません（実行中 {running} / 待機 {pending}）。"
+        )
+
+    process = _loopback_server_process(normalized_url)
+    if process is None:
+        return start_runtime(
+            runtime_root,
+            normalized_url,
+            log_directory,
+            runtime_profile=runtime_profile,
+            wait_seconds=wait_seconds,
+        )
+    identity = (runtime_root, normalized_url)
+    with _PROCESS_LOCK:
+        managed_process = _MANAGED_PROCESS
+        managed_identity = _MANAGED_PROCESS_IDENTITY
+        managed_matches = (
+            managed_process is not None
+            and managed_process.poll() is None
+            and managed_process.pid == int(process.pid)
+            and managed_identity == identity
+        )
+    if not managed_matches:
+        raise H3BridgeError(
+            "接続中のH3 backendはこのForgeセッションが起動したprocessではないため、自動停止しません。"
+            " 外部ランチャーを閉じてから「接続 / 起動」を押してください。"
+        )
+
+    running, pending = ComfyH3Client(normalized_url).queue_counts()
+    if running or pending:
+        raise H3BridgeError(
+            f"生成キューが空ではないため再起動しません（実行中 {running} / 待機 {pending}）。"
+        )
+    try:
+        import psutil
+    except ImportError as exc:
+        raise H3BridgeError(f"H3 backendを安全に再起動できません: {exc}") from exc
+    try:
+        process_id = int(process.pid)
+        process.terminate()
+        process.wait(timeout=15)
+    except (OSError, psutil.Error, psutil.TimeoutExpired) as exc:
+        raise H3BridgeError(f"H3 backendを停止できませんでした: {exc}") from exc
+
+    with _PROCESS_LOCK:
+        if _MANAGED_PROCESS is not None and _MANAGED_PROCESS.pid == process_id:
+            _MANAGED_PROCESS = None
+            _MANAGED_PROCESS_IDENTITY = None
+
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        if _loopback_server_process(normalized_url) is None:
+            break
+        time.sleep(0.25)
+    else:
+        raise H3BridgeError("H3 backendの停止を15秒待ちましたがportが解放されません。")
+
+    return start_runtime(
+        runtime_root,
+        normalized_url,
+        log_directory,
+        runtime_profile=runtime_profile,
+        wait_seconds=wait_seconds,
+    )
+
+
+def restart_runtime(
+    runtime_root: Path,
+    server_url: str,
+    log_directory: Path,
+    runtime_profile: str = RUNTIME_PROFILE_FAST,
+    wait_seconds: float = 120.0,
+) -> RuntimeReadiness:
+    with _RUNTIME_LIFECYCLE_LOCK:
+        return _restart_runtime_locked(
+            runtime_root,
+            server_url,
+            log_directory,
+            runtime_profile=runtime_profile,
+            wait_seconds=wait_seconds,
+        )
+
+
+def _ensure_ready_locked(
+    runtime_root: Path,
+    server_url: str,
+    log_directory: Path,
+    runtime_profile: str = RUNTIME_PROFILE_FAST,
+) -> RuntimeReadiness:
+    if runtime_profile not in RUNTIME_PROFILES:
+        raise H3BridgeError(f"未対応のH3 runtime profileです: {runtime_profile}")
     readiness = inspect_readiness(runtime_root, server_url)
     if not readiness.connected:
-        readiness = start_runtime(runtime_root, server_url, log_directory)
+        readiness = start_runtime(
+            runtime_root,
+            server_url,
+            log_directory,
+            runtime_profile=runtime_profile,
+        )
     if readiness.missing_nodes:
         raise H3BridgeError("ComfyUI に H3 必須ノードがありません: " + ", ".join(readiness.missing_nodes))
+    if not readiness.h3_core_optimized:
+        revision = readiness.core_revision[:12] if readiness.core_revision else "未確認"
+        raise H3BridgeError(
+            "H3 peak-memory修正を確認できません。"
+            f" ComfyUIを {H3_MINIMUM_COMFY_COMMIT[:12]} 以降へ更新してください（現在 {revision}）。"
+        )
+    kitchen = readiness.package_versions.get("comfy-kitchen", "")
+    if not readiness.ck_attention_available or _version_tuple(kitchen) < (0, 2, 30):
+        raise H3BridgeError(
+            "Comfy Kitchen INT8 attentionを利用できません。"
+            f" comfy-kitchen 0.2.30以上を導入してください（現在 {kitchen or '未確認'}）。"
+        )
+    if readiness.runtime_profile != runtime_profile:
+        expected = RUNTIME_PROFILE_LABELS[runtime_profile]
+        detected = RUNTIME_PROFILE_LABELS.get(readiness.runtime_profile or "", "未対応の起動設定")
+        raise H3BridgeError(
+            f"H3 backendの起動設定が一致しません（選択: {expected} / 接続中: {detected}）。"
+            " Runtime & models の「選択設定で再起動」を押してください。"
+        )
     if not readiness.ready_for_fl2va:
         required = ("FL2VA", "Qwen3-VL 32B", "Video VAE", "Audio VAE")
         missing_local = [name for name in required if not readiness.model_files.get(name)]
@@ -738,6 +1149,21 @@ def ensure_ready(runtime_root: Path, server_url: str, log_directory: Path) -> Ru
             details.append("接続先のmodel一覧: " + ", ".join(missing_server))
         raise H3BridgeError("H3 FL2VA の必須モデルが不足しています: " + " / ".join(details))
     return readiness
+
+
+def ensure_ready(
+    runtime_root: Path,
+    server_url: str,
+    log_directory: Path,
+    runtime_profile: str = RUNTIME_PROFILE_FAST,
+) -> RuntimeReadiness:
+    with _RUNTIME_LIFECYCLE_LOCK:
+        return _ensure_ready_locked(
+            runtime_root,
+            server_url,
+            log_directory,
+            runtime_profile=runtime_profile,
+        )
 
 
 def _validate_media_path(path_value: str, expected: str) -> Path:
@@ -1004,6 +1430,11 @@ def build_workflow(request: H3Request, prepared_media: dict[str, Any], seed: int
 
     workflow: dict[str, Any] = {
         "1": _node("UNETLoader", unet_name=model_name, weight_dtype="default"),
+        "15": _node(
+            "ModelAttentionBackend",
+            model=["1", 0],
+            attention="comfy kitchen attention",
+        ),
         "2": _node("CLIPLoader", clip_name=H3_TEXT_ENCODER, type="minimax", device="default"),
         "3": _node("VAELoader", vae_name=H3_VIDEO_VAE),
         "4": _node("VAELoader", vae_name=H3_AUDIO_VAE),
@@ -1016,7 +1447,7 @@ def build_workflow(request: H3Request, prepared_media: dict[str, Any], seed: int
             steps=int(request.steps),
             denoise=1.0,
         ),
-        "9": _node("BasicGuider", model=["1", 0], conditioning=["5", 0]),
+        "9": _node("BasicGuider", model=["15", 0], conditioning=["5", 0]),
         "10": _node(
             "SamplerCustomAdvanced",
             noise=["6", 0],
@@ -1125,7 +1556,14 @@ def _execution_error(job: dict[str, Any]) -> str:
     return str(error or "生成処理が失敗しました。ComfyUIログを確認してください。")
 
 
-def mirror_result(source: Path, output_directory: Path, request: H3Request, prompt_id: str, seed: int) -> Path:
+def mirror_result(
+    source: Path,
+    output_directory: Path,
+    request: H3Request,
+    prompt_id: str,
+    seed: int,
+    readiness: RuntimeReadiness,
+) -> Path:
     output_directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     target = output_directory / f"MiniMax_H3_{stamp}_{prompt_id[:8]}{source.suffix.lower()}"
@@ -1144,6 +1582,11 @@ def mirror_result(source: Path, output_directory: Path, request: H3Request, prom
         "steps": request.steps,
         "seed": seed,
         "scheduler": request.scheduler,
+        "attention_backend": "comfy-kitchen-int8",
+        "comfyui_version": readiness.comfy_version,
+        "comfy_kitchen_version": readiness.package_versions.get("comfy-kitchen"),
+        "comfyui_revision": readiness.core_revision,
+        "runtime_profile": readiness.runtime_profile,
         "source": os.fspath(source),
     }
     target.with_suffix(".json").write_text(
@@ -1154,18 +1597,50 @@ def mirror_result(source: Path, output_directory: Path, request: H3Request, prom
     return target
 
 
+def _validate_request_runtime_constraints(
+    request: H3Request,
+    readiness: RuntimeReadiness,
+    runtime_profile: str,
+) -> None:
+    if request.mode == MODE_REFERENCES and not readiness.ready_for_ref2va:
+        raise H3BridgeError("参照モード用 Ref2VA モデルがありません。")
+    if not isinstance(readiness.ram_free_gib, (int, float)):
+        return
+    width, height = request.dimensions
+    decoded_video_gib = width * height * request.frame_count * 3 * 4 / 1024**3
+    safety_gib = 4.0 if runtime_profile == RUNTIME_PROFILE_FAST else 2.0
+    required_free_gib = decoded_video_gib + safety_gib
+    if readiness.ram_free_gib >= required_free_gib:
+        return
+    profile_hint = (
+        "省RAM profileへ切り替えてbackendを再起動するか、他のアプリを閉じてください。"
+        if runtime_profile == RUNTIME_PROFILE_FAST
+        else "他のアプリを閉じるか、解像度・長さを下げてください。"
+    )
+    raise H3BridgeError(
+        "生成前の空きRAMが不足しています。"
+        f" 必要目安 {required_free_gib:.1f} GiB / 現在 {readiness.ram_free_gib:.1f} GiB。"
+        f" {profile_hint}"
+    )
+
+
 def run_generation(
     request: H3Request,
     runtime_root: Path,
     server_url: str,
     log_directory: Path,
     output_directory: Path,
-    poll_seconds: float = 2.0,
+    runtime_profile: str = RUNTIME_PROFILE_FAST,
+    poll_seconds: float | None = None,
 ) -> Iterator[dict[str, Any]]:
     validate_request(request)
-    readiness = ensure_ready(runtime_root, server_url, log_directory)
-    if request.mode == MODE_REFERENCES and not readiness.ready_for_ref2va:
-        raise H3BridgeError("参照モード用 Ref2VA モデルがありません。")
+    readiness = ensure_ready(
+        runtime_root,
+        server_url,
+        log_directory,
+        runtime_profile=runtime_profile,
+    )
+    _validate_request_runtime_constraints(request, readiness, runtime_profile)
     cleanup_stale_prepared_media(runtime_root)
     yield {"stage": "prepare", "message": "入力素材を検証しています", "progress": 0.06, "prompt_id": ""}
     prepared = prepare_media(request, runtime_root)
@@ -1175,8 +1650,16 @@ def run_generation(
     try:
         seed = request.resolved_seed
         workflow = build_workflow(request, prepared, seed=seed)
-        client = ComfyH3Client(server_url)
-        prompt_id = client.submit(workflow)
+        with _RUNTIME_LIFECYCLE_LOCK:
+            readiness = ensure_ready(
+                runtime_root,
+                server_url,
+                log_directory,
+                runtime_profile=runtime_profile,
+            )
+            _validate_request_runtime_constraints(request, readiness, runtime_profile)
+            client = ComfyH3Client(server_url)
+            prompt_id = client.submit(workflow)
         yield {
             "stage": "queued",
             "message": "ComfyUI のキューに追加しました",
@@ -1201,7 +1684,7 @@ def run_generation(
                 _clear_cancelled_job(prompt_id)
                 history = client.history(prompt_id)
                 source = extract_history_video(history, prompt_id, runtime_root)
-                target = mirror_result(source, output_directory, request, prompt_id, seed)
+                target = mirror_result(source, output_directory, request, prompt_id, seed, readiness)
                 yield {
                     "stage": "complete",
                     "message": "音声付き動画を保存しました",
@@ -1231,7 +1714,11 @@ def run_generation(
                 "seed": seed,
                 "elapsed": elapsed,
             }
-            time.sleep(max(0.5, poll_seconds))
+            if poll_seconds is None:
+                wait_seconds = 5.0 if running else 1.5
+            else:
+                wait_seconds = max(0.5, poll_seconds)
+            time.sleep(wait_seconds)
     finally:
         if prompt_id and not terminal and client is not None:
             try:
@@ -1380,7 +1867,12 @@ def cache_history_video(selected: str, items: Sequence[HistoryItem], output_dire
     return os.fspath(target)
 
 
-def readiness_html(readiness: RuntimeReadiness) -> str:
+def readiness_html(
+    readiness: RuntimeReadiness,
+    expected_profile: str = RUNTIME_PROFILE_FAST,
+) -> str:
+    if expected_profile not in RUNTIME_PROFILES:
+        expected_profile = RUNTIME_PROFILE_FAST
     connected_tone = "ready" if readiness.connected else "warn"
     connected_text = "ComfyUI 接続済み" if readiness.connected else "ComfyUI 未接続"
     files_ready = sum(1 for present in readiness.model_files.values() if present)
@@ -1391,6 +1883,18 @@ def readiness_html(readiness: RuntimeReadiness) -> str:
     if readiness.vram_gib:
         gpu += f" · {readiness.vram_gib:.0f} GiB"
     node_text = "H3 nodes OK" if readiness.connected and not readiness.missing_nodes else "H3 nodes 未確認"
+    kitchen_version = readiness.package_versions.get("comfy-kitchen")
+    attention_text = "Kitchen INT8" if readiness.ck_attention_available else "Attention 未確認"
+    profile_matches = readiness.connected and readiness.runtime_profile == expected_profile
+    runtime_text = {
+        RUNTIME_PROFILE_FAST: "高速 · Async 2",
+        RUNTIME_PROFILE_LOW_RAM: "省RAM · Async無効",
+    }.get(readiness.runtime_profile or "", "起動設定 未確認")
+    core_text = (
+        f"Core {readiness.core_revision[:8]}+"
+        if readiness.h3_core_optimized and readiness.core_revision
+        else "H3 core 未確認"
+    )
     missing_server_files = [
         name for name in MODEL_FILES if not readiness.server_model_files.get(name)
     ] if readiness.connected else []
@@ -1399,39 +1903,143 @@ def readiness_html(readiness: RuntimeReadiness) -> str:
         if readiness.missing_nodes
         else "接続先で未検出のmodel: " + ", ".join(missing_server_files)
         if missing_server_files
+        else "Comfy Kitchen INT8 attentionを利用できません。runtimeを更新してください。"
+        if readiness.connected and not readiness.ck_attention_available
+        else f"H3 coreを {H3_MINIMUM_COMFY_COMMIT[:12]} 以降へ更新してください。"
+        if readiness.connected and not readiness.h3_core_optimized
+        else (
+            "選択した起動profileと接続中の設定が一致しません。"
+            "「選択設定で再起動」を押してください。"
+        )
+        if readiness.connected and not profile_matches
         else "ローカル音声付き生成の準備ができています。"
     )
     root = os.fspath(readiness.runtime_root) if readiness.runtime_root else "runtime未検出"
+    gpu_detail = readiness.gpu_name or "未確認"
+    ram_detail = (
+        f"空き {readiness.ram_free_gib:.1f} / 合計 {readiness.ram_total_gib:.1f} GiB"
+        if readiness.ram_free_gib is not None and readiness.ram_total_gib is not None
+        else "未確認"
+    )
+    profile_detail = RUNTIME_PROFILE_LABELS.get(readiness.runtime_profile or "", "未対応の起動設定")
+    expected_detail = RUNTIME_PROFILE_LABELS[expected_profile]
+    revision_detail = readiness.core_revision or "未確認"
     return (
         '<div class="h3-runtime-card" role="status" aria-live="polite" aria-atomic="true">'
         '<div class="h3-runtime-badges">'
         f'<span data-tone="{connected_tone}"><i></i>{html.escape(connected_text)}</span>'
-        f'<span><i></i>{html.escape(gpu)}</span>'
+        f'<span title="{html.escape(gpu_detail, quote=True)}"><i></i>{html.escape(gpu)}</span>'
         f'<span data-tone="{"ready" if files_ready == total_files else "warn"}"><i></i>Files {files_ready}/{total_files}</span>'
         f'<span data-tone="{"ready" if server_files_ready == server_files_total else "warn"}"><i></i>Backend {server_files_ready}/{server_files_total}</span>'
         f'<span data-tone="{"ready" if readiness.connected and not readiness.missing_nodes else "warn"}"><i></i>{html.escape(node_text)}</span>'
+        f'<span data-tone="{"ready" if readiness.ck_attention_available else "warn"}"><i></i>{html.escape(attention_text)}</span>'
+        f'<span data-tone="{"ready" if readiness.h3_core_optimized else "warn"}" title="{html.escape(revision_detail, quote=True)}"><i></i>{html.escape(core_text)}</span>'
+        f'<span data-tone="{"ready" if profile_matches else "warn"}" title="{html.escape(profile_detail, quote=True)}"><i></i>{html.escape(runtime_text)}</span>'
+        f'<span title="ComfyUI {html.escape(readiness.comfy_version or "不明", quote=True)} / comfy-kitchen {html.escape(kitchen_version or "不明", quote=True)}"><i></i>Comfy {html.escape(readiness.comfy_version or "不明")} · Kitchen {html.escape(kitchen_version or "不明")}</span>'
         "</div>"
-        f'<p>{html.escape(details)}</p><code title="{html.escape(root, quote=True)}">{html.escape(root)}</code>'
+        f'<p>{html.escape(details)}</p>'
+        '<details class="h3-runtime-details"><summary>環境詳細</summary><dl>'
+        f'<dt>GPU</dt><dd>{html.escape(gpu_detail)}</dd>'
+        f'<dt>RAM</dt><dd>{html.escape(ram_detail)}</dd>'
+        f'<dt>接続中profile</dt><dd>{html.escape(profile_detail)}</dd>'
+        f'<dt>選択中profile</dt><dd>{html.escape(expected_detail)}</dd>'
+        f'<dt>ComfyUI / Kitchen</dt><dd>{html.escape(readiness.comfy_version or "不明")} / {html.escape(kitchen_version or "不明")}</dd>'
+        f'<dt>Core revision</dt><dd><code>{html.escape(revision_detail)}</code></dd>'
+        '</dl></details>'
+        f'<code title="{html.escape(root, quote=True)}">{html.escape(root)}</code>'
         "</div>"
     )
 
 
-def settings_summary_html(aspect: str, quality: str, duration: float, steps: int) -> str:
+GENERATION_PRESETS: dict[str, tuple[str, float, int]] = {
+    "quick": ("draft", 5.0, 20),
+    "recommended": ("preview", 5.0, 20),
+    "final": ("native", 5.0, 20),
+}
+
+
+def generation_preset_values(
+    preset: str,
+    aspect: str,
+) -> tuple[str, float, int, str, str, str]:
+    try:
+        quality, duration, steps = GENERATION_PRESETS[preset]
+    except KeyError as exc:
+        raise H3BridgeError(f"未対応の生成プリセットです: {preset}") from exc
+    scheduler = "simple"
+    ref_image_size = "match"
+    return (
+        quality,
+        duration,
+        steps,
+        scheduler,
+        ref_image_size,
+        settings_summary_html(
+            aspect,
+            quality,
+            duration,
+            steps,
+            scheduler,
+            ref_image_size,
+        ),
+    )
+
+
+def relative_workload(aspect: str, quality: str, duration: float, steps: int) -> float:
+    width, height = dimensions_for(aspect, quality)
+    frames = snap_h3_frames(duration)
+    baseline = 864 * 480 * 124 * 20
+    return (width * height * frames * int(steps)) / baseline
+
+
+def settings_summary_html(
+    aspect: str,
+    quality: str,
+    duration: float,
+    steps: int,
+    scheduler: str = "simple",
+    ref_image_size: str = "match",
+) -> str:
     try:
         width, height = dimensions_for(aspect, quality)
         frames = snap_h3_frames(duration)
         effective = frames / H3_FPS
-        native_warning = quality == "native"
-        tone = "warn" if native_warning else "ready"
-        note = (
-            "Nativeは最高品質です。RTX 3090では生成時間が大幅に伸びます。"
-            if native_warning
-            else "入力値はH3の32pxキャンバスと17-frameグリッドへ整列済みです。"
+        workload = relative_workload(aspect, quality, duration, steps)
+        official_preview = (
+            quality == "preview"
+            and frames == 124
+            and int(steps) == 20
+            and scheduler == "simple"
+            and ref_image_size == "match"
         )
+        tone = (
+            "warn"
+            if quality == "native"
+            or scheduler != "simple"
+            or ref_image_size == "max"
+            or workload >= 2.0
+            else "ready"
+        )
+        if ref_image_size == "max":
+            note = "Reference Maxは非常に重い設定です。まずMatchで内容を確認してください。"
+        elif scheduler != "simple":
+            note = "実験的schedulerです。再現性重視ならsimpleへ戻してください。"
+        elif quality == "native":
+            note = "Native最終出力です。RTX 3090では生成時間とRAM使用量が大きく増えます。"
+        elif workload >= 5.0:
+            note = "非常に重い設定です。まず「おすすめ」で構図と音を確認してください。"
+        elif workload >= 2.0:
+            note = "重い設定です。RTX 3090では生成時間が大きく伸びます。"
+        elif workload < 0.75:
+            note = "高速な動作確認向けです。解像度は低くなります。"
+        elif official_preview:
+            note = "公式Fast Preview相当のおすすめ設定です。"
+        else:
+            note = "H3の32pxキャンバスと17-frameグリッドへ整列済みです。"
         return (
             f'<div class="h3-settings-summary" data-tone="{tone}" role="status" aria-live="polite">'
-            f'<strong>{width} × {height}</strong><span>{frames} frames · {effective:.2f} sec · {int(steps)} steps · 24fps stereo</span>'
-            f'<small>{html.escape(note)}</small></div>'
+            f'<strong>{width} × {height}</strong><span>{frames} frames · {effective:.2f} sec · {int(steps)} steps · 24fps stereo · 相対負荷 {workload:.2f}×</span>'
+            f'<small>{html.escape(note)} 相対負荷は所要時間の予測ではありません。</small></div>'
         )
     except (H3BridgeError, TypeError, ValueError) as exc:
         return f'<div class="h3-settings-summary" data-tone="error" role="alert">{html.escape(str(exc))}</div>'
