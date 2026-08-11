@@ -36,6 +36,7 @@ from modules_forge.minimax_h3_bridge import (
     run_generation,
     settings_summary_html,
     ensure_ready,
+    validate_request,
 )
 
 
@@ -89,13 +90,32 @@ def _mode_help_html(mode: str) -> str:
     )
 
 
-def _mode_updates(mode: str):
+def _mode_updates(
+    mode: str,
+    aspect: str = "16:9",
+    quality: str = "preview",
+    duration: float = 5.0,
+    steps: int = 20,
+    scheduler: str = "simple",
+    ref_image_size: str = "match",
+    current_validation: str = "",
+):
     reference_mode = mode == MODE_REFERENCES
+    effective_ref_image_size = str(ref_image_size) if reference_mode else "match"
     return (
         gr.update(visible=mode == MODE_KEYFRAMES),
         gr.update(visible=reference_mode),
         _mode_help_html(mode),
-        gr.update(visible=True) if reference_mode else gr.update(visible=False, value="match"),
+        gr.update(visible=True) if reference_mode else gr.update(visible=False, value=effective_ref_image_size),
+        settings_summary_html(
+            aspect,
+            quality,
+            duration,
+            steps,
+            scheduler,
+            effective_ref_image_size,
+        ),
+        _clear_validation_targets(current_validation, "keyframes", "references"),
     )
 
 
@@ -121,8 +141,140 @@ def _apply_generation_preset(preset: str, aspect: str):
     return (*generation_preset_values(preset, aspect), _preset_state_html(preset))
 
 
-def _mark_preset_custom() -> str:
+def _apply_quick_preset(aspect: str):
+    return _apply_generation_preset("quick", aspect)
+
+
+def _apply_recommended_preset(aspect: str):
+    return _apply_generation_preset("recommended", aspect)
+
+
+def _apply_final_preset(aspect: str):
+    return _apply_generation_preset("final", aspect)
+
+
+def _mark_preset_custom(_value: object | None = None) -> str:
     return _preset_state_html("custom")
+
+
+def _custom_settings_updates(
+    aspect: str,
+    quality: str,
+    duration: float,
+    steps: int,
+    scheduler: str,
+    ref_image_size: str,
+    current_validation: str = "",
+) -> tuple[str, str, str | dict]:
+    return (
+        settings_summary_html(aspect, quality, duration, steps, scheduler, ref_image_size),
+        _mark_preset_custom(),
+        _clear_validation_targets(current_validation, "settings"),
+    )
+
+
+def _aspect_settings_updates(
+    aspect: str,
+    quality: str,
+    duration: float,
+    steps: int,
+    scheduler: str,
+    ref_image_size: str,
+    current_validation: str = "",
+):
+    return (
+        settings_summary_html(aspect, quality, duration, steps, scheduler, ref_image_size),
+        _clear_validation_targets(current_validation, "settings"),
+    )
+
+
+def _input_validation_html(message: str, target: str) -> str:
+    safe_target = target if target in {"prompt", "keyframes", "references", "settings"} else "settings"
+    return (
+        f'<div class="h3-input-error" data-h3-invalid="{safe_target}" role="alert">'
+        '<strong>入力を確認してください</strong>'
+        f'<span id="h3-input-validation-message">{html.escape(message)}</span>'
+        "</div>"
+    )
+
+
+def _validation_target(request: H3Request) -> str:
+    if not request.prompt or not request.prompt.strip() or len(request.prompt) > 20_000:
+        return "prompt"
+    try:
+        request.dimensions
+        request.frame_count
+    except (H3BridgeError, TypeError, ValueError):
+        return "settings"
+    if not 1 <= int(request.steps) <= 100:
+        return "settings"
+    if int(request.seed) < -1 or int(request.seed) >= 2**63:
+        return "settings"
+    if request.scheduler not in {"simple", "beta", "normal"}:
+        return "settings"
+    if request.ref_image_size not in {"match", "max"}:
+        return "settings"
+    if request.mode == MODE_KEYFRAMES:
+        return "keyframes"
+    if request.mode == MODE_REFERENCES:
+        return "references"
+    return "settings"
+
+
+def _clear_validation_targets(current_validation: str, *targets: str):
+    rendered = str(current_validation or "")
+    if any(f'data-h3-invalid="{target}"' in rendered for target in targets):
+        return ""
+    return gr.update()
+
+
+def _clear_prompt_validation(current_validation: str):
+    return _clear_validation_targets(current_validation, "prompt")
+
+
+def _clear_keyframe_validation(current_validation: str):
+    return _clear_validation_targets(current_validation, "keyframes")
+
+
+def _clear_settings_validation(current_validation: str):
+    return _clear_validation_targets(current_validation, "settings")
+
+
+def _reference_guide_updates(
+    image_values,
+    video_values,
+    audio_values,
+    current_validation: str,
+):
+    return (
+        reference_guide_html(image_values, video_values, audio_values),
+        _clear_validation_targets(current_validation, "references"),
+    )
+
+
+def _prompt_action_updates(prompt: str, action: str, current_validation: str):
+    updated_prompt = prompt_template(prompt) if action == "template" else append_prompt_section(prompt, action)
+    return updated_prompt, _clear_prompt_validation(current_validation)
+
+
+def _prompt_template_updates(prompt: str, current_validation: str):
+    return _prompt_action_updates(prompt, "template", current_validation)
+
+
+def _prompt_camera_updates(prompt: str, current_validation: str):
+    return _prompt_action_updates(prompt, "camera", current_validation)
+
+
+def _prompt_dialogue_updates(prompt: str, current_validation: str):
+    return _prompt_action_updates(prompt, "dialogue", current_validation)
+
+
+def _prompt_sfx_updates(prompt: str, current_validation: str):
+    return _prompt_action_updates(prompt, "sfx", current_validation)
+
+
+def _prompt_music_updates(prompt: str, current_validation: str):
+    return _prompt_action_updates(prompt, "music", current_validation)
 
 
 def _connect_runtime(runtime_value: str, server_url: str, runtime_profile: str) -> str:
@@ -172,14 +324,20 @@ def _history_state(runtime_value: str):
         root = resolve_runtime_root(runtime_value) if runtime_value else None
     except H3BridgeError:
         root = None
-    items = list_history(root, OUTPUT_DIRECTORY)
+    try:
+        items = list_history(root, OUTPUT_DIRECTORY)
+    except OSError as exc:
+        raise H3BridgeError(f"生成履歴を読み込めません: {exc}") from exc
     return items, history_html(items), history_choices(items)
 
 
 def _refresh_history(runtime_value: str):
-    items, rendered, choices = _history_state(runtime_value)
-    selected = choices[0][1] if choices else None
-    return rendered, gr.update(choices=choices, value=selected)
+    try:
+        _, rendered, choices = _history_state(runtime_value)
+        selected = choices[0][1] if choices else None
+        return rendered, gr.update(choices=choices, value=selected)
+    except H3BridgeError as exc:
+        return _status_error(str(exc)), gr.update()
 
 
 def _load_history_video(selected: str, runtime_value: str):
@@ -253,25 +411,43 @@ def _generate(
         gr.update(),
         gr.update(),
         gr.update(interactive=False),
+        gr.update(value="生成を準備中…", interactive=False),
+        "",
     )
     try:
+        request: H3Request | None = None
+        try:
+            request = _request_from_ui(
+                mode,
+                prompt,
+                first_frame,
+                last_frame,
+                reference_images,
+                reference_videos,
+                reference_audios,
+                aspect,
+                quality,
+                duration,
+                steps,
+                seed,
+                scheduler,
+                ref_image_size,
+            )
+            validate_request(request)
+        except (H3BridgeError, ValueError, TypeError) as exc:
+            target = _validation_target(request) if request is not None else "settings"
+            yield (
+                progress_html("idle", "入力欄を確認して、もう一度生成してください", 0.0),
+                gr.update(),
+                "",
+                gr.update(),
+                gr.update(),
+                gr.update(interactive=False),
+                gr.update(value="映像＋音声を生成", interactive=True),
+                _input_validation_html(str(exc), target),
+            )
+            return
         root = resolve_runtime_root(runtime_value)
-        request = _request_from_ui(
-            mode,
-            prompt,
-            first_frame,
-            last_frame,
-            reference_images,
-            reference_videos,
-            reference_audios,
-            aspect,
-            quality,
-            duration,
-            steps,
-            seed,
-            scheduler,
-            ref_image_size,
-        )
         for update in run_generation(
             request,
             root,
@@ -291,6 +467,11 @@ def _generate(
             cancel_update = gr.update(
                 interactive=bool(prompt_id) and update["stage"] not in {"complete", "error"}
             )
+            generation_finished = update["stage"] in {"complete", "error"}
+            generate_update = gr.update(
+                value="映像＋音声を生成" if generation_finished else "生成中…",
+                interactive=generation_finished,
+            )
             yield (
                 progress_html(
                     update["stage"],
@@ -303,8 +484,10 @@ def _generate(
                 rendered_history,
                 selector_update,
                 cancel_update,
+                generate_update,
+                gr.update(),
             )
-    except (H3BridgeError, ValueError, TypeError) as exc:
+    except (H3BridgeError, OSError, ValueError, TypeError) as exc:
         yield (
             progress_html("error", str(exc), 0.0),
             gr.update(),
@@ -312,6 +495,8 @@ def _generate(
             gr.update(),
             gr.update(),
             gr.update(interactive=False),
+            gr.update(value="映像＋音声を生成", interactive=True),
+            gr.update(),
         )
 
 
@@ -393,6 +578,7 @@ def _build_ui():
                             show_label=False,
                             elem_id="h3-prompt",
                         )
+                        input_validation = gr.HTML(value="", elem_id="h3-input-validation")
                         with gr.Row(elem_classes=["h3-prompt-chips"]):
                             camera_button = gr.Button("＋ Camera", size="sm")
                             dialogue_button = gr.Button("＋ Dialogue", size="sm")
@@ -634,34 +820,64 @@ def _build_ui():
 
             prompt_id_state = gr.State("")
 
+        summary_inputs = [aspect, quality, duration, steps, scheduler, ref_image_size]
         mode.change(
             fn=_mode_updates,
-            inputs=[mode],
-            outputs=[keyframe_group, reference_group, mode_help, ref_image_size],
+            inputs=[mode, *summary_inputs, input_validation],
+            outputs=[
+                keyframe_group,
+                reference_group,
+                mode_help,
+                ref_image_size,
+                settings_summary,
+                input_validation,
+            ],
             queue=False,
         )
+        prompt.input(
+            fn=_clear_prompt_validation,
+            inputs=[input_validation],
+            outputs=[input_validation],
+            queue=False,
+            trigger_mode="always_last",
+        )
+        for component in [first_frame, last_frame]:
+            component.change(
+                fn=_clear_keyframe_validation,
+                inputs=[input_validation],
+                outputs=[input_validation],
+                queue=False,
+            )
         reference_inputs = [reference_images, reference_videos, reference_audios]
         for component in reference_inputs:
             component.change(
-                fn=reference_guide_html,
-                inputs=reference_inputs,
-                outputs=[reference_guide],
+                fn=_reference_guide_updates,
+                inputs=[*reference_inputs, input_validation],
+                outputs=[reference_guide, input_validation],
                 queue=False,
             )
-        prompt_template_button.click(fn=prompt_template, inputs=[prompt], outputs=[prompt], queue=False)
-        camera_button.click(fn=lambda value: append_prompt_section(value, "camera"), inputs=[prompt], outputs=[prompt], queue=False)
-        dialogue_button.click(fn=lambda value: append_prompt_section(value, "dialogue"), inputs=[prompt], outputs=[prompt], queue=False)
-        sfx_button.click(fn=lambda value: append_prompt_section(value, "sfx"), inputs=[prompt], outputs=[prompt], queue=False)
-        music_button.click(fn=lambda value: append_prompt_section(value, "music"), inputs=[prompt], outputs=[prompt], queue=False)
+        prompt_action_outputs = [prompt, input_validation]
+        for button, callback in [
+            (prompt_template_button, _prompt_template_updates),
+            (camera_button, _prompt_camera_updates),
+            (dialogue_button, _prompt_dialogue_updates),
+            (sfx_button, _prompt_sfx_updates),
+            (music_button, _prompt_music_updates),
+        ]:
+            button.click(
+                fn=callback,
+                inputs=[prompt, input_validation],
+                outputs=prompt_action_outputs,
+                queue=False,
+            )
 
-        summary_inputs = [aspect, quality, duration, steps, scheduler, ref_image_size]
-        for component in summary_inputs:
-            component.change(
-                fn=settings_summary_html,
-                inputs=summary_inputs,
-                outputs=[settings_summary],
-                queue=False,
-            )
+        aspect.input(
+            fn=_aspect_settings_updates,
+            inputs=[*summary_inputs, input_validation],
+            outputs=[settings_summary, input_validation],
+            queue=False,
+            trigger_mode="always_last",
+        )
 
         preset_outputs = [
             quality,
@@ -673,29 +889,41 @@ def _build_ui():
             preset_state,
         ]
         quick_preset_button.click(
-            fn=lambda selected_aspect: _apply_generation_preset("quick", selected_aspect),
+            fn=_apply_quick_preset,
             inputs=[aspect],
             outputs=preset_outputs,
             queue=False,
+            api_name="h3_apply_quick_preset",
         )
         recommended_preset_button.click(
-            fn=lambda selected_aspect: _apply_generation_preset("recommended", selected_aspect),
+            fn=_apply_recommended_preset,
             inputs=[aspect],
             outputs=preset_outputs,
             queue=False,
+            api_name="h3_apply_recommended_preset",
         )
         final_preset_button.click(
-            fn=lambda selected_aspect: _apply_generation_preset("final", selected_aspect),
+            fn=_apply_final_preset,
             inputs=[aspect],
             outputs=preset_outputs,
             queue=False,
+            api_name="h3_apply_final_preset",
         )
         for component in [quality, duration, steps, scheduler, ref_image_size]:
             component.input(
-                fn=_mark_preset_custom,
-                outputs=[preset_state],
+                fn=_custom_settings_updates,
+                inputs=[*summary_inputs, input_validation],
+                outputs=[settings_summary, preset_state, input_validation],
                 queue=False,
+                trigger_mode="always_last",
             )
+        seed.input(
+            fn=_clear_settings_validation,
+            inputs=[input_validation],
+            outputs=[input_validation],
+            queue=False,
+            trigger_mode="always_last",
+        )
 
         connect_button.click(
             fn=_connect_runtime,
@@ -752,7 +980,20 @@ def _build_ui():
                 scheduler,
                 ref_image_size,
             ],
-            outputs=[progress, result_video, prompt_id_state, history_panel, history_selector, cancel_button],
+            outputs=[
+                progress,
+                result_video,
+                prompt_id_state,
+                history_panel,
+                history_selector,
+                cancel_button,
+                generate_button,
+                input_validation,
+            ],
+            show_progress="hidden",
+            trigger_mode="once",
+            concurrency_limit=1,
+            concurrency_id="minimax-h3-generation",
         )
         cancel_button.click(
             fn=_cancel,

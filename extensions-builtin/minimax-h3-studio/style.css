@@ -436,6 +436,33 @@
     color: #5f6368 !important;
 }
 
+#h3-studio .h3-input-error {
+    display: grid;
+    gap: 3px;
+    margin-top: 8px;
+    padding: 10px 11px;
+    border: 1px solid rgba(255, 99, 112, 0.32);
+    border-radius: 8px;
+    background: rgba(255, 99, 112, 0.08);
+}
+
+#h3-studio .h3-input-error strong {
+    color: var(--h3-error);
+    font-size: 11px;
+    font-weight: 720;
+}
+
+#h3-studio .h3-input-error span {
+    color: #e7c5c8;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+#h3-studio [aria-invalid="true"] {
+    outline: 2px solid var(--h3-error) !important;
+    outline-offset: 2px !important;
+}
+
 #h3-studio label > span,
 #h3-studio .block > span {
     color: #a9aaa8 !important;
@@ -463,6 +490,13 @@
 
 #h3-studio button:active {
     transform: translateY(0);
+}
+
+#h3-studio button:disabled,
+#h3-studio button[aria-disabled="true"] {
+    cursor: not-allowed !important;
+    opacity: 0.48 !important;
+    transform: none !important;
 }
 
 #h3-studio button:focus-visible,
@@ -622,6 +656,10 @@
     gap: 8px;
 }
 
+#h3-studio:not([aria-busy="true"]) #h3-cancel {
+    display: none !important;
+}
+
 #h3-studio .h3-generate-button {
     min-height: 52px !important;
     border: 1px solid #ff7935 !important;
@@ -635,6 +673,13 @@
 #h3-studio .h3-generate-button:hover {
     background: linear-gradient(135deg, #ff8d4c, #fa641f) !important;
     color: #120602 !important;
+}
+
+#h3-studio .h3-generate-button:disabled {
+    border-color: rgba(255, 121, 53, 0.38) !important;
+    background: linear-gradient(135deg, #70402d, #66301d) !important;
+    color: rgba(255, 239, 228, 0.72) !important;
+    box-shadow: none !important;
 }
 
 #h3-studio .h3-cancel-button {
@@ -729,6 +774,22 @@
     background: linear-gradient(90deg, var(--h3-accent), #ffad65);
     box-shadow: 0 0 12px rgba(255, 106, 36, 0.55);
     transition: width 300ms ease;
+}
+
+#h3-studio .h3-progress[data-stage="running"] .h3-progress-track i {
+    width: 34%;
+    min-width: 72px;
+    animation: h3-progress-scan 1.6s ease-in-out infinite;
+}
+
+@keyframes h3-progress-scan {
+    from {
+        transform: translateX(-105%);
+    }
+
+    to {
+        transform: translateX(305%);
+    }
 }
 
 #h3-studio .h3-progress[data-tone="ready"] .h3-progress-track i {
@@ -955,6 +1016,13 @@
 
     #h3-studio .h3-mode-selector label {
         min-width: 100% !important;
+        min-height: 44px;
+    }
+
+    #h3-studio .h3-prompt-chips button,
+    #h3-studio .h3-quiet-button,
+    #h3-studio .h3-speed-presets button {
+        min-height: 44px !important;
     }
 
     #h3-studio .h3-mode-help {

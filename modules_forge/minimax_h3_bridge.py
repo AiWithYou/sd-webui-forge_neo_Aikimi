@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import atexit
 import ctypes
+import hashlib
 import html
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -12,14 +14,14 @@ import shutil
 import subprocess
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator, Sequence
+
+import httpx
 
 import yaml
 
@@ -132,6 +134,45 @@ class H3JobNotFound(H3BridgeError):
     """A ComfyUI job endpoint no longer knows the requested prompt ID."""
 
 
+class _WindowsPerformanceInformation(ctypes.Structure):
+    _fields_ = [
+        ("cb", ctypes.c_ulong),
+        ("CommitTotal", ctypes.c_size_t),
+        ("CommitLimit", ctypes.c_size_t),
+        ("CommitPeak", ctypes.c_size_t),
+        ("PhysicalTotal", ctypes.c_size_t),
+        ("PhysicalAvailable", ctypes.c_size_t),
+        ("SystemCache", ctypes.c_size_t),
+        ("KernelTotal", ctypes.c_size_t),
+        ("KernelPaged", ctypes.c_size_t),
+        ("KernelNonpaged", ctypes.c_size_t),
+        ("PageSize", ctypes.c_size_t),
+        ("HandleCount", ctypes.c_ulong),
+        ("ProcessCount", ctypes.c_ulong),
+        ("ThreadCount", ctypes.c_ulong),
+    ]
+
+
+def _local_commit_free_gib() -> float | None:
+    if os.name != "nt":
+        return None
+    information = _WindowsPerformanceInformation()
+    information.cb = ctypes.sizeof(information)
+    try:
+        get_performance_info = ctypes.windll.psapi.GetPerformanceInfo
+        get_performance_info.argtypes = [
+            ctypes.POINTER(_WindowsPerformanceInformation),
+            ctypes.c_ulong,
+        ]
+        get_performance_info.restype = ctypes.c_int
+        if not get_performance_info(ctypes.byref(information), information.cb):
+            return None
+    except (AttributeError, OSError, ValueError):
+        return None
+    free_pages = max(0, int(information.CommitLimit) - int(information.CommitTotal))
+    return free_pages * int(information.PageSize) / 1024**3
+
+
 def _mark_cancelled_job(prompt_id: str) -> None:
     with _CANCELLED_JOB_LOCK:
         _CANCELLED_JOB_IDS.add(prompt_id)
@@ -199,6 +240,7 @@ class RuntimeReadiness:
     runtime_profile: str | None = None
     ram_free_gib: float | None = None
     ram_total_gib: float | None = None
+    commit_free_gib: float | None = None
     model_files: dict[str, bool] = field(default_factory=dict)
     server_model_files: dict[str, bool] = field(default_factory=dict)
     missing_nodes: tuple[str, ...] = ()
@@ -673,30 +715,48 @@ class ComfyH3Client:
         self.server_url = normalize_loopback_url(server_url)
         self.timeout = timeout
         self.client_id = str(uuid.uuid4())
-        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self._client = httpx.Client(
+            base_url=self.server_url,
+            trust_env=False,
+            timeout=timeout,
+            limits=httpx.Limits(
+                max_connections=1,
+                max_keepalive_connections=1,
+                keepalive_expiry=30.0,
+            ),
+        )
+
+    def close(self) -> None:
+        self._client.close()
 
     def _request_json(self, path: str, payload: dict[str, Any] | None = None, timeout: float | None = None) -> Any:
-        url = f"{self.server_url}{path}"
         body = None
         headers = {"Accept": "application/json"}
         if payload is not None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(url, data=body, headers=headers, method="POST" if body is not None else "GET")
         try:
-            with self._opener.open(request, timeout=timeout or self.timeout) as response:
-                raw = response.read()
-        except urllib.error.HTTPError as exc:
-            details = exc.read().decode("utf-8", errors="replace")
+            response = self._client.request(
+                "POST" if body is not None else "GET",
+                path,
+                content=body,
+                headers=headers,
+                timeout=self.timeout if timeout is None else timeout,
+            )
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            raise H3BridgeError(f"ComfyUI に接続できません: {exc}") from exc
+        if response.status_code >= 400:
+            details = response.text
             try:
                 parsed = json.loads(details)
                 details = _format_comfy_error(parsed)
             except json.JSONDecodeError:
                 pass
-            error_type = H3JobNotFound if exc.code == 404 else H3BridgeError
-            raise error_type(f"ComfyUI が要求を拒否しました (HTTP {exc.code}): {details[:1200]}") from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise H3BridgeError(f"ComfyUI に接続できません: {exc}") from exc
+            error_type = H3JobNotFound if response.status_code == 404 else H3BridgeError
+            raise error_type(
+                f"ComfyUI が要求を拒否しました (HTTP {response.status_code}): {details[:1200]}"
+            )
+        raw = response.content
         if not raw:
             return {}
         try:
@@ -777,6 +837,14 @@ class ComfyH3Client:
             _mark_cancelled_job(prompt_id)
 
 
+def _queue_counts(server_url: str) -> tuple[int, int]:
+    client = ComfyH3Client(server_url)
+    try:
+        return client.queue_counts()
+    finally:
+        client.close()
+
+
 def _format_comfy_error(value: Any) -> str:
     if not isinstance(value, dict):
         return str(value)
@@ -796,6 +864,7 @@ def inspect_readiness(
     object_timeout: float = 8.0,
 ) -> RuntimeReadiness:
     files = model_file_status(runtime_root)
+    client: ComfyH3Client | None = None
     try:
         client = ComfyH3Client(server_url, timeout=2.0)
         stats = client.system_stats()
@@ -846,6 +915,7 @@ def inspect_readiness(
             ),
             ram_free_gib=(float(system["ram_free"]) / 1024**3) if system.get("ram_free") else None,
             ram_total_gib=(float(system["ram_total"]) / 1024**3) if system.get("ram_total") else None,
+            commit_free_gib=_local_commit_free_gib(),
             model_files=files,
             server_model_files=server_files,
             missing_nodes=missing_nodes,
@@ -858,6 +928,9 @@ def inspect_readiness(
             model_files=files,
             error=str(exc),
         )
+    finally:
+        if client is not None:
+            client.close()
 
 
 def _python_for_runtime(runtime_root: Path) -> Path:
@@ -1015,7 +1088,7 @@ def _restart_runtime_locked(
             f" 選択: {runtime_root} / 接続中: {listening_root}"
         )
 
-    running, pending = ComfyH3Client(normalized_url).queue_counts()
+    running, pending = _queue_counts(normalized_url)
     if running or pending:
         raise H3BridgeError(
             f"生成キューが空ではないため再起動しません（実行中 {running} / 待機 {pending}）。"
@@ -1046,7 +1119,7 @@ def _restart_runtime_locked(
             " 外部ランチャーを閉じてから「接続 / 起動」を押してください。"
         )
 
-    running, pending = ComfyH3Client(normalized_url).queue_counts()
+    running, pending = _queue_counts(normalized_url)
     if running or pending:
         raise H3BridgeError(
             f"生成キューが空ではないため再起動しません（実行中 {running} / 待機 {pending}）。"
@@ -1280,27 +1353,33 @@ def _cleanup_after_terminal(
     runtime_root: Path,
     wait_seconds: float = 600.0,
 ) -> None:
-    deadline = time.monotonic() + wait_seconds
-    while time.monotonic() < deadline:
+    try:
+        deadline = time.monotonic() + wait_seconds
+        while time.monotonic() < deadline:
+            try:
+                status = str(client.job(prompt_id).get("status") or "").lower()
+                if status in _TERMINAL_JOB_STATUSES:
+                    try:
+                        cleanup_prepared_media(prepared, runtime_root)
+                    finally:
+                        _clear_cancelled_job(prompt_id)
+                    return
+            except H3JobNotFound:
+                if _is_cancelled_job(prompt_id):
+                    try:
+                        cleanup_prepared_media(prepared, runtime_root)
+                    finally:
+                        _clear_cancelled_job(prompt_id)
+                    return
+            except H3BridgeError:
+                pass
+            time.sleep(1.0)
+        _LOG.warning("MiniMax H3 deferred input cleanup timed out for job %s", prompt_id)
+    finally:
         try:
-            status = str(client.job(prompt_id).get("status") or "").lower()
-            if status in _TERMINAL_JOB_STATUSES:
-                try:
-                    cleanup_prepared_media(prepared, runtime_root)
-                finally:
-                    _clear_cancelled_job(prompt_id)
-                return
-        except H3JobNotFound:
-            if _is_cancelled_job(prompt_id):
-                try:
-                    cleanup_prepared_media(prepared, runtime_root)
-                finally:
-                    _clear_cancelled_job(prompt_id)
-                return
-        except H3BridgeError:
-            pass
-        time.sleep(1.0)
-    _LOG.warning("MiniMax H3 deferred input cleanup timed out for job %s", prompt_id)
+            client.close()
+        except (OSError, httpx.HTTPError) as exc:
+            _LOG.warning("MiniMax H3 cleanup HTTP client could not be closed: %s", exc)
 
 
 def _schedule_deferred_cleanup(
@@ -1567,7 +1646,10 @@ def mirror_result(
     output_directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     target = output_directory / f"MiniMax_H3_{stamp}_{prompt_id[:8]}{source.suffix.lower()}"
-    shutil.copy2(source, target)
+    metadata_path = target.with_suffix(".json")
+    token = uuid.uuid4().hex
+    staged_video = target.with_name(f".{target.name}.{token}.part")
+    staged_metadata = metadata_path.with_name(f".{metadata_path.name}.{token}.part")
     metadata = {
         "model": "MiniMax H3",
         "prompt_id": prompt_id,
@@ -1589,12 +1671,35 @@ def mirror_result(
         "runtime_profile": readiness.runtime_profile,
         "source": os.fspath(source),
     }
-    target.with_suffix(".json").write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    try:
+        shutil.copy2(source, staged_video)
+        staged_metadata.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        os.replace(staged_metadata, metadata_path)
+        try:
+            os.replace(staged_video, target)
+        except OSError:
+            metadata_path.unlink(missing_ok=True)
+            raise
+    except OSError as exc:
+        staged_video.unlink(missing_ok=True)
+        staged_metadata.unlink(missing_ok=True)
+        if not target.exists():
+            metadata_path.unlink(missing_ok=True)
+        raise H3BridgeError(f"完成動画を Forge Neo の出力へ保存できません: {exc}") from exc
     return target
+
+
+def _estimated_required_free_gib(request: H3Request, runtime_profile: str) -> float:
+    if runtime_profile not in RUNTIME_PROFILES:
+        raise H3BridgeError(f"未対応のH3 runtime profileです: {runtime_profile}")
+    width, height = request.dimensions
+    decoded_video_gib = width * height * request.frame_count * 3 * 4 / 1024**3
+    safety_gib = 4.0 if runtime_profile == RUNTIME_PROFILE_FAST else 2.0
+    return decoded_video_gib + safety_gib
 
 
 def _validate_request_runtime_constraints(
@@ -1602,15 +1707,26 @@ def _validate_request_runtime_constraints(
     readiness: RuntimeReadiness,
     runtime_profile: str,
 ) -> None:
+    if runtime_profile not in RUNTIME_PROFILES:
+        raise H3BridgeError(f"未対応のH3 runtime profileです: {runtime_profile}")
     if request.mode == MODE_REFERENCES and not readiness.ready_for_ref2va:
         raise H3BridgeError("参照モード用 Ref2VA モデルがありません。")
-    if not isinstance(readiness.ram_free_gib, (int, float)):
+    memory_values = {
+        "空き物理RAM": readiness.ram_free_gib,
+        "OS commit余力": readiness.commit_free_gib,
+    }
+    available_values: dict[str, float] = {}
+    for label, value in memory_values.items():
+        if value is None:
+            continue
+        if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise H3BridgeError(f"{label}の情報が不正です。backendを再起動してください。")
+        available_values[label] = float(value)
+    if not available_values:
         return
-    width, height = request.dimensions
-    decoded_video_gib = width * height * request.frame_count * 3 * 4 / 1024**3
-    safety_gib = 4.0 if runtime_profile == RUNTIME_PROFILE_FAST else 2.0
-    required_free_gib = decoded_video_gib + safety_gib
-    if readiness.ram_free_gib >= required_free_gib:
+    required_free_gib = _estimated_required_free_gib(request, runtime_profile)
+    limiting_label, limiting_free_gib = min(available_values.items(), key=lambda item: item[1])
+    if limiting_free_gib >= required_free_gib:
         return
     profile_hint = (
         "省RAM profileへ切り替えてbackendを再起動するか、他のアプリを閉じてください。"
@@ -1619,9 +1735,15 @@ def _validate_request_runtime_constraints(
     )
     raise H3BridgeError(
         "生成前の空きRAMが不足しています。"
-        f" 必要目安 {required_free_gib:.1f} GiB / 現在 {readiness.ram_free_gib:.1f} GiB。"
+        f" 必要目安 {required_free_gib:.1f} GiB / {limiting_label} {limiting_free_gib:.1f} GiB。"
         f" {profile_hint}"
     )
+
+
+def _generation_poll_interval(running: bool, elapsed_seconds: float) -> float:
+    if not running:
+        return 1.0
+    return 2.0 if elapsed_seconds < 60.0 else 5.0
 
 
 def run_generation(
@@ -1647,6 +1769,7 @@ def run_generation(
     client: ComfyH3Client | None = None
     prompt_id = ""
     terminal = False
+    deferred_cleanup_scheduled = False
     try:
         seed = request.resolved_seed
         workflow = build_workflow(request, prepared, seed=seed)
@@ -1715,25 +1838,36 @@ def run_generation(
                 "elapsed": elapsed,
             }
             if poll_seconds is None:
-                wait_seconds = 5.0 if running else 1.5
+                wait_seconds = _generation_poll_interval(running, elapsed)
             else:
                 wait_seconds = max(0.5, poll_seconds)
             time.sleep(wait_seconds)
     finally:
-        if prompt_id and not terminal and client is not None:
-            try:
-                client.cancel(prompt_id)
-            except H3BridgeError as exc:
-                _LOG.warning("MiniMax H3 job %s could not be cancelled during cleanup: %s", prompt_id, exc)
-            else:
+        try:
+            if prompt_id and not terminal and client is not None:
+                try:
+                    client.cancel(prompt_id)
+                except H3BridgeError as exc:
+                    _LOG.warning("MiniMax H3 job %s could not be cancelled during cleanup: %s", prompt_id, exc)
                 _schedule_deferred_cleanup(client, prompt_id, prepared, runtime_root)
-        if not prompt_id or terminal:
-            cleanup_prepared_media(prepared, runtime_root)
+                deferred_cleanup_scheduled = True
+            if not prompt_id or terminal:
+                cleanup_prepared_media(prepared, runtime_root)
+        finally:
+            if client is not None and not deferred_cleanup_scheduled:
+                try:
+                    client.close()
+                except (OSError, httpx.HTTPError) as exc:
+                    _LOG.warning("MiniMax H3 HTTP client could not be closed: %s", exc)
 
 
 def cancel_generation(prompt_id: str, server_url: str) -> None:
     if prompt_id:
-        ComfyH3Client(server_url).cancel(prompt_id)
+        client = ComfyH3Client(server_url)
+        try:
+            client.cancel(prompt_id)
+        finally:
+            client.close()
 
 
 def list_history(runtime_root: Path | None, output_directory: Path, limit: int = 12) -> list[HistoryItem]:
@@ -1860,10 +1994,27 @@ def cache_history_video(selected: str, items: Sequence[HistoryItem], output_dire
         raise H3BridgeError("選択された履歴ファイルは現在の一覧にありません。")
     if selected_path.parent == output_directory.resolve():
         return os.fspath(selected_path)
-    output_directory.mkdir(parents=True, exist_ok=True)
-    target = output_directory / f"Imported_{selected_path.name}"
-    if not target.exists() or target.stat().st_mtime < selected_path.stat().st_mtime:
-        shutil.copy2(selected_path, target)
+    source_key = hashlib.sha256(
+        os.path.normcase(os.fspath(selected_path)).encode("utf-8")
+    ).hexdigest()[:12]
+    target = output_directory / f"Imported_{source_key}_{selected_path.name}"
+    staged = target.with_name(f".{target.name}.{uuid.uuid4().hex}.part")
+    try:
+        output_directory.mkdir(parents=True, exist_ok=True)
+        source_stat = selected_path.stat()
+        refresh = not target.exists()
+        if not refresh:
+            target_stat = target.stat()
+            refresh = (
+                target_stat.st_size != source_stat.st_size
+                or target_stat.st_mtime_ns < source_stat.st_mtime_ns
+            )
+        if refresh:
+            shutil.copy2(selected_path, staged)
+            os.replace(staged, target)
+    except OSError as exc:
+        staged.unlink(missing_ok=True)
+        raise H3BridgeError(f"履歴動画をプレイヤー用cacheへ準備できません: {exc}") from exc
     return os.fspath(target)
 
 
@@ -1895,6 +2046,26 @@ def readiness_html(
         if readiness.h3_core_optimized and readiness.core_revision
         else "H3 core 未確認"
     )
+    memory_values = [
+        float(value)
+        for value in (readiness.ram_free_gib, readiness.commit_free_gib)
+        if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
+    ]
+    memory_free_gib = min(memory_values) if memory_values else None
+    recommended_required_gib = _estimated_required_free_gib(
+        H3Request(mode=MODE_TEXT, prompt="ready-check"),
+        expected_profile,
+    )
+    memory_low = (
+        readiness.connected
+        and memory_free_gib is not None
+        and memory_free_gib < recommended_required_gib
+    )
+    memory_hint = (
+        "他のアプリを閉じるか、省RAM profileまたは動作確認設定を使ってください。"
+        if expected_profile == RUNTIME_PROFILE_FAST
+        else "他のアプリを閉じるか、動作確認設定を使ってください。"
+    )
     missing_server_files = [
         name for name in MODEL_FILES if not readiness.server_model_files.get(name)
     ] if readiness.connected else []
@@ -1912,6 +2083,11 @@ def readiness_html(
             "「選択設定で再起動」を押してください。"
         )
         if readiness.connected and not profile_matches
+        else (
+            f"backendは準備完了ですが、おすすめ5秒には約 {recommended_required_gib:.1f} GiB の余力が必要です。"
+            f"{memory_hint}"
+        )
+        if memory_low
         else "ローカル音声付き生成の準備ができています。"
     )
     root = os.fspath(readiness.runtime_root) if readiness.runtime_root else "runtime未検出"
@@ -1921,6 +2097,15 @@ def readiness_html(
         if readiness.ram_free_gib is not None and readiness.ram_total_gib is not None
         else "未確認"
     )
+    if readiness.commit_free_gib is not None:
+        ram_detail += f" · commit余力 {readiness.commit_free_gib:.1f} GiB"
+    memory_badge = ""
+    if memory_free_gib is not None:
+        memory_badge = (
+            f'<span data-tone="{"warn" if memory_low else "ready"}" '
+            f'title="{html.escape(ram_detail, quote=True)}">'
+            f'<i></i>RAM余力 {memory_free_gib:.1f} GiB</span>'
+        )
     profile_detail = RUNTIME_PROFILE_LABELS.get(readiness.runtime_profile or "", "未対応の起動設定")
     expected_detail = RUNTIME_PROFILE_LABELS[expected_profile]
     revision_detail = readiness.core_revision or "未確認"
@@ -1935,6 +2120,7 @@ def readiness_html(
         f'<span data-tone="{"ready" if readiness.ck_attention_available else "warn"}"><i></i>{html.escape(attention_text)}</span>'
         f'<span data-tone="{"ready" if readiness.h3_core_optimized else "warn"}" title="{html.escape(revision_detail, quote=True)}"><i></i>{html.escape(core_text)}</span>'
         f'<span data-tone="{"ready" if profile_matches else "warn"}" title="{html.escape(profile_detail, quote=True)}"><i></i>{html.escape(runtime_text)}</span>'
+        f"{memory_badge}"
         f'<span title="ComfyUI {html.escape(readiness.comfy_version or "不明", quote=True)} / comfy-kitchen {html.escape(kitchen_version or "不明", quote=True)}"><i></i>Comfy {html.escape(readiness.comfy_version or "不明")} · Kitchen {html.escape(kitchen_version or "不明")}</span>'
         "</div>"
         f'<p>{html.escape(details)}</p>'
@@ -2053,13 +2239,24 @@ def progress_html(stage: str, message: str, progress: float = 0.0, elapsed: floa
         minutes, seconds = divmod(int(elapsed), 60)
         elapsed_text = f" · {minutes:02d}:{seconds:02d}"
     tone = "ready" if stage == "complete" else "error" if stage == "error" else "active"
+    live_role = "alert" if stage == "error" else "status"
+    if stage == "running":
+        progress_track = (
+            '<div class="h3-progress-track" role="progressbar" aria-label="MiniMax H3 progress" '
+            f'aria-valuetext="{html.escape(message, quote=True)}"><i></i></div>'
+        )
+    else:
+        progress_track = (
+            '<div class="h3-progress-track" role="progressbar" aria-label="MiniMax H3 progress" '
+            f'aria-valuemin="0" aria-valuemax="100" aria-valuenow="{percent}">'
+            f'<i style="width:{percent}%"></i></div>'
+        )
     return (
-        f'<div class="h3-progress" data-tone="{tone}" role="status" aria-live="polite" aria-atomic="true">'
+        f'<div class="h3-progress" data-tone="{tone}" data-stage="{html.escape(stage, quote=True)}" '
+        f'role="{live_role}" aria-live="polite" aria-atomic="true">'
         '<div class="h3-progress-copy">'
         f'<strong>{html.escape(message)}</strong><span>{html.escape(stage.upper())}{elapsed_text}</span></div>'
-        f'<div class="h3-progress-track" role="progressbar" aria-label="MiniMax H3 progress" '
-        f'aria-valuemin="0" aria-valuemax="100" aria-valuenow="{percent}">'
-        f'<i style="width:{percent}%"></i></div></div>'
+        f"{progress_track}</div>"
     )
 
 
