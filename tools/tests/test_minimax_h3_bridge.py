@@ -145,6 +145,10 @@ class MiniMaxH3GeometryTests(unittest.TestCase):
         self.assertNotIn("aria-valuenow", running)
         error = progress_html("error", "入力を確認", 0.0)
         self.assertIn('role="alert"', error)
+        self.assertNotIn('role="alert" aria-live=', error)
+        self.assertIn("エラー", error)
+        validation = progress_html("validation", "入力欄を確認", 0.0)
+        self.assertIn("入力修正待ち", validation)
 
 
 class MiniMaxH3ValidationTests(unittest.TestCase):
@@ -581,8 +585,10 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
         )
         rendered = readiness_html(readiness, RUNTIME_PROFILE_FAST)
         self.assertIn("RAM余力 4.4 GiB", rendered)
-        self.assertIn("おすすめ5秒", rendered)
+        self.assertIn("標準5秒", rendered)
         self.assertIn("commit余力 4.4 GiB", rendered)
+        self.assertGreaterEqual(rendered.count('data-mobile="primary"'), 3)
+        self.assertIn("<dt>Runtime</dt>", rendered)
 
     def test_non_finite_ram_telemetry_is_rejected(self):
         readiness = replace(self.ready_runtime(), ram_free_gib=float("nan"))
@@ -1054,6 +1060,17 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             self.assertNotIn("unsafe&name", rendered)
             self.assertIn("unsafe&amp;name", rendered)
 
+    def test_history_html_uses_captured_file_size_after_the_file_disappears(self):
+        item = HistoryItem(
+            Path("missing.mp4"),
+            1_700_000_000.0,
+            "Forge Neo",
+            5 * 1024**2,
+        )
+        rendered = history_html([item])
+        self.assertIn("5.0 MiB", rendered)
+        self.assertIn("MP4", rendered)
+
     def test_cache_history_rejects_unlisted_selection(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "output"
@@ -1061,6 +1078,17 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             outside.write_bytes(b"video")
             with self.assertRaises(H3BridgeError):
                 cache_history_video(str(outside), [], output)
+
+    def test_cache_history_reports_a_listed_output_deleted_before_loading(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            output.mkdir()
+            video = output / "MiniMax_H3_deleted.mp4"
+            video.write_bytes(b"video")
+            item = HistoryItem(video.resolve(), video.stat().st_mtime, "Forge Neo")
+            video.unlink()
+            with self.assertRaisesRegex(H3BridgeError, "削除されたか、移動"):
+                cache_history_video(str(video), [item], output)
 
     def test_mirror_result_writes_video_and_utf8_metadata_without_bom(self):
         with tempfile.TemporaryDirectory() as temporary:

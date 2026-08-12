@@ -51,6 +51,7 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
             "balanced",
             5.0,
             20,
+            -1,
             "simple",
             "match",
         )
@@ -159,6 +160,47 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
         self.assertIn("invalid runtime", results[-1][0])
         self.assertTrue(results[-1][6]["interactive"])
 
+    def test_cancelled_generation_is_a_non_error_terminal_state(self):
+        def cancelled_updates(*_args, **_kwargs):
+            yield {
+                "stage": "queued",
+                "message": "queued",
+                "progress": 0.12,
+                "prompt_id": "job-1",
+            }
+            raise self.studio.H3GenerationCancelled("生成を停止しました。")
+
+        with mock.patch.object(self.studio, "resolve_runtime_root", return_value=Path("runtime")), mock.patch.object(
+            self.studio,
+            "run_generation",
+            side_effect=cancelled_updates,
+        ):
+            results = list(
+                self.studio._generate(
+                    "runtime",
+                    "http://127.0.0.1:8188",
+                    "fast",
+                    "text",
+                    "prompt",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "16:9",
+                    "preview",
+                    5.0,
+                    20,
+                    -1,
+                    "simple",
+                    "match",
+                )
+            )
+        self.assertIn('data-stage="cancelled"', results[-1][0])
+        self.assertNotIn('data-stage="error"', results[-1][0])
+        self.assertFalse(results[-1][5]["interactive"])
+        self.assertTrue(results[-1][6]["interactive"])
+
     def test_empty_prompt_returns_inline_alert_and_focus_target(self):
         results = list(
             self.studio._generate(
@@ -183,8 +225,27 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
         )
         self.assertEqual(len(results), 2)
         self.assertIn('data-h3-invalid="prompt"', results[-1][7])
+        self.assertIn('data-h3-control="prompt"', results[-1][7])
         self.assertIn('role="alert"', results[-1][7])
         self.assertTrue(results[-1][6]["interactive"])
+
+    def test_validation_only_clears_after_the_value_is_valid(self):
+        prompt_error = '<div data-h3-invalid="prompt">prompt error</div>'
+        self.assertEqual(
+            self.studio._clear_prompt_validation("   ", prompt_error)["__type__"],
+            "update",
+        )
+        self.assertEqual(self.studio._clear_prompt_validation("valid", prompt_error), "")
+
+        keyframe_error = '<div data-h3-invalid="keyframes">keyframe error</div>'
+        self.assertEqual(
+            self.studio._clear_keyframe_validation(None, None, keyframe_error)["__type__"],
+            "update",
+        )
+        self.assertEqual(
+            self.studio._clear_keyframe_validation("first.png", None, keyframe_error),
+            "",
+        )
 
     def test_prompt_action_clears_input_validation(self):
         prompt, validation = self.studio._prompt_camera_updates(
@@ -218,11 +279,84 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
         )
         validation = results[-1][7]
         self.assertIn('data-h3-invalid="settings"', validation)
-        self.assertEqual(self.studio._clear_settings_validation(validation), "")
+        self.assertIn('data-h3-control="seed"', validation)
+        invalid = self.studio._clear_settings_validation(
+            "16:9", "preview", 5.0, 20, -2, "simple", "match", validation
+        )
+        self.assertEqual(invalid["__type__"], "update")
+        self.assertEqual(
+            self.studio._clear_settings_validation(
+                "16:9", "preview", 5.0, 20, -1, "simple", "match", validation
+            ),
+            "",
+        )
         unchanged = self.studio._clear_settings_validation(
-            '<div data-h3-invalid="keyframes">keyframe error</div>'
+            "16:9",
+            "preview",
+            5.0,
+            20,
+            -1,
+            "simple",
+            "match",
+            '<div data-h3-invalid="keyframes">keyframe error</div>',
         )
         self.assertEqual(unchanged["__type__"], "update")
+
+    def test_history_refresh_preserves_a_selection_that_still_exists(self):
+        choices = [("latest", "one.mp4"), ("selected", "two.mp4")]
+        with mock.patch.object(
+            self.studio,
+            "_history_state",
+            return_value=([], "history", choices),
+        ):
+            rendered, selector = self.studio._refresh_history("runtime", "two.mp4")
+        self.assertEqual(rendered, "history")
+        self.assertEqual(selector["value"], "two.mp4")
+
+    def test_history_failure_does_not_turn_a_completed_generation_into_an_error(self):
+        generation_updates = [
+            {
+                "stage": "complete",
+                "message": "complete",
+                "progress": 1.0,
+                "prompt_id": "job-1",
+                "path": "result.mp4",
+            }
+        ]
+        with mock.patch.object(self.studio, "resolve_runtime_root", return_value=Path("runtime")), mock.patch.object(
+            self.studio,
+            "run_generation",
+            return_value=iter(generation_updates),
+        ), mock.patch.object(
+            self.studio,
+            "_history_state",
+            side_effect=self.studio.H3BridgeError("history unavailable"),
+        ):
+            results = list(
+                self.studio._generate(
+                    "runtime",
+                    "http://127.0.0.1:8188",
+                    "fast",
+                    "text",
+                    "prompt",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "16:9",
+                    "preview",
+                    5.0,
+                    20,
+                    -1,
+                    "simple",
+                    "match",
+                )
+            )
+        self.assertEqual(results[-1][1], "result.mp4")
+        self.assertIn('data-stage="complete"', results[-1][0])
+        self.assertIn("history unavailable", results[-1][3])
+        self.assertTrue(results[-1][6]["interactive"])
 
     def test_ui_dependencies_match_fast_manual_update_contract(self):
         readiness = RuntimeReadiness(
@@ -236,7 +370,7 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
             return_value=readiness,
         ), mock.patch.object(
             self.studio,
-            "_history_state",
+            "_initial_history_state",
             return_value=([], self.studio.history_html([]), []),
         ):
             interface = self.studio._build_ui()[0][0]
@@ -252,6 +386,9 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
             for component in config["components"]
             if component.get("props", {}).get("elem_id")
         }
+        self.assertIn("h3-history-load", component_ids)
+        self.assertIn("h3-history-refresh", component_ids)
+        self.assertIn("h3-mobile-action-bar", component_ids)
 
         dependencies = config["dependencies"]
         generate_id = component_ids["h3-generate"]
@@ -280,7 +417,7 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
             for dependency in dependencies
             if any(target[0] == quality_id and target[1] == "input" for target in dependency["targets"])
         )
-        self.assertEqual(len(quality_input["inputs"]), 7)
+        self.assertEqual(len(quality_input["inputs"]), 8)
         self.assertEqual(len(quality_input["outputs"]), 3)
         self.assertFalse(quality_input["queue"])
 
@@ -299,17 +436,152 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
             for dependency in dependencies
             if any(target[0] == seed_id and target[1] == "input" for target in dependency["targets"])
         )
-        self.assertEqual(len(seed_input["inputs"]), 1)
+        self.assertEqual(len(seed_input["inputs"]), 8)
         self.assertEqual(len(seed_input["outputs"]), 1)
         self.assertFalse(seed_input["queue"])
+
+        prompt_id = component_ids["h3-prompt"]
+        prompt_input = next(
+            dependency
+            for dependency in dependencies
+            if any(target[0] == prompt_id and target[1] == "input" for target in dependency["targets"])
+        )
+        self.assertEqual(len(prompt_input["inputs"]), 2)
+
+        refresh_id = component_ids["h3-history-refresh"]
+        history_refresh = next(
+            dependency
+            for dependency in dependencies
+            if any(target[0] == refresh_id and target[1] == "click" for target in dependency["targets"])
+        )
+        self.assertEqual(len(history_refresh["inputs"]), 2)
+
+        runtime_functions = [
+            function
+            for function in interface.fns.values()
+            if function.name
+            in {
+                "_connect_runtime_updates",
+                "_restart_runtime_updates",
+                "_rescan_runtime_updates",
+            }
+        ]
+        self.assertEqual(len(runtime_functions), 4)
+        for function in runtime_functions:
+            self.assertEqual(function.concurrency_id, "h3-runtime-control")
+            self.assertEqual(function.concurrency_limit, 1)
+            self.assertEqual(len(function.outputs), 5)
+
+    def test_runtime_operation_disables_and_restores_all_runtime_controls(self):
+        callback = mock.Mock(return_value="ready")
+        updates = list(
+            self.studio._runtime_operation(
+                callback,
+                "checking",
+                "runtime",
+                "http://127.0.0.1:8188",
+                "fast",
+            )
+        )
+        self.assertEqual(len(updates), 2)
+        self.assertTrue(all(not update["interactive"] for update in updates[0][1:]))
+        self.assertTrue(all(update["interactive"] for update in updates[1][1:]))
+        self.assertIn("checking", updates[0][0])
+        self.assertEqual(updates[1][0], "ready")
+        callback.assert_called_once_with(
+            "runtime",
+            "http://127.0.0.1:8188",
+            "fast",
+        )
+
+    def test_runtime_operation_restores_controls_after_runtime_failure(self):
+        callback = mock.Mock(side_effect=RuntimeError("runtime unavailable"))
+        updates = list(
+            self.studio._runtime_operation(
+                callback,
+                "checking",
+                "runtime",
+                "http://127.0.0.1:8188",
+                "fast",
+            )
+        )
+        self.assertEqual(len(updates), 2)
+        self.assertTrue(all(update["interactive"] for update in updates[1][1:]))
+        self.assertIn("runtime unavailable", updates[1][0])
+
+    def test_connected_low_ram_profile_is_preserved_in_the_ui(self):
+        readiness = RuntimeReadiness(
+            runtime_root=Path("runtime"),
+            server_url=self.studio.H3_SERVER_URL,
+            connected=True,
+            runtime_profile=self.studio.RUNTIME_PROFILE_LOW_RAM,
+            ram_free_gib=4.0,
+            commit_free_gib=4.0,
+        )
+        with mock.patch.object(self.studio, "_initial_runtime", return_value=Path("runtime")), mock.patch.object(
+            self.studio,
+            "inspect_readiness",
+            return_value=readiness,
+        ), mock.patch.object(
+            self.studio,
+            "_initial_history_state",
+            return_value=([], self.studio.history_html([]), []),
+        ):
+            interface = self.studio._build_ui()[0][0]
+        config = interface.get_config_file()
+        runtime_profile = next(
+            component
+            for component in config["components"]
+            if component.get("props", {}).get("elem_id") == "h3-runtime-profile"
+        )
+        self.assertEqual(runtime_profile["props"]["value"], self.studio.RUNTIME_PROFILE_LOW_RAM)
+
+    def test_initial_preset_uses_quick_when_fast_profile_memory_is_too_low(self):
+        readiness = RuntimeReadiness(
+            runtime_root=Path("runtime"),
+            server_url=self.studio.H3_SERVER_URL,
+            connected=True,
+            runtime_profile=self.studio.RUNTIME_PROFILE_FAST,
+            ram_free_gib=4.0,
+            commit_free_gib=8.0,
+        )
+        self.assertEqual(
+            self.studio._initial_generation_preset(
+                readiness,
+                self.studio.RUNTIME_PROFILE_FAST,
+            ),
+            "quick",
+        )
+        self.assertEqual(
+            self.studio._initial_generation_preset(
+                readiness,
+                self.studio.RUNTIME_PROFILE_LOW_RAM,
+            ),
+            "recommended",
+        )
 
     def test_javascript_exposes_keyboard_and_busy_accessibility_contract(self):
         source = JAVASCRIPT_PATH.read_text(encoding="utf-8")
         self.assertIn('input.name = "h3-generation-mode"', source)
         self.assertIn('event.key === "ArrowRight"', source)
         self.assertIn('event.key === "Home"', source)
-        self.assertIn('generate.setAttribute("aria-keyshortcuts"', source)
-        self.assertIn('studio.setAttribute("aria-busy"', source)
+        self.assertIn('setH3Attribute(generate, "aria-keyshortcuts"', source)
+        self.assertIn('setH3Data(studio, "h3Busy"', source)
+        self.assertIn('validation.dataset.h3Control', source)
+        self.assertIn('labelH3RadioGroup("#h3-mode", "生成モード"', source)
+        self.assertIn("h3-mobile-generate-proxy", source)
+        self.assertIn("if (node && node.textContent !== value)", source)
+        self.assertIn("function scheduleH3StudioChrome()", source)
+        self.assertIn('window.addEventListener("scroll", scheduleH3StudioChrome', source)
+        self.assertIn("candidate.offsetParent !== null", source)
+        self.assertIn("window.setTimeout(function ()", source)
+        self.assertIn('"aria-label", "H3 プロンプト"', source)
+        self.assertIn('"aria-label",\n            "履歴を選択"', source)
+        self.assertIn('window.matchMedia("(max-width: 620px)")', source)
+        self.assertIn("function addH3DescribedBy", source)
+        self.assertIn("function removeH3DescribedBy", source)
+        self.assertEqual(source.count("[aria-describedby~='h3-input-validation-message']"), 2)
+        self.assertIn("generate.tabIndex = visible ? -1 : 0", source)
 
 
 if __name__ == "__main__":

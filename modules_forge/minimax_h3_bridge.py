@@ -130,6 +130,10 @@ class H3BridgeError(RuntimeError):
     """A user-actionable MiniMax H3 bridge error."""
 
 
+class H3GenerationCancelled(H3BridgeError):
+    """The user intentionally stopped an in-flight MiniMax H3 generation."""
+
+
 class H3JobNotFound(H3BridgeError):
     """A ComfyUI job endpoint no longer knows the requested prompt ID."""
 
@@ -272,6 +276,7 @@ class HistoryItem:
     path: Path
     modified_at: float
     source: str
+    size_bytes: int | None = None
 
     @property
     def label(self) -> str:
@@ -1209,7 +1214,7 @@ def _ensure_ready_locked(
         detected = RUNTIME_PROFILE_LABELS.get(readiness.runtime_profile or "", "未対応の起動設定")
         raise H3BridgeError(
             f"H3 backendの起動設定が一致しません（選択: {expected} / 接続中: {detected}）。"
-            " Runtime & models の「選択設定で再起動」を押してください。"
+            " 実行環境とモデルの「選択設定で再起動」を押してください。"
         )
     if not readiness.ready_for_fl2va:
         required = ("FL2VA", "Qwen3-VL 32B", "Video VAE", "Audio VAE")
@@ -1798,7 +1803,7 @@ def run_generation(
                 if _is_cancelled_job(prompt_id):
                     terminal = True
                     _clear_cancelled_job(prompt_id)
-                    raise H3BridgeError("生成を停止しました。") from None
+                    raise H3GenerationCancelled("生成を停止しました。") from None
                 raise
             status = str(job.get("status") or "pending").lower()
             elapsed = time.monotonic() - started
@@ -1825,7 +1830,7 @@ def run_generation(
             if status in {"cancelled", "canceled"}:
                 terminal = True
                 _clear_cancelled_job(prompt_id)
-                raise H3BridgeError("生成を停止しました。")
+                raise H3GenerationCancelled("生成を停止しました。")
             running = status in {"running", "in_progress"}
             message = "生成中 — RTX 3090 では長時間かかる場合があります" if running else "キューで待機しています"
             progress = min(0.88, 0.16 + elapsed / 7200.0) if running else 0.13
@@ -1874,15 +1879,36 @@ def list_history(runtime_root: Path | None, output_directory: Path, limit: int =
     found: dict[Path, HistoryItem] = {}
     if output_directory.is_dir():
         for path in output_directory.glob("MiniMax_H3_*.mp4"):
-            resolved = path.resolve()
-            found[resolved] = HistoryItem(resolved, path.stat().st_mtime, "Forge Neo")
+            try:
+                resolved = path.resolve()
+                file_stat = path.stat()
+            except OSError:
+                continue
+            found[resolved] = HistoryItem(
+                resolved,
+                file_stat.st_mtime,
+                "Forge Neo",
+                file_stat.st_size,
+            )
     if runtime_root is not None:
         runtime_output = runtime_root / "output" / "video"
         if runtime_output.is_dir():
             for pattern in ("*MiniMax*H3*.mp4", "*minimax*h3*.mp4"):
                 for path in runtime_output.glob(pattern):
-                    resolved = path.resolve()
-                    found.setdefault(resolved, HistoryItem(resolved, path.stat().st_mtime, "ComfyUI"))
+                    try:
+                        resolved = path.resolve()
+                        file_stat = path.stat()
+                    except OSError:
+                        continue
+                    found.setdefault(
+                        resolved,
+                        HistoryItem(
+                            resolved,
+                            file_stat.st_mtime,
+                            "ComfyUI",
+                            file_stat.st_size,
+                        ),
+                    )
     return sorted(found.values(), key=lambda item: item.modified_at, reverse=True)[:limit]
 
 
@@ -1894,13 +1920,17 @@ def history_html(items: Sequence[HistoryItem]) -> str:
         )
     rows = []
     for item in items[:6]:
-        size_mib = item.path.stat().st_size / 1024**2
+        size_text = (
+            f"{item.size_bytes / 1024**2:.1f} MiB"
+            if item.size_bytes is not None
+            else "サイズ不明"
+        )
         rows.append(
             '<div class="h3-history-row">'
-            '<span class="h3-history-thumb" aria-hidden="true">▶</span>'
+            '<span class="h3-history-thumb" aria-hidden="true">MP4</span>'
             '<span class="h3-history-copy">'
             f'<strong>{html.escape(item.path.stem)}</strong>'
-            f'<small>{html.escape(item.label.split(" · ", 1)[0])} · {size_mib:.1f} MiB · {html.escape(item.source)}</small>'
+            f'<small>{html.escape(item.label.split(" · ", 1)[0])} · {size_text} · {html.escape(item.source)}</small>'
             "</span></div>"
         )
     return '<div class="h3-history-list">' + "".join(rows) + "</div>"
@@ -1993,6 +2023,8 @@ def cache_history_video(selected: str, items: Sequence[HistoryItem], output_dire
     if selected_path not in allowed:
         raise H3BridgeError("選択された履歴ファイルは現在の一覧にありません。")
     if selected_path.parent == output_directory.resolve():
+        if not selected_path.is_file():
+            raise H3BridgeError("選択された履歴ファイルは削除されたか、移動されています。")
         return os.fspath(selected_path)
     source_key = hashlib.sha256(
         os.path.normcase(os.fspath(selected_path)).encode("utf-8")
@@ -2084,7 +2116,7 @@ def readiness_html(
         )
         if readiness.connected and not profile_matches
         else (
-            f"backendは準備完了ですが、おすすめ5秒には約 {recommended_required_gib:.1f} GiB の余力が必要です。"
+            f"backendは準備完了ですが、標準5秒には約 {recommended_required_gib:.1f} GiB の余力が必要です。"
             f"{memory_hint}"
         )
         if memory_low
@@ -2103,6 +2135,7 @@ def readiness_html(
     if memory_free_gib is not None:
         memory_badge = (
             f'<span data-tone="{"warn" if memory_low else "ready"}" '
+            'data-mobile="primary" '
             f'title="{html.escape(ram_detail, quote=True)}">'
             f'<i></i>RAM余力 {memory_free_gib:.1f} GiB</span>'
         )
@@ -2112,14 +2145,14 @@ def readiness_html(
     return (
         '<div class="h3-runtime-card" role="status" aria-live="polite" aria-atomic="true">'
         '<div class="h3-runtime-badges">'
-        f'<span data-tone="{connected_tone}"><i></i>{html.escape(connected_text)}</span>'
+        f'<span data-tone="{connected_tone}" data-mobile="primary"><i></i>{html.escape(connected_text)}</span>'
         f'<span title="{html.escape(gpu_detail, quote=True)}"><i></i>{html.escape(gpu)}</span>'
         f'<span data-tone="{"ready" if files_ready == total_files else "warn"}"><i></i>Files {files_ready}/{total_files}</span>'
         f'<span data-tone="{"ready" if server_files_ready == server_files_total else "warn"}"><i></i>Backend {server_files_ready}/{server_files_total}</span>'
         f'<span data-tone="{"ready" if readiness.connected and not readiness.missing_nodes else "warn"}"><i></i>{html.escape(node_text)}</span>'
         f'<span data-tone="{"ready" if readiness.ck_attention_available else "warn"}"><i></i>{html.escape(attention_text)}</span>'
         f'<span data-tone="{"ready" if readiness.h3_core_optimized else "warn"}" title="{html.escape(revision_detail, quote=True)}"><i></i>{html.escape(core_text)}</span>'
-        f'<span data-tone="{"ready" if profile_matches else "warn"}" title="{html.escape(profile_detail, quote=True)}"><i></i>{html.escape(runtime_text)}</span>'
+        f'<span data-tone="{"ready" if profile_matches else "warn"}" data-mobile="primary" title="{html.escape(profile_detail, quote=True)}"><i></i>{html.escape(runtime_text)}</span>'
         f"{memory_badge}"
         f'<span title="ComfyUI {html.escape(readiness.comfy_version or "不明", quote=True)} / comfy-kitchen {html.escape(kitchen_version or "不明", quote=True)}"><i></i>Comfy {html.escape(readiness.comfy_version or "不明")} · Kitchen {html.escape(kitchen_version or "不明")}</span>'
         "</div>"
@@ -2131,8 +2164,8 @@ def readiness_html(
         f'<dt>選択中profile</dt><dd>{html.escape(expected_detail)}</dd>'
         f'<dt>ComfyUI / Kitchen</dt><dd>{html.escape(readiness.comfy_version or "不明")} / {html.escape(kitchen_version or "不明")}</dd>'
         f'<dt>Core revision</dt><dd><code>{html.escape(revision_detail)}</code></dd>'
+        f'<dt>Runtime</dt><dd><code title="{html.escape(root, quote=True)}">{html.escape(root)}</code></dd>'
         '</dl></details>'
-        f'<code title="{html.escape(root, quote=True)}">{html.escape(root)}</code>'
         "</div>"
     )
 
@@ -2213,13 +2246,13 @@ def settings_summary_html(
         elif quality == "native":
             note = "Native最終出力です。RTX 3090では生成時間とRAM使用量が大きく増えます。"
         elif workload >= 5.0:
-            note = "非常に重い設定です。まず「おすすめ」で構図と音を確認してください。"
+            note = "非常に重い設定です。まず「標準」で構図と音を確認してください。"
         elif workload >= 2.0:
             note = "重い設定です。RTX 3090では生成時間が大きく伸びます。"
         elif workload < 0.75:
             note = "高速な動作確認向けです。解像度は低くなります。"
         elif official_preview:
-            note = "公式Fast Preview相当のおすすめ設定です。"
+            note = "公式Fast Preview相当の標準設定です。"
         else:
             note = "H3の32pxキャンバスと17-frameグリッドへ整列済みです。"
         return (
@@ -2238,8 +2271,20 @@ def progress_html(stage: str, message: str, progress: float = 0.0, elapsed: floa
     if elapsed is not None:
         minutes, seconds = divmod(int(elapsed), 60)
         elapsed_text = f" · {minutes:02d}:{seconds:02d}"
+    stage_labels = {
+        "idle": "待機中",
+        "validation": "入力修正待ち",
+        "prepare": "準備中",
+        "queued": "キュー待ち",
+        "running": "生成中",
+        "complete": "完了",
+        "cancelled": "停止済み",
+        "error": "エラー",
+        "active": "処理中",
+    }
+    stage_label = stage_labels.get(stage, stage)
     tone = "ready" if stage == "complete" else "error" if stage == "error" else "active"
-    live_role = "alert" if stage == "error" else "status"
+    live_attributes = 'role="alert"' if stage == "error" else 'role="status" aria-live="polite"'
     if stage == "running":
         progress_track = (
             '<div class="h3-progress-track" role="progressbar" aria-label="MiniMax H3 progress" '
@@ -2253,19 +2298,19 @@ def progress_html(stage: str, message: str, progress: float = 0.0, elapsed: floa
         )
     return (
         f'<div class="h3-progress" data-tone="{tone}" data-stage="{html.escape(stage, quote=True)}" '
-        f'role="{live_role}" aria-live="polite" aria-atomic="true">'
+        f'{live_attributes} aria-atomic="true">'
         '<div class="h3-progress-copy">'
-        f'<strong>{html.escape(message)}</strong><span>{html.escape(stage.upper())}{elapsed_text}</span></div>'
+        f'<strong>{html.escape(message)}</strong><span>{html.escape(stage_label)}{elapsed_text}</span></div>'
         f"{progress_track}</div>"
     )
 
 
 def append_prompt_section(prompt: str, section: str) -> str:
     templates = {
-        "camera": "Camera: slow controlled push-in, stable composition, natural motion.",
-        "dialogue": 'Dialogue: 「」 spoken naturally with accurate lip sync.',
-        "sfx": "SFX: spatially precise environmental sound and tactile movement details.",
-        "music": "Music: restrained cinematic score that follows the edit and resolves cleanly.",
+        "camera": "Camera: ゆっくり安定したプッシュイン。自然な動きと明確な構図。",
+        "dialogue": 'Dialogue: 「」を自然に発話。正確なリップシンク。',
+        "sfx": "SFX: 空間が伝わる環境音と、動きに同期した細かな効果音。",
+        "music": "Music: 編集の流れに寄り添い、最後にきれいに収束する控えめな劇伴。",
     }
     addition = templates.get(section)
     if addition is None:
@@ -2280,13 +2325,13 @@ def prompt_template(prompt: str) -> str:
     prompt = (prompt or "").strip()
     if any(marker in prompt for marker in ("Scene:", "Camera:", "Audio:")):
         return prompt
-    scene = prompt or "Describe the subject, environment, look, and intended action."
+    scene = prompt or "主役、場所、画の質感、起こしたい動きを書いてください。"
     return (
         f"Scene: {scene}\n\n"
         "Shot plan:\n"
-        "[0s-2s] Establish the subject and environment.\n"
-        "[2s-4s] Develop the primary action with clear continuity.\n"
-        "[4s-end] Resolve on a deliberate final image.\n\n"
-        "Camera: describe framing, lens, movement, and cuts.\n"
-        "Audio: describe dialogue, ambience, sound effects, and music in sync with the shots."
+        "[0s-2s] 主役と場所を一目で伝える。\n"
+        "[2s-4s] 連続性を保ちながら中心の動きを展開する。\n"
+        "[4s-end] 意図のある最後の画で締める。\n\n"
+        "Camera: 構図、レンズ感、カメラ移動、カットを書く。\n"
+        "Audio: 台詞、環境音、効果音、音楽をショットと同じ時系列で書く。"
     )

@@ -12,7 +12,7 @@ Forge Neo からローカルの ComfyUI MiniMax H3 runtime を操作する専用
 - `minimax_h3_audio_vae_fp32.safetensors`
 - 参照素材モードでは `minimax_h3_ref2va_pruned_int8_convrot.safetensors`
 
-Forge Neo は `forge_neo_model_paths.yaml` からモデルを持つ ComfyUI runtime を自動検出します。見つからない場合は H3 Studio の `Runtime & models` で ComfyUI フォルダーを指定してください。
+Forge Neo は `forge_neo_model_paths.yaml` からモデルを持つ ComfyUI runtime を自動検出します。見つからない場合は H3 Studio の `実行環境とモデル` で ComfyUI フォルダーを指定してください。
 
 素材保護のため、runtime はローカルディスク上に限定されます。UNC・ネットワークドライブ・外部URLは拒否し、接続中のloopback processが選択したComfyUIフォルダーそのものか、さらにloaderが5つのH3 modelを公開しているかを生成前に確認します。
 
@@ -23,9 +23,9 @@ Forge Neo は `forge_neo_model_paths.yaml` からモデルを持つ ComfyUI runt
 3. 映像のショット、カメラ、台詞、効果音、音楽を同じプロンプトへ記述します。
 4. Aspect、Quality、Duration を選択します。Duration は自動で H3 の `17k+5` frame grid に揃います。
 5. `映像＋音声を生成`を押します。backend が停止中なら、設定済みのローカル runtime を自動起動します。
-6. 完成した MP4 は `outputs/minimax_h3` に保存され、Recent generations から再表示できます。
+6. 完成した MP4 は `outputs/minimax_h3` に保存され、`最近の生成` から再表示できます。
 
-生成設定は、まず `動作確認`、通常は `おすすめ`、完成版だけ `最終出力` を選ぶと迷いません。3つともH3の公式20 Stepsを維持し、解像度だけで速度と品質を切り替えます。設定カードの「相対負荷」は `おすすめ / 5秒 / 20 Steps` を1.00倍とした比較値で、所要時間の予測ではありません。
+生成設定は、まず `動作確認`、通常は `標準`、完成版だけ `高品質` を選ぶと迷いません。3つともH3の公式20 Stepsを維持し、解像度だけで速度と品質を切り替えます。設定カードの「相対負荷」は `標準 / 5秒 / 20 Steps` を1.00倍とした比較値で、所要時間の予測ではありません。
 
 ## 高速・省メモリ構成
 
@@ -48,7 +48,7 @@ Comfy Kitchen INT8 attentionはH3ワークフロー内だけに限定してい�
 
 この構成には、公式coreのH3 video VAE chunked I/OとQ/K/V peak-memory修正も含まれます。起動前にローカルGit revisionが最低commit `62b3c94bd45154f6486c7abf1b9efcacee96ea69` を含むことを検査し、版番号だけではready扱いしません。モデルは従来どおり公式のINT8 ConvRot DiTとNVFP4-AWQ text encoderを使い、互換性未検証のthird-party INT4/GGUF、generic FP8、Torch Compileは自動適用しません。
 
-参照素材では `<Picture 1>`、`<Video 1>`、`<Audio 1>` のように画面へ表示されたタグを Prompt へ記述します。未使用・未知・表記違いのタグは生成前にエラーとして案内します。参照動画は2〜15秒・24fpsへ揃えてください。音声だけの参照は H3 の入力条件を満たさないため、画像または動画も追加してください。
+参照素材では `<Picture 1>`、`<Video 1>`、`<Audio 1>` のように画面へ表示されたタグをプロンプトへ記述します。未使用・未知・表記違いのタグは生成前にエラーとして案内します。参照動画は2〜15秒・24fpsへ揃えてください。音声だけの参照は H3 の入力条件を満たさないため、画像または動画も追加してください。
 
 ローカル公開 weight は H3 Base です。Context-IR と 2K Regenerate は MiniMax の外部有料 API 専用で、この extension は呼び出しません。
 
