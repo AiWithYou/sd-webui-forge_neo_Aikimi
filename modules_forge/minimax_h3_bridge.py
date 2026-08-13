@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import ctypes
+import functools
 import hashlib
 import html
 import json
@@ -36,6 +37,8 @@ H3_TEXT_ENCODER = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
 H3_VIDEO_VAE = "minimax_h3_video_vae_fp16.safetensors"
 H3_AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
 H3_MINIMUM_COMFY_COMMIT = "62b3c94bd45154f6486c7abf1b9efcacee96ea69"
+H3_HISTORY_METADATA_MAX_BYTES = 1024 * 1024
+H3_STATUS_POLL_MAX_FAILURES = 3
 
 RUNTIME_PROFILE_FAST = "fast"
 RUNTIME_PROFILE_LOW_RAM = "low_ram"
@@ -122,6 +125,8 @@ _PROCESS_LOCK = threading.Lock()
 _RUNTIME_LIFECYCLE_LOCK = threading.RLock()
 _CANCELLED_JOB_LOCK = threading.Lock()
 _CANCELLED_JOB_IDS: set[str] = set()
+_ACTIVE_GENERATION_LOCK = threading.Lock()
+_ACTIVE_GENERATION_IDS: set[str] = set()
 _LOG = logging.getLogger(__name__)
 _TERMINAL_JOB_STATUSES = {"completed", "success", "failed", "error", "cancelled", "canceled"}
 
@@ -190,6 +195,21 @@ def _is_cancelled_job(prompt_id: str) -> bool:
 def _clear_cancelled_job(prompt_id: str) -> None:
     with _CANCELLED_JOB_LOCK:
         _CANCELLED_JOB_IDS.discard(prompt_id)
+
+
+def _mark_active_generation(prompt_id: str) -> None:
+    with _ACTIVE_GENERATION_LOCK:
+        _ACTIVE_GENERATION_IDS.add(prompt_id)
+
+
+def _clear_active_generation(prompt_id: str) -> None:
+    with _ACTIVE_GENERATION_LOCK:
+        _ACTIVE_GENERATION_IDS.discard(prompt_id)
+
+
+def _active_generation_count() -> int:
+    with _ACTIVE_GENERATION_LOCK:
+        return len(_ACTIVE_GENERATION_IDS)
 
 
 @dataclass(frozen=True)
@@ -287,9 +307,9 @@ class HistoryItem:
 def snap_h3_frames(seconds: float) -> int:
     try:
         seconds = float(seconds)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise H3BridgeError("長さは秒数で指定してください。") from exc
-    if not H3_MIN_SECONDS <= seconds <= H3_MAX_SECONDS:
+    if not math.isfinite(seconds) or not H3_MIN_SECONDS <= seconds <= H3_MAX_SECONDS:
         raise H3BridgeError("MiniMax H3 の長さは 5〜15 秒で指定してください。")
     requested = max(5, int(seconds * H3_FPS + 0.5))
     return requested + (5 - requested % 17) % 17
@@ -334,9 +354,14 @@ def validate_request(request: H3Request) -> None:
         raise H3BridgeError("プロンプトが長すぎます。20,000文字以内にしてください。")
     dimensions_for(request.aspect, request.quality)
     snap_h3_frames(request.duration_seconds)
-    if not 1 <= int(request.steps) <= 100:
+    try:
+        steps = int(request.steps)
+        seed = int(request.seed)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise H3BridgeError("Steps と Seed は有限の整数で指定してください。") from exc
+    if not 1 <= steps <= 100:
         raise H3BridgeError("Steps は 1〜100 で指定してください。")
-    if int(request.seed) < -1 or int(request.seed) >= 2**63:
+    if seed < -1 or seed >= 2**63:
         raise H3BridgeError("Seed は -1、または 0〜2^63-1 で指定してください。")
     if request.scheduler not in {"simple", "beta", "normal"}:
         raise H3BridgeError("Scheduler は simple / beta / normal から選択してください。")
@@ -838,8 +863,12 @@ class ComfyH3Client:
 
     def cancel(self, prompt_id: str) -> None:
         if prompt_id:
-            self._request_json(f"/api/jobs/{urllib.parse.quote(prompt_id)}/cancel", {})
             _mark_cancelled_job(prompt_id)
+            try:
+                self._request_json(f"/api/jobs/{urllib.parse.quote(prompt_id)}/cancel", {})
+            except H3BridgeError:
+                _clear_cancelled_job(prompt_id)
+                raise
 
 
 def _queue_counts(server_url: str) -> tuple[int, int]:
@@ -848,6 +877,19 @@ def _queue_counts(server_url: str) -> tuple[int, int]:
         return client.queue_counts()
     finally:
         client.close()
+
+
+def _server_api_responding(server_url: str) -> bool:
+    client: ComfyH3Client | None = None
+    try:
+        client = ComfyH3Client(server_url, timeout=1.0)
+        client.system_stats()
+        return True
+    except H3BridgeError:
+        return False
+    finally:
+        if client is not None:
+            client.close()
 
 
 def _format_comfy_error(value: Any) -> str:
@@ -986,6 +1028,7 @@ def start_runtime(
     log_directory: Path,
     runtime_profile: str = RUNTIME_PROFILE_FAST,
     wait_seconds: float = 120.0,
+    initial_readiness: RuntimeReadiness | None = None,
 ) -> RuntimeReadiness:
     global _MANAGED_PROCESS, _MANAGED_PROCESS_IDENTITY
     runtime_root = resolve_runtime_root(runtime_root)
@@ -996,7 +1039,21 @@ def start_runtime(
     port = parsed.port or 80
     identity = (runtime_root, normalized_url)
 
-    current = inspect_readiness(runtime_root, normalized_url)
+    if initial_readiness is None:
+        current = inspect_readiness(runtime_root, normalized_url)
+    else:
+        try:
+            initial_root = (
+                resolve_runtime_root(initial_readiness.runtime_root)
+                if initial_readiness.runtime_root is not None
+                else None
+            )
+            initial_url = normalize_loopback_url(initial_readiness.server_url)
+        except H3BridgeError as exc:
+            raise H3BridgeError(f"H3 backendの事前確認結果が不正です: {exc}") from exc
+        if initial_root is None or not _same_local_path(initial_root, runtime_root) or initial_url != normalized_url:
+            raise H3BridgeError("H3 backendの事前確認結果が、選択中のruntimeまたはURLと一致しません。")
+        current = initial_readiness
     if current.connected:
         return current
     listening_root = server_runtime_root(normalized_url)
@@ -1043,6 +1100,8 @@ def start_runtime(
                 f"ComfyUI が起動直後に終了しました。ログを確認してください: {stderr_path}"
             )
         time.sleep(1.0)
+        if not _server_api_responding(normalized_url):
+            continue
         last = inspect_readiness(runtime_root, normalized_url)
         if last.connected:
             return last
@@ -1078,6 +1137,11 @@ def _restart_runtime_locked(
     global _MANAGED_PROCESS, _MANAGED_PROCESS_IDENTITY
     runtime_root = resolve_runtime_root(runtime_root)
     normalized_url = normalize_loopback_url(server_url)
+    active_generations = _active_generation_count()
+    if active_generations:
+        raise H3BridgeError(
+            f"Forge Neoが生成結果を処理中のため再起動しません（処理中 {active_generations}件）。"
+        )
     listening_root = server_runtime_root(normalized_url)
     if listening_root is None:
         return start_runtime(
@@ -1170,31 +1234,24 @@ def restart_runtime(
     wait_seconds: float = 120.0,
 ) -> RuntimeReadiness:
     with _RUNTIME_LIFECYCLE_LOCK:
-        return _restart_runtime_locked(
+        readiness = _restart_runtime_locked(
             runtime_root,
             server_url,
             log_directory,
             runtime_profile=runtime_profile,
             wait_seconds=wait_seconds,
         )
+        return validate_readiness(readiness, runtime_profile)
 
 
-def _ensure_ready_locked(
-    runtime_root: Path,
-    server_url: str,
-    log_directory: Path,
+def validate_readiness(
+    readiness: RuntimeReadiness,
     runtime_profile: str = RUNTIME_PROFILE_FAST,
 ) -> RuntimeReadiness:
     if runtime_profile not in RUNTIME_PROFILES:
         raise H3BridgeError(f"未対応のH3 runtime profileです: {runtime_profile}")
-    readiness = inspect_readiness(runtime_root, server_url)
     if not readiness.connected:
-        readiness = start_runtime(
-            runtime_root,
-            server_url,
-            log_directory,
-            runtime_profile=runtime_profile,
-        )
+        raise H3BridgeError(readiness.error or "H3 backendへ接続できません。")
     if readiness.missing_nodes:
         raise H3BridgeError("ComfyUI に H3 必須ノードがありません: " + ", ".join(readiness.missing_nodes))
     if not readiness.h3_core_optimized:
@@ -1229,6 +1286,26 @@ def _ensure_ready_locked(
     return readiness
 
 
+def _ensure_ready_locked(
+    runtime_root: Path,
+    server_url: str,
+    log_directory: Path,
+    runtime_profile: str = RUNTIME_PROFILE_FAST,
+) -> RuntimeReadiness:
+    if runtime_profile not in RUNTIME_PROFILES:
+        raise H3BridgeError(f"未対応のH3 runtime profileです: {runtime_profile}")
+    readiness = inspect_readiness(runtime_root, server_url)
+    if not readiness.connected:
+        readiness = start_runtime(
+            runtime_root,
+            server_url,
+            log_directory,
+            runtime_profile=runtime_profile,
+            initial_readiness=readiness,
+        )
+    return validate_readiness(readiness, runtime_profile)
+
+
 def ensure_ready(
     runtime_root: Path,
     server_url: str,
@@ -1258,7 +1335,14 @@ def _validate_media_path(path_value: str, expected: str) -> Path:
     return path
 
 
-def _probe_media(path: Path) -> tuple[float, bool, float | None]:
+@functools.lru_cache(maxsize=64)
+def _probe_media_cached(
+    path_value: str,
+    _size_bytes: int,
+    _modified_ns: int,
+    _changed_ns: int,
+) -> tuple[float, bool, float | None]:
+    path = Path(path_value)
     try:
         import av
 
@@ -1273,6 +1357,20 @@ def _probe_media(path: Path) -> tuple[float, bool, float | None]:
     except Exception as exc:
         raise H3BridgeError(f"参照メディアを解析できません: {path.name}: {exc}") from exc
     return duration, has_audio, video_fps
+
+
+def _probe_media(path: Path) -> tuple[float, bool, float | None]:
+    try:
+        resolved = path.resolve()
+        file_stat = resolved.stat()
+    except OSError as exc:
+        raise H3BridgeError(f"参照メディアを確認できません: {path.name}: {exc}") from exc
+    return _probe_media_cached(
+        os.fspath(resolved),
+        file_stat.st_size,
+        file_stat.st_mtime_ns,
+        file_stat.st_ctime_ns,
+    )
 
 
 def _managed_input_root(runtime_root: Path, create: bool = False) -> tuple[Path, Path]:
@@ -1669,6 +1767,7 @@ def mirror_result(
         "steps": request.steps,
         "seed": seed,
         "scheduler": request.scheduler,
+        "ref_image_size": request.ref_image_size,
         "attention_backend": "comfy-kitchen-int8",
         "comfyui_version": readiness.comfy_version,
         "comfy_kitchen_version": readiness.package_versions.get("comfy-kitchen"),
@@ -1761,6 +1860,12 @@ def run_generation(
     poll_seconds: float | None = None,
 ) -> Iterator[dict[str, Any]]:
     validate_request(request)
+    yield {
+        "stage": "runtime",
+        "message": "H3 backendを確認しています。未起動なら自動起動します（初回は1〜2分）。",
+        "progress": 0.03,
+        "prompt_id": "",
+    }
     readiness = ensure_ready(
         runtime_root,
         server_url,
@@ -1788,6 +1893,7 @@ def run_generation(
             _validate_request_runtime_constraints(request, readiness, runtime_profile)
             client = ComfyH3Client(server_url)
             prompt_id = client.submit(workflow)
+            _mark_active_generation(prompt_id)
         yield {
             "stage": "queued",
             "message": "ComfyUI のキューに追加しました",
@@ -1796,6 +1902,7 @@ def run_generation(
             "seed": seed,
         }
         started = time.monotonic()
+        consecutive_poll_failures = 0
         while True:
             try:
                 job = client.job(prompt_id)
@@ -1805,13 +1912,62 @@ def run_generation(
                     _clear_cancelled_job(prompt_id)
                     raise H3GenerationCancelled("生成を停止しました。") from None
                 raise
+            except H3BridgeError as exc:
+                if _is_cancelled_job(prompt_id):
+                    terminal = True
+                    _clear_cancelled_job(prompt_id)
+                    raise H3GenerationCancelled("生成を停止しました。") from None
+                consecutive_poll_failures += 1
+                if consecutive_poll_failures >= H3_STATUS_POLL_MAX_FAILURES:
+                    raise H3BridgeError(
+                        "H3 backendの状態確認に連続して失敗しました。"
+                        f" 最後のエラー: {exc}"
+                    ) from exc
+                elapsed = time.monotonic() - started
+                yield {
+                    "stage": "reconnecting",
+                    "message": (
+                        "H3 backendの応答を待っています"
+                        f"（再試行 {consecutive_poll_failures}/{H3_STATUS_POLL_MAX_FAILURES - 1}）"
+                    ),
+                    "progress": 0.13,
+                    "prompt_id": prompt_id,
+                    "seed": seed,
+                    "elapsed": elapsed,
+                }
+                retry_wait = min(
+                    3.0,
+                    max(0.5, poll_seconds) if poll_seconds is not None else float(consecutive_poll_failures),
+                )
+                time.sleep(retry_wait)
+                continue
+            consecutive_poll_failures = 0
             status = str(job.get("status") or "pending").lower()
             elapsed = time.monotonic() - started
             if status in {"completed", "success"}:
                 terminal = True
                 _clear_cancelled_job(prompt_id)
-                history = client.history(prompt_id)
-                source = extract_history_video(history, prompt_id, runtime_root)
+                history_error: H3BridgeError | None = None
+                for attempt in range(1, H3_STATUS_POLL_MAX_FAILURES + 1):
+                    try:
+                        history = client.history(prompt_id)
+                        source = extract_history_video(history, prompt_id, runtime_root)
+                        break
+                    except H3BridgeError as exc:
+                        history_error = exc
+                        if attempt >= H3_STATUS_POLL_MAX_FAILURES:
+                            raise H3BridgeError(
+                                "完成済みH3ジョブの結果取得に連続して失敗しました。"
+                                f" 最後のエラー: {exc}"
+                            ) from exc
+                        time.sleep(
+                            min(
+                                3.0,
+                                max(0.5, poll_seconds) if poll_seconds is not None else float(attempt),
+                            )
+                        )
+                else:  # pragma: no cover - loop either breaks or raises
+                    raise H3BridgeError(f"完成済みH3ジョブの結果を取得できません: {history_error}")
                 target = mirror_result(source, output_directory, request, prompt_id, seed, readiness)
                 yield {
                     "stage": "complete",
@@ -1859,6 +2015,8 @@ def run_generation(
             if not prompt_id or terminal:
                 cleanup_prepared_media(prepared, runtime_root)
         finally:
+            if prompt_id:
+                _clear_active_generation(prompt_id)
             if client is not None and not deferred_cleanup_scheduled:
                 try:
                     client.close()
@@ -1940,6 +2098,106 @@ def history_choices(items: Sequence[HistoryItem]) -> list[tuple[str, str]]:
     return [(item.label, os.fspath(item.path)) for item in items]
 
 
+def _resolve_history_selection(selected: str, items: Sequence[HistoryItem]) -> Path:
+    try:
+        selected_path = Path(selected).resolve()
+        allowed = {item.path.resolve() for item in items}
+    except (OSError, RuntimeError) as exc:
+        raise H3BridgeError(f"履歴ファイルを確認できません: {exc}") from exc
+    if selected_path not in allowed:
+        raise H3BridgeError("選択された履歴ファイルは現在の一覧にありません。")
+    if not selected_path.is_file():
+        raise H3BridgeError("選択された履歴ファイルは削除されたか、移動されています。")
+    return selected_path
+
+
+def load_history_request(
+    selected: str,
+    items: Sequence[HistoryItem],
+    output_directory: Path,
+) -> H3Request:
+    selected_path = _resolve_history_selection(selected, items)
+    try:
+        output_root = output_directory.resolve()
+    except OSError as exc:
+        raise H3BridgeError(f"Forge Neoの出力フォルダーを確認できません: {exc}") from exc
+    if selected_path.parent != output_root:
+        raise H3BridgeError("設定を復元できるのはForge Neoで保存した生成履歴だけです。")
+
+    try:
+        metadata_path = selected_path.with_suffix(".json").resolve()
+    except OSError as exc:
+        raise H3BridgeError(f"生成履歴の設定ファイルを確認できません: {exc}") from exc
+    if metadata_path.parent != output_root:
+        raise H3BridgeError("生成履歴の設定ファイルがForge Neoの出力フォルダー外を参照しています。")
+    try:
+        metadata_stat = metadata_path.stat()
+        if metadata_stat.st_size > H3_HISTORY_METADATA_MAX_BYTES:
+            raise H3BridgeError("生成履歴の設定ファイルが大きすぎるため読み込めません。")
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except H3BridgeError:
+        raise
+    except FileNotFoundError as exc:
+        raise H3BridgeError("この生成履歴には復元用の設定ファイルがありません。") from exc
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise H3BridgeError(f"生成履歴の設定ファイルを読み込めません: {exc}") from exc
+
+    if not isinstance(metadata, dict) or metadata.get("model") != "MiniMax H3":
+        raise H3BridgeError("生成履歴の設定ファイルがMiniMax H3形式ではありません。")
+    required = {
+        "mode",
+        "prompt",
+        "aspect",
+        "quality",
+        "requested_seconds",
+        "steps",
+        "seed",
+        "scheduler",
+        "ref_image_size",
+    }
+    missing = sorted(required.difference(metadata))
+    if missing:
+        raise H3BridgeError("復元用の設定が不足しています: " + ", ".join(missing))
+    for name in ("mode", "prompt", "aspect", "quality", "scheduler", "ref_image_size"):
+        if not isinstance(metadata[name], str):
+            raise H3BridgeError(f"復元用の設定 {name} の形式が不正です。")
+    if isinstance(metadata["requested_seconds"], bool) or isinstance(metadata["steps"], bool) or isinstance(
+        metadata["seed"], bool
+    ):
+        raise H3BridgeError("復元用の数値設定の形式が不正です。")
+
+    try:
+        request = H3Request(
+            mode=metadata["mode"],
+            prompt=metadata["prompt"],
+            aspect=metadata["aspect"],
+            quality=metadata["quality"],
+            duration_seconds=float(metadata["requested_seconds"]),
+            steps=int(metadata["steps"]),
+            seed=int(metadata["seed"]),
+            scheduler=metadata["scheduler"],
+            ref_image_size=metadata["ref_image_size"],
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise H3BridgeError(f"復元用の数値設定が不正です: {exc}") from exc
+    if request.mode not in MODES:
+        raise H3BridgeError("復元用の生成モードが不正です。")
+    validate_request(
+        H3Request(
+            mode=MODE_TEXT,
+            prompt=request.prompt,
+            aspect=request.aspect,
+            quality=request.quality,
+            duration_seconds=request.duration_seconds,
+            steps=request.steps,
+            seed=request.seed,
+            scheduler=request.scheduler,
+            ref_image_size=request.ref_image_size,
+        )
+    )
+    return request
+
+
 def reference_guide_html(image_values: Any, video_values: Any, audio_values: Any) -> str:
     images = normalize_file_list(image_values)
     videos = normalize_file_list(video_values)
@@ -2018,13 +2276,8 @@ def reference_guide_html(image_values: Any, video_values: Any, audio_values: Any
 
 
 def cache_history_video(selected: str, items: Sequence[HistoryItem], output_directory: Path) -> str:
-    selected_path = Path(selected).resolve()
-    allowed = {item.path.resolve() for item in items}
-    if selected_path not in allowed:
-        raise H3BridgeError("選択された履歴ファイルは現在の一覧にありません。")
+    selected_path = _resolve_history_selection(selected, items)
     if selected_path.parent == output_directory.resolve():
-        if not selected_path.is_file():
-            raise H3BridgeError("選択された履歴ファイルは削除されたか、移動されています。")
         return os.fspath(selected_path)
     source_key = hashlib.sha256(
         os.path.normcase(os.fspath(selected_path)).encode("utf-8")
@@ -2260,12 +2513,18 @@ def settings_summary_html(
             f'<strong>{width} × {height}</strong><span>{frames} frames · {effective:.2f} sec · {int(steps)} steps · 24fps stereo · 相対負荷 {workload:.2f}×</span>'
             f'<small>{html.escape(note)} 相対負荷は所要時間の予測ではありません。</small></div>'
         )
-    except (H3BridgeError, TypeError, ValueError) as exc:
+    except (H3BridgeError, TypeError, ValueError, OverflowError) as exc:
         return f'<div class="h3-settings-summary" data-tone="error" role="alert">{html.escape(str(exc))}</div>'
 
 
 def progress_html(stage: str, message: str, progress: float = 0.0, elapsed: float | None = None) -> str:
-    progress = min(1.0, max(0.0, float(progress)))
+    try:
+        progress = float(progress)
+    except (TypeError, ValueError, OverflowError):
+        progress = 0.0
+    if not math.isfinite(progress):
+        progress = 0.0
+    progress = min(1.0, max(0.0, progress))
     percent = int(progress * 100)
     elapsed_text = ""
     if elapsed is not None:
@@ -2274,9 +2533,11 @@ def progress_html(stage: str, message: str, progress: float = 0.0, elapsed: floa
     stage_labels = {
         "idle": "待機中",
         "validation": "入力修正待ち",
+        "runtime": "接続確認中",
         "prepare": "準備中",
         "queued": "キュー待ち",
         "running": "生成中",
+        "reconnecting": "再接続中",
         "complete": "完了",
         "cancelled": "停止済み",
         "error": "エラー",
@@ -2284,7 +2545,6 @@ def progress_html(stage: str, message: str, progress: float = 0.0, elapsed: floa
     }
     stage_label = stage_labels.get(stage, stage)
     tone = "ready" if stage == "complete" else "error" if stage == "error" else "active"
-    live_attributes = 'role="alert"' if stage == "error" else 'role="status" aria-live="polite"'
     if stage == "running":
         progress_track = (
             '<div class="h3-progress-track" role="progressbar" aria-label="MiniMax H3 progress" '
@@ -2297,8 +2557,8 @@ def progress_html(stage: str, message: str, progress: float = 0.0, elapsed: floa
             f'<i style="width:{percent}%"></i></div>'
         )
     return (
-        f'<div class="h3-progress" data-tone="{tone}" data-stage="{html.escape(stage, quote=True)}" '
-        f'{live_attributes} aria-atomic="true">'
+        f'<div class="h3-progress" data-tone="{tone}" data-stage="{html.escape(stage, quote=True)}"'
+        '>'
         '<div class="h3-progress-copy">'
         f'<strong>{html.escape(message)}</strong><span>{html.escape(stage_label)}{elapsed_text}</span></div>'
         f"{progress_track}</div>"

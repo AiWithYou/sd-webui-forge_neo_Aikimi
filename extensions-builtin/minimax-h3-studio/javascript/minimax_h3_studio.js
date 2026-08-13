@@ -15,7 +15,12 @@
         ],
     };
     const H3_ADVANCED_CONTROLS = new Set(["steps", "seed", "scheduler", "ref_image_size"]);
+    const H3_PROMPT_DRAFT_KEY = "forge-neo:minimax-h3:prompt-draft:v1";
     let h3ChromeFrame = null;
+    let h3PromptDraftTimer = null;
+    let h3LastPromptValue = null;
+    let h3LastProgressAnnouncement = null;
+    let h3InitializationTrigger = null;
 
     function setH3Text(node, value) {
         if (node && node.textContent !== value) node.textContent = value;
@@ -29,6 +34,52 @@
     function setH3Data(node, name, value) {
         const rendered = String(value);
         if (node && node.dataset[name] !== rendered) node.dataset[name] = rendered;
+    }
+
+    function saveH3PromptDraft() {
+        const prompt = gradioApp().querySelector("#h3-prompt textarea");
+        const status = gradioApp().querySelector("#h3-draft-status");
+        if (!prompt) return;
+        try {
+            if (prompt.value) {
+                window.localStorage.setItem(H3_PROMPT_DRAFT_KEY, prompt.value);
+                setH3Text(status, "下書きをこの端末に自動保存済み");
+            } else {
+                window.localStorage.removeItem(H3_PROMPT_DRAFT_KEY);
+                setH3Text(status, "下書きをこの端末に自動保存");
+            }
+        } catch (_error) {
+            setH3Text(status, "下書き保存は利用できません");
+        }
+    }
+
+    function scheduleH3PromptDraftSave() {
+        if (h3PromptDraftTimer !== null) window.clearTimeout(h3PromptDraftTimer);
+        h3PromptDraftTimer = window.setTimeout(function () {
+            h3PromptDraftTimer = null;
+            saveH3PromptDraft();
+        }, 300);
+    }
+
+    function restoreH3PromptDraft() {
+        const prompt = gradioApp().querySelector("#h3-prompt textarea");
+        const status = gradioApp().querySelector("#h3-draft-status");
+        if (!prompt || prompt.value) return;
+        try {
+            const draft = window.localStorage.getItem(H3_PROMPT_DRAFT_KEY);
+            if (!draft) return;
+            const setter = Object.getOwnPropertyDescriptor(
+                window.HTMLTextAreaElement.prototype,
+                "value"
+            )?.set;
+            if (!setter) return;
+            setter.call(prompt, draft);
+            prompt.dispatchEvent(new window.Event("input", { bubbles: true }));
+            setH3Text(status, "前回の下書きを復元しました");
+            syncH3PromptCount();
+        } catch (_error) {
+            setH3Text(status, "下書き保存は利用できません");
+        }
     }
 
     function addH3DescribedBy(node, token) {
@@ -158,6 +209,36 @@
         const count = Array.from(prompt.value).length;
         setH3Text(counter, `${count.toLocaleString()} / 20,000`);
         setH3Data(counter, "tone", count > 20000 ? "error" : count >= 18000 ? "warn" : "ready");
+        if (h3LastPromptValue !== prompt.value) {
+            h3LastPromptValue = prompt.value;
+            scheduleH3PromptDraftSave();
+        }
+    }
+
+    function syncH3ProgressAnnouncement() {
+        const app = gradioApp();
+        const progress = app.querySelector("#h3-progress .h3-progress[data-stage]");
+        const announcer = app.querySelector("#h3-progress-announcer .h3-sr-only");
+        const stage = progress?.dataset.stage;
+        if (!progress || !announcer || !stage) return;
+        const message = progress.querySelector("strong")?.textContent?.trim() ?? "";
+        const signature = `${stage}:${message}`;
+        if (signature === h3LastProgressAnnouncement) return;
+        h3LastProgressAnnouncement = signature;
+        const label = progress.querySelector(".h3-progress-copy span")?.textContent?.trim() ?? stage;
+        setH3Attribute(announcer, "role", stage === "error" ? "alert" : "status");
+        setH3Attribute(announcer, "aria-live", stage === "error" ? "assertive" : "polite");
+        setH3Text(announcer, `${label}: ${message}`);
+    }
+
+    function requestH3Initialization() {
+        if (!isH3StudioActive()) return;
+        const trigger = gradioApp().querySelector(
+            "#h3-initialize-trigger button, button#h3-initialize-trigger"
+        );
+        if (!trigger || trigger.disabled || trigger === h3InitializationTrigger) return;
+        h3InitializationTrigger = trigger;
+        trigger.click();
     }
 
     function labelH3RadioGroup(selector, label, descriptionId) {
@@ -295,8 +376,10 @@
         syncH3Aspect();
         syncH3PresetState();
         syncH3PromptCount();
+        syncH3ProgressAnnouncement();
         syncH3ControlLabels();
         syncH3Validation();
+        requestH3Initialization();
     }
 
     function scheduleH3StudioChrome() {
@@ -317,7 +400,16 @@
             if (event.target.closest?.("#h3-aspect")) syncH3Aspect();
         });
         app.addEventListener("input", function (event) {
-            if (event.target.closest?.("#h3-prompt")) syncH3PromptCount();
+            if (event.target.closest?.("#h3-prompt")) {
+                syncH3PromptCount();
+                const promptValidation = app.querySelector(
+                    "#h3-input-validation [data-h3-invalid='prompt']"
+                );
+                if (promptValidation) {
+                    promptValidation.remove();
+                    syncH3Validation();
+                }
+            }
             if (event.target.closest?.("#h3-aspect")) syncH3Aspect();
         });
         app.addEventListener("click", function (event) {
@@ -354,6 +446,7 @@
         });
         window.addEventListener("scroll", scheduleH3StudioChrome, { passive: true });
         window.addEventListener("resize", scheduleH3StudioChrome, { passive: true });
+        restoreH3PromptDraft();
     }
 
     onUiLoaded(setupH3Studio);

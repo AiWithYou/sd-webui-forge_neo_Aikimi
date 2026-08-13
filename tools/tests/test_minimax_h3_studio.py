@@ -129,6 +129,46 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
         self.assertEqual(results[-1][6]["value"], "映像＋音声を生成")
         self.assertEqual(results[0][7], "")
 
+    def test_generate_uses_specific_runtime_and_reconnect_button_labels(self):
+        generation_updates = [
+            {"stage": "runtime", "message": "runtime", "progress": 0.03, "prompt_id": ""},
+            {
+                "stage": "reconnecting",
+                "message": "retry",
+                "progress": 0.13,
+                "prompt_id": "job-1",
+            },
+        ]
+        with mock.patch.object(self.studio, "resolve_runtime_root", return_value=Path("runtime")), mock.patch.object(
+            self.studio,
+            "run_generation",
+            return_value=iter(generation_updates),
+        ):
+            results = list(
+                self.studio._generate(
+                    "runtime",
+                    "http://127.0.0.1:8188",
+                    "fast",
+                    "text",
+                    "prompt",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "16:9",
+                    "preview",
+                    5.0,
+                    20,
+                    -1,
+                    "simple",
+                    "match",
+                )
+            )
+        self.assertEqual(results[1][6]["value"], "H3 backendを確認中…")
+        self.assertEqual(results[2][6]["value"], "H3 backendへ再接続中…")
+        self.assertFalse(results[-1][6]["interactive"])
+
     def test_generate_callback_restores_button_after_validation_error(self):
         with mock.patch.object(
             self.studio,
@@ -302,6 +342,32 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
         )
         self.assertEqual(unchanged["__type__"], "update")
 
+    def test_non_finite_seed_restores_generate_button_with_inline_error(self):
+        results = list(
+            self.studio._generate(
+                "runtime",
+                "http://127.0.0.1:8188",
+                "fast",
+                "text",
+                "prompt",
+                None,
+                None,
+                None,
+                None,
+                None,
+                "16:9",
+                "preview",
+                5.0,
+                20,
+                float("inf"),
+                "simple",
+                "match",
+            )
+        )
+        self.assertEqual(len(results), 2)
+        self.assertIn('data-h3-control="seed"', results[-1][7])
+        self.assertTrue(results[-1][6]["interactive"])
+
     def test_history_refresh_preserves_a_selection_that_still_exists(self):
         choices = [("latest", "one.mp4"), ("selected", "two.mp4")]
         with mock.patch.object(
@@ -312,6 +378,38 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
             rendered, selector = self.studio._refresh_history("runtime", "two.mp4")
         self.assertEqual(rendered, "history")
         self.assertEqual(selector["value"], "two.mp4")
+
+    def test_history_restore_updates_prompt_settings_and_warns_about_media(self):
+        request = self.studio.H3Request(
+            mode=self.studio.MODE_REFERENCES,
+            prompt="Restored prompt",
+            aspect="9:16",
+            quality="balanced",
+            duration_seconds=7.5,
+            steps=24,
+            seed=42,
+            scheduler="beta",
+            ref_image_size="max",
+        )
+        with mock.patch.object(
+            self.studio,
+            "_history_state",
+            return_value=([mock.Mock()], "history", [("item", "video.mp4")]),
+        ), mock.patch.object(
+            self.studio,
+            "load_history_request",
+            return_value=request,
+        ):
+            updates = self.studio._restore_history_settings("video.mp4", "runtime")
+        self.assertEqual(len(updates), 22)
+        self.assertEqual(updates[0]["value"], self.studio.MODE_REFERENCES)
+        self.assertEqual(updates[1]["value"], "Restored prompt")
+        self.assertTrue(all(updates[index]["value"] is None for index in range(2, 7)))
+        self.assertTrue(updates[8]["visible"])
+        self.assertEqual(updates[11]["value"], "9:16")
+        self.assertEqual(updates[16]["value"], "beta")
+        self.assertEqual(updates[17]["value"], "max")
+        self.assertIn("参照素材はもう一度追加", updates[-1])
 
     def test_history_failure_does_not_turn_a_completed_generation_into_an_error(self):
         generation_updates = [
@@ -368,12 +466,13 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
             self.studio,
             "inspect_readiness",
             return_value=readiness,
-        ), mock.patch.object(
+        ) as inspect, mock.patch.object(
             self.studio,
             "_initial_history_state",
             return_value=([], self.studio.history_html([]), []),
         ):
             interface = self.studio._build_ui()[0][0]
+        inspect.assert_not_called()
         config = interface.get_config_file()
         element_ids = [
             component["props"].get("elem_id")
@@ -387,8 +486,30 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
             if component.get("props", {}).get("elem_id")
         }
         self.assertIn("h3-history-load", component_ids)
+        self.assertIn("h3-history-restore", component_ids)
         self.assertIn("h3-history-refresh", component_ids)
         self.assertIn("h3-mobile-action-bar", component_ids)
+        self.assertIn("h3-initialize-trigger", component_ids)
+        self.assertGreater(
+            element_ids.index("h3-mobile-action-bar"),
+            element_ids.index("h3-generate"),
+        )
+        component_props = {
+            component["props"].get("elem_id"): component["props"]
+            for component in config["components"]
+            if component.get("props", {}).get("elem_id")
+        }
+        for elem_id in (
+            "h3-generate",
+            "h3-history-restore",
+            "h3-runtime-profile",
+            "h3-runtime-path",
+            "h3-server-url",
+            "h3-connect",
+            "h3-restart",
+            "h3-rescan",
+        ):
+            self.assertFalse(component_props[elem_id]["interactive"], elem_id)
 
         dependencies = config["dependencies"]
         generate_id = component_ids["h3-generate"]
@@ -434,7 +555,7 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
         seed_input = next(
             dependency
             for dependency in dependencies
-            if any(target[0] == seed_id and target[1] == "input" for target in dependency["targets"])
+            if any(target[0] == seed_id and target[1] == "change" for target in dependency["targets"])
         )
         self.assertEqual(len(seed_input["inputs"]), 8)
         self.assertEqual(len(seed_input["outputs"]), 1)
@@ -444,9 +565,27 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
         prompt_input = next(
             dependency
             for dependency in dependencies
-            if any(target[0] == prompt_id and target[1] == "input" for target in dependency["targets"])
+            if any(target[0] == prompt_id and target[1] == "blur" for target in dependency["targets"])
         )
         self.assertEqual(len(prompt_input["inputs"]), 2)
+
+        duration_id = component_ids["h3-duration"]
+        duration_input = next(
+            dependency
+            for dependency in dependencies
+            if any(target[0] == duration_id and target[1] == "input" for target in dependency["targets"])
+        )
+        self.assertEqual(len(duration_input["outputs"]), 3)
+
+        initialize_id = component_ids["h3-initialize-trigger"]
+        initialize = next(
+            dependency
+            for dependency in dependencies
+            if any(target[0] == initialize_id and target[1] == "click" for target in dependency["targets"])
+        )
+        self.assertEqual(len(initialize["inputs"]), 4)
+        self.assertEqual(len(initialize["outputs"]), 21)
+        self.assertEqual(initialize["trigger_mode"], "once")
 
         refresh_id = component_ids["h3-history-refresh"]
         history_refresh = next(
@@ -455,6 +594,16 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
             if any(target[0] == refresh_id and target[1] == "click" for target in dependency["targets"])
         )
         self.assertEqual(len(history_refresh["inputs"]), 2)
+
+        restore_id = component_ids["h3-history-restore"]
+        restore = next(
+            dependency
+            for dependency in dependencies
+            if any(target[0] == restore_id and target[1] == "click" for target in dependency["targets"])
+        )
+        self.assertEqual(len(restore["inputs"]), 2)
+        self.assertEqual(len(restore["outputs"]), 22)
+        self.assertFalse(restore["queue"])
 
         runtime_functions = [
             function
@@ -466,7 +615,7 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
                 "_rescan_runtime_updates",
             }
         ]
-        self.assertEqual(len(runtime_functions), 4)
+        self.assertEqual(len(runtime_functions), 3)
         for function in runtime_functions:
             self.assertEqual(function.concurrency_id, "h3-runtime-control")
             self.assertEqual(function.concurrency_limit, 1)
@@ -509,7 +658,7 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
         self.assertTrue(all(update["interactive"] for update in updates[1][1:]))
         self.assertIn("runtime unavailable", updates[1][0])
 
-    def test_connected_low_ram_profile_is_preserved_in_the_ui(self):
+    def test_async_initialization_preserves_connected_low_ram_profile(self):
         readiness = RuntimeReadiness(
             runtime_root=Path("runtime"),
             server_url=self.studio.H3_SERVER_URL,
@@ -518,23 +667,29 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
             ram_free_gib=4.0,
             commit_free_gib=4.0,
         )
-        with mock.patch.object(self.studio, "_initial_runtime", return_value=Path("runtime")), mock.patch.object(
+        with mock.patch.object(
+            self.studio,
+            "resolve_runtime_root",
+            return_value=Path("runtime"),
+        ), mock.patch.object(
             self.studio,
             "inspect_readiness",
             return_value=readiness,
-        ), mock.patch.object(
-            self.studio,
-            "_initial_history_state",
-            return_value=([], self.studio.history_html([]), []),
         ):
-            interface = self.studio._build_ui()[0][0]
-        config = interface.get_config_file()
-        runtime_profile = next(
-            component
-            for component in config["components"]
-            if component.get("props", {}).get("elem_id") == "h3-runtime-profile"
+            updates = self.studio._initial_ui_updates(
+                "runtime",
+                self.studio.H3_SERVER_URL,
+                self.studio.RUNTIME_PROFILE_FAST,
+                "16:9",
+            )
+        self.assertEqual(len(updates), 21)
+        self.assertEqual(updates[1]["value"], self.studio.RUNTIME_PROFILE_LOW_RAM)
+        for update in (*updates[1:9], *updates[11:21]):
+            self.assertTrue(update["interactive"])
+        self.assertIn(
+            'data-h3-preset="recommended"',
+            updates[10],
         )
-        self.assertEqual(runtime_profile["props"]["value"], self.studio.RUNTIME_PROFILE_LOW_RAM)
 
     def test_initial_preset_uses_quick_when_fast_profile_memory_is_too_low(self):
         readiness = RuntimeReadiness(
@@ -582,6 +737,15 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
         self.assertIn("function removeH3DescribedBy", source)
         self.assertEqual(source.count("[aria-describedby~='h3-input-validation-message']"), 2)
         self.assertIn("generate.tabIndex = visible ? -1 : 0", source)
+        self.assertIn("H3_PROMPT_DRAFT_KEY", source)
+        self.assertIn("window.localStorage.setItem", source)
+        self.assertIn("window.localStorage.getItem", source)
+        self.assertIn('prompt.dispatchEvent(new window.Event("input"', source)
+        self.assertIn("function syncH3ProgressAnnouncement()", source)
+        self.assertIn("signature === h3LastProgressAnnouncement", source)
+        self.assertIn("function requestH3Initialization()", source)
+        self.assertIn("trigger === h3InitializationTrigger", source)
+        self.assertIn("h3InitializationTrigger = trigger", source)
 
 
 if __name__ == "__main__":

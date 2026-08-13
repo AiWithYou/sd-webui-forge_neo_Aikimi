@@ -31,6 +31,22 @@
     box-shadow: 0 28px 80px rgba(0, 0, 0, 0.28);
 }
 
+#h3-studio .h3-sr-only {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+#h3-studio #h3-initialize-trigger {
+    display: none !important;
+}
+
 #h3-studio,
 #h3-studio * {
     box-sizing: border-box;
@@ -452,6 +468,11 @@
 #h3-studio #h3-prompt-count {
     flex: 0 0 auto;
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+#h3-studio #h3-draft-status {
+    margin-left: auto;
+    color: #8f949b;
 }
 
 #h3-studio #h3-prompt-count[data-tone="warn"] {
@@ -1147,6 +1168,17 @@
         min-height: 44px !important;
     }
 
+    #h3-studio .h3-prompt-meta {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+
+    #h3-studio #h3-draft-status {
+        order: 3;
+        width: 100%;
+        margin-left: 0;
+    }
+
     #h3-studio .h3-mode-help {
         align-items: flex-start;
         flex-direction: column;
@@ -1188,8 +1220,10 @@
     #h3-studio #h3-runtime-setup summary,
     #h3-studio .h3-runtime-details summary,
     #h3-studio #h3-history-load button,
+    #h3-studio #h3-history-restore button,
     #h3-studio #h3-history-refresh button,
     #h3-studio button#h3-history-load,
+    #h3-studio button#h3-history-restore,
     #h3-studio button#h3-history-refresh {
         min-height: 44px !important;
     }

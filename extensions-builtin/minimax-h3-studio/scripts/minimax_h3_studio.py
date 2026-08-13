@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import math
 import os
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from modules_forge.minimax_h3_bridge import (
     history_html,
     inspect_readiness,
     list_history,
+    load_history_request,
     normalize_file_list,
     progress_html,
     prompt_template,
@@ -122,7 +124,9 @@ def _mode_updates(
         gr.update(visible=mode == MODE_KEYFRAMES),
         gr.update(visible=reference_mode),
         _mode_help_html(mode),
-        gr.update(visible=True) if reference_mode else gr.update(visible=False, value=effective_ref_image_size),
+        gr.update(visible=True, value=effective_ref_image_size)
+        if reference_mode
+        else gr.update(visible=False, value=effective_ref_image_size),
         settings_summary_html(
             aspect,
             quality,
@@ -261,7 +265,7 @@ def _validation_target(request: H3Request) -> str:
     try:
         request.dimensions
         request.frame_count
-    except (H3BridgeError, TypeError, ValueError):
+    except (H3BridgeError, TypeError, ValueError, OverflowError):
         return "settings"
     if not 1 <= int(request.steps) <= 100:
         return "settings"
@@ -356,7 +360,7 @@ def _clear_settings_validation(
             ref_image_size,
         )
         validate_request(request)
-    except (H3BridgeError, TypeError, ValueError):
+    except (H3BridgeError, TypeError, ValueError, OverflowError):
         return gr.update()
     return _clear_validation_targets(current_validation, "settings")
 
@@ -421,12 +425,6 @@ def _restart_runtime(runtime_value: str, server_url: str, runtime_profile: str) 
     try:
         root = resolve_runtime_root(runtime_value)
         readiness = restart_runtime(
-            root,
-            server_url,
-            LOG_DIRECTORY,
-            runtime_profile=runtime_profile,
-        )
-        readiness = ensure_ready(
             root,
             server_url,
             LOG_DIRECTORY,
@@ -551,6 +549,86 @@ def _load_history_video(selected: str, runtime_value: str):
         return gr.update(), progress_html("error", str(exc), 0.0)
 
 
+def _matching_generation_preset(request: H3Request) -> str:
+    for preset in ("quick", "recommended", "final"):
+        quality, duration, steps, scheduler, ref_image_size, _ = generation_preset_values(
+            preset,
+            request.aspect,
+        )
+        if (
+            request.quality == quality
+            and request.duration_seconds == duration
+            and request.steps == steps
+            and request.scheduler == scheduler
+            and request.ref_image_size == ref_image_size
+        ):
+            return preset
+    return "custom"
+
+
+def _restore_history_settings(selected: str, runtime_value: str):
+    try:
+        if not selected:
+            raise H3BridgeError("設定を復元する履歴を選択してください。")
+        items, _, _ = _history_state(runtime_value)
+        request = load_history_request(selected, items, OUTPUT_DIRECTORY)
+    except H3BridgeError as exc:
+        return (*[gr.update() for _ in range(21)], progress_html("error", str(exc), 0.0))
+
+    effective_ref_image_size = request.ref_image_size if request.mode == MODE_REFERENCES else "match"
+    restored_request = H3Request(
+        mode=request.mode,
+        prompt=request.prompt,
+        aspect=request.aspect,
+        quality=request.quality,
+        duration_seconds=request.duration_seconds,
+        steps=request.steps,
+        seed=request.seed,
+        scheduler=request.scheduler,
+        ref_image_size=effective_ref_image_size,
+    )
+    mode_updates = _mode_updates(
+        restored_request.mode,
+        restored_request.aspect,
+        restored_request.quality,
+        restored_request.duration_seconds,
+        restored_request.steps,
+        restored_request.scheduler,
+        restored_request.ref_image_size,
+        "",
+    )
+    preset = _matching_generation_preset(restored_request)
+    message = "履歴からプロンプトと生成設定を復元しました。入力素材は安全のため引き継ぎません。"
+    if restored_request.mode == MODE_KEYFRAMES:
+        message += "開始・終了フレームはもう一度追加してください。"
+    elif restored_request.mode == MODE_REFERENCES:
+        message += "参照素材はもう一度追加してください。"
+    return (
+        gr.update(value=restored_request.mode),
+        gr.update(value=restored_request.prompt),
+        gr.update(value=None),
+        gr.update(value=None),
+        gr.update(value=None),
+        gr.update(value=None),
+        gr.update(value=None),
+        mode_updates[0],
+        mode_updates[1],
+        mode_updates[2],
+        reference_guide_html(None, None, None),
+        gr.update(value=restored_request.aspect),
+        gr.update(value=restored_request.quality),
+        gr.update(value=restored_request.duration_seconds),
+        gr.update(value=restored_request.steps),
+        gr.update(value=restored_request.seed),
+        gr.update(value=restored_request.scheduler),
+        mode_updates[3],
+        mode_updates[4],
+        gr.update(value=_preset_state_html(preset)),
+        "",
+        progress_html("idle", message, 0.0),
+    )
+
+
 def _request_from_ui(
     mode,
     prompt,
@@ -569,15 +647,17 @@ def _request_from_ui(
 ) -> H3Request:
     try:
         duration_value = float(duration)
-    except (TypeError, ValueError) as exc:
+        if not math.isfinite(duration_value):
+            raise ValueError("non-finite duration")
+    except (TypeError, ValueError, OverflowError) as exc:
         raise H3BridgeError("長さは秒数で指定してください。") from exc
     try:
         steps_value = int(steps)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise H3BridgeError("Steps は整数で指定してください。") from exc
     try:
         seed_value = int(seed)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise H3BridgeError("Seed は整数で指定してください。") from exc
     return H3Request(
         mode=str(mode),
@@ -646,7 +726,7 @@ def _generate(
                 ref_image_size,
             )
             validate_request(request)
-        except (H3BridgeError, ValueError, TypeError) as exc:
+        except (H3BridgeError, ValueError, TypeError, OverflowError) as exc:
             target = _validation_target(request) if request is not None else "settings"
             control = _validation_control(request, str(exc), target)
             yield (
@@ -684,8 +764,14 @@ def _generate(
                 interactive=bool(prompt_id) and update["stage"] not in {"complete", "error"}
             )
             generation_finished = update["stage"] in {"complete", "error"}
+            if update["stage"] == "runtime":
+                generate_label = "H3 backendを確認中…"
+            elif update["stage"] == "reconnecting":
+                generate_label = "H3 backendへ再接続中…"
+            else:
+                generate_label = "映像＋音声を生成" if generation_finished else "生成中…"
             generate_update = gr.update(
-                value="映像＋音声を生成" if generation_finished else "生成中…",
+                value=generate_label,
                 interactive=generation_finished,
             )
             yield (
@@ -714,7 +800,7 @@ def _generate(
             gr.update(value="映像＋音声を生成", interactive=True),
             gr.update(),
         )
-    except (H3BridgeError, OSError, ValueError, TypeError) as exc:
+    except (H3BridgeError, OSError, ValueError, TypeError, OverflowError) as exc:
         yield (
             progress_html("error", str(exc), 0.0),
             gr.update(),
@@ -741,16 +827,86 @@ def _cancel(prompt_id: str, server_url: str):
         return progress_html("error", str(exc), 0.0), prompt_id, gr.update(interactive=bool(prompt_id))
 
 
+def _runtime_checking_html() -> str:
+    return (
+        '<div class="h3-runtime-card" data-tone="active" role="status" '
+        'aria-live="polite" aria-atomic="true">'
+        '<div class="h3-runtime-badges"><span><i></i>状態を確認中</span></div>'
+        '<p>H3 Studioを表示しました。backend・モデル・利用可能なメモリを確認しています…</p></div>'
+    )
+
+
+def _initial_ui_updates(
+    runtime_value: str,
+    server_url: str,
+    selected_profile: str,
+    aspect: str,
+):
+    runtime_profile = (
+        selected_profile
+        if selected_profile in {RUNTIME_PROFILE_FAST, RUNTIME_PROFILE_LOW_RAM}
+        else RUNTIME_PROFILE_FAST
+    )
+    try:
+        root = resolve_runtime_root(runtime_value) if runtime_value else None
+        readiness = inspect_readiness(root, server_url)
+        if readiness.runtime_profile in {RUNTIME_PROFILE_FAST, RUNTIME_PROFILE_LOW_RAM}:
+            runtime_profile = readiness.runtime_profile
+        rendered_status = readiness_html(readiness, runtime_profile)
+        initial_preset = _initial_generation_preset(readiness, runtime_profile)
+    except Exception as exc:
+        rendered_status = _status_error(str(exc))
+        initial_preset = "recommended"
+    quality, duration, steps, scheduler, ref_image_size, summary = generation_preset_values(
+        initial_preset,
+        aspect,
+    )
+    return (
+        rendered_status,
+        gr.update(value=runtime_profile, interactive=True),
+        gr.update(interactive=True),
+        gr.update(value=quality, interactive=True),
+        gr.update(value=duration, interactive=True),
+        gr.update(value=steps, interactive=True),
+        gr.update(interactive=True),
+        gr.update(value=scheduler, interactive=True),
+        gr.update(value=ref_image_size, interactive=True),
+        summary,
+        _preset_state_html(initial_preset),
+        gr.update(interactive=True),
+        gr.update(interactive=True),
+        gr.update(interactive=True),
+        gr.update(interactive=True),
+        gr.update(value="映像＋音声を生成", interactive=True),
+        gr.update(interactive=True),
+        gr.update(interactive=True),
+        gr.update(interactive=True),
+        gr.update(interactive=True),
+        gr.update(interactive=True),
+    )
+
+
+def _runtime_profile_pending(runtime_profile: str) -> str:
+    labels = {
+        RUNTIME_PROFILE_FAST: "高速（Async 2）",
+        RUNTIME_PROFILE_LOW_RAM: "省RAM（Async無効）",
+    }
+    label = labels.get(runtime_profile)
+    if label is None:
+        return _status_error(f"未対応のH3 runtime profileです: {runtime_profile}")
+    return (
+        '<div class="h3-runtime-card" data-tone="warn" role="status" '
+        'aria-live="polite" aria-atomic="true">'
+        '<div class="h3-runtime-badges"><span><i></i>再起動待ち</span></div>'
+        f'<p>{html.escape(label)}を選択しました。「選択設定で再起動」で反映してください。</p></div>'
+    )
+
+
 def _build_ui():
     runtime_root = _initial_runtime()
     runtime_value = os.fspath(runtime_root) if runtime_root else ""
-    readiness = inspect_readiness(runtime_root, H3_SERVER_URL)
-    initial_runtime_profile = (
-        readiness.runtime_profile
-        if readiness.runtime_profile in {RUNTIME_PROFILE_FAST, RUNTIME_PROFILE_LOW_RAM}
-        else RUNTIME_PROFILE_FAST
-    )
-    initial_preset = _initial_generation_preset(readiness, initial_runtime_profile)
+    initial_runtime_profile = RUNTIME_PROFILE_FAST
+    initial_preset = "recommended"
     (
         initial_quality,
         initial_duration,
@@ -777,17 +933,8 @@ def _build_ui():
                 """
             )
             runtime_status = gr.HTML(
-                value=readiness_html(readiness, initial_runtime_profile),
+                value=_runtime_checking_html(),
                 elem_id="h3-runtime-status",
-            )
-            gr.HTML(
-                """
-                <nav class="h3-mobile-actions" aria-label="MiniMax H3 生成操作">
-                  <button type="button" id="h3-mobile-generate-proxy">映像＋音声を生成</button>
-                  <button type="button" id="h3-mobile-cancel-proxy">停止</button>
-                </nav>
-                """,
-                elem_id="h3-mobile-action-bar",
             )
 
             with gr.Row(elem_classes=["h3-main-grid"]):
@@ -833,6 +980,7 @@ def _build_ui():
                         )
                         gr.HTML(
                             '<div class="h3-prompt-meta"><span>Ctrl / ⌘ + Enter で生成</span>'
+                            '<span id="h3-draft-status">下書きをこの端末に自動保存</span>'
                             '<span id="h3-prompt-count">0 / 20,000</span></div>',
                             elem_id="h3-prompt-meta",
                         )
@@ -900,16 +1048,19 @@ def _build_ui():
                             quick_preset_button = gr.Button(
                                 "動作確認\n速い・低解像度",
                                 size="sm",
+                                interactive=False,
                                 elem_id="h3-preset-quick",
                             )
                             recommended_preset_button = gr.Button(
                                 "標準\n公式Fast Preview相当",
                                 size="sm",
+                                interactive=False,
                                 elem_id="h3-preset-recommended",
                             )
                             final_preset_button = gr.Button(
                                 "高品質\nNative・重い",
                                 size="sm",
+                                interactive=False,
                                 elem_id="h3-preset-final",
                             )
                         preset_state = gr.HTML(
@@ -921,12 +1072,14 @@ def _build_ui():
                                 choices=["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
                                 value="16:9",
                                 label="アスペクト比",
+                                interactive=False,
                                 elem_id="h3-aspect",
                             )
                             quality = gr.Dropdown(
                                 choices=[(label, value) for value, label in QUALITY_LABELS.items()],
                                 value=initial_quality,
                                 label="解像度・速度",
+                                interactive=False,
                                 elem_id="h3-quality",
                             )
                         duration = gr.Slider(
@@ -935,6 +1088,7 @@ def _build_ui():
                             step=0.5,
                             value=initial_duration,
                             label="長さ（秒）",
+                            interactive=False,
                             elem_id="h3-duration",
                         )
                         settings_summary = gr.HTML(
@@ -950,12 +1104,14 @@ def _build_ui():
                                     step=1,
                                     value=initial_steps,
                                     label="Steps（生成ステップ）",
+                                    interactive=False,
                                     elem_id="h3-steps",
                                 )
                                 seed = gr.Number(
                                     value=-1,
                                     precision=0,
                                     label="Seed（-1 = ランダム）",
+                                    interactive=False,
                                     elem_id="h3-seed",
                                 )
                             with gr.Row():
@@ -967,6 +1123,7 @@ def _build_ui():
                                     ],
                                     value=initial_scheduler,
                                     label="Scheduler（生成方式）",
+                                    interactive=False,
                                     elem_id="h3-scheduler",
                                 )
                                 ref_image_size = gr.Radio(
@@ -976,6 +1133,7 @@ def _build_ui():
                                     ],
                                     value=initial_ref_image_size,
                                     label="参照画像サイズ",
+                                    interactive=False,
                                     visible=False,
                                     elem_id="h3-ref-image-size",
                                 )
@@ -985,6 +1143,7 @@ def _build_ui():
                             "映像＋音声を生成",
                             variant="primary",
                             size="lg",
+                            interactive=False,
                             elem_id="h3-generate",
                             elem_classes=["h3-generate-button"],
                         )
@@ -995,6 +1154,15 @@ def _build_ui():
                             elem_id="h3-cancel",
                             elem_classes=["h3-cancel-button"],
                         )
+                    gr.HTML(
+                        """
+                        <nav class="h3-mobile-actions" aria-label="MiniMax H3 生成操作">
+                          <button type="button" id="h3-mobile-generate-proxy">映像＋音声を生成</button>
+                          <button type="button" id="h3-mobile-cancel-proxy">停止</button>
+                        </nav>
+                        """,
+                        elem_id="h3-mobile-action-bar",
+                    )
 
                 with gr.Column(scale=5, min_width=390, elem_classes=["h3-output"]):
                     gr.HTML(
@@ -1009,8 +1177,17 @@ def _build_ui():
                         elem_classes=["h3-video-stage"],
                     )
                     progress = gr.HTML(
-                        value=progress_html("idle", "準備ができています", 0.0),
+                        value=progress_html(
+                            "idle",
+                            "生成時にH3 backendを確認し、未起動なら自動起動します",
+                            0.0,
+                        ),
                         elem_id="h3-progress",
+                    )
+                    gr.HTML(
+                        '<p class="h3-sr-only" role="status" aria-live="polite" '
+                        'aria-atomic="true"></p>',
+                        elem_id="h3-progress-announcer",
                     )
                     gr.HTML(
                         '<div class="h3-output-note"><span>NATIVE AUDIO</span>'
@@ -1028,12 +1205,18 @@ def _build_ui():
                         )
                         with gr.Row():
                             load_history_button = gr.Button(
-                                "選んだ動画を表示",
+                                "動画を表示",
                                 size="sm",
                                 elem_id="h3-history-load",
                             )
+                            restore_history_button = gr.Button(
+                                "設定を復元",
+                                size="sm",
+                                interactive=False,
+                                elem_id="h3-history-restore",
+                            )
                             refresh_history_button = gr.Button(
-                                "履歴を更新",
+                                "更新",
                                 size="sm",
                                 elem_id="h3-history-refresh",
                             )
@@ -1057,6 +1240,7 @@ def _build_ui():
                     ],
                     value=initial_runtime_profile,
                     label="起動プロファイル",
+                    interactive=False,
                     elem_id="h3-runtime-profile",
                 )
                 gr.Markdown(
@@ -1068,17 +1252,32 @@ def _build_ui():
                         value=runtime_value,
                         label="ComfyUI フォルダー",
                         placeholder=r"H:\path\to\ComfyUI",
+                        interactive=False,
                         elem_id="h3-runtime-path",
                     )
                     server_url = gr.Textbox(
                         value=H3_SERVER_URL,
                         label="ローカルBackend URL",
+                        interactive=False,
                         elem_id="h3-server-url",
                     )
                 with gr.Row():
-                    connect_button = gr.Button("接続 / 起動", variant="primary", elem_id="h3-connect")
-                    restart_button = gr.Button("選択設定で再起動", elem_id="h3-restart")
-                    rescan_button = gr.Button("状態を再確認", elem_id="h3-rescan")
+                    connect_button = gr.Button(
+                        "接続 / 起動",
+                        variant="primary",
+                        interactive=False,
+                        elem_id="h3-connect",
+                    )
+                    restart_button = gr.Button(
+                        "選択設定で再起動",
+                        interactive=False,
+                        elem_id="h3-restart",
+                    )
+                    rescan_button = gr.Button(
+                        "状態を再確認",
+                        interactive=False,
+                        elem_id="h3-rescan",
+                    )
                 gr.HTML(
                     """
                     <div class="h3-license-note">
@@ -1091,6 +1290,42 @@ def _build_ui():
                 )
 
             prompt_id_state = gr.State("")
+            initialize_trigger = gr.Button(
+                "H3 Studioを初期化",
+                elem_id="h3-initialize-trigger",
+            )
+
+        initialize_trigger.click(
+            fn=_initial_ui_updates,
+            inputs=[runtime_path, server_url, runtime_profile, aspect],
+            outputs=[
+                runtime_status,
+                runtime_profile,
+                aspect,
+                quality,
+                duration,
+                steps,
+                seed,
+                scheduler,
+                ref_image_size,
+                settings_summary,
+                preset_state,
+                quick_preset_button,
+                recommended_preset_button,
+                final_preset_button,
+                restore_history_button,
+                generate_button,
+                runtime_path,
+                server_url,
+                connect_button,
+                restart_button,
+                rescan_button,
+            ],
+            show_progress="hidden",
+            trigger_mode="once",
+            concurrency_limit=1,
+            concurrency_id="h3-runtime-control",
+        )
 
         summary_inputs = [aspect, quality, duration, steps, scheduler, ref_image_size]
         mode.change(
@@ -1106,7 +1341,7 @@ def _build_ui():
             ],
             queue=False,
         )
-        prompt.input(
+        prompt.blur(
             fn=_clear_prompt_validation,
             inputs=[prompt, input_validation],
             outputs=[input_validation],
@@ -1182,7 +1417,7 @@ def _build_ui():
             queue=False,
             api_name="h3_apply_final_preset",
         )
-        for component in [quality, duration, steps, scheduler, ref_image_size]:
+        for component in [quality, scheduler, ref_image_size]:
             component.input(
                 fn=_custom_settings_updates,
                 inputs=[*setting_inputs, input_validation],
@@ -1190,7 +1425,15 @@ def _build_ui():
                 queue=False,
                 trigger_mode="always_last",
             )
-        seed.input(
+        for component in [duration, steps]:
+            component.input(
+                fn=_custom_settings_updates,
+                inputs=[*setting_inputs, input_validation],
+                outputs=[settings_summary, preset_state, input_validation],
+                queue=False,
+                trigger_mode="always_last",
+            )
+        seed.change(
             fn=_clear_settings_validation,
             inputs=[*setting_inputs, input_validation],
             outputs=[input_validation],
@@ -1225,14 +1468,12 @@ def _build_ui():
             concurrency_limit=1,
             concurrency_id="h3-runtime-control",
         )
-        runtime_profile.change(
-            fn=_rescan_runtime_updates,
-            inputs=[runtime_path, server_url, runtime_profile],
-            outputs=[runtime_status, connect_button, restart_button, rescan_button, runtime_profile],
-            show_progress="hidden",
+        runtime_profile.input(
+            fn=_runtime_profile_pending,
+            inputs=[runtime_profile],
+            outputs=[runtime_status],
+            queue=False,
             trigger_mode="always_last",
-            concurrency_limit=1,
-            concurrency_id="h3-runtime-control",
         )
         refresh_history_button.click(
             fn=_refresh_history,
@@ -1244,6 +1485,36 @@ def _build_ui():
             fn=_load_history_video,
             inputs=[history_selector, runtime_path],
             outputs=[result_video, progress],
+        )
+        restore_history_button.click(
+            fn=_restore_history_settings,
+            inputs=[history_selector, runtime_path],
+            outputs=[
+                mode,
+                prompt,
+                first_frame,
+                last_frame,
+                reference_images,
+                reference_videos,
+                reference_audios,
+                keyframe_group,
+                reference_group,
+                mode_help,
+                reference_guide,
+                aspect,
+                quality,
+                duration,
+                steps,
+                seed,
+                scheduler,
+                ref_image_size,
+                settings_summary,
+                preset_state,
+                input_validation,
+                progress,
+            ],
+            queue=False,
+            show_progress="hidden",
         )
 
         generate_button.click(

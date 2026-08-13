@@ -28,11 +28,17 @@ from modules_forge.minimax_h3_bridge import (
     RUNTIME_PROFILE_FAST,
     RUNTIME_PROFILE_LOW_RAM,
     RuntimeReadiness,
+    _active_generation_count,
+    _clear_active_generation,
+    _clear_cancelled_job,
     _cleanup_after_terminal,
     _copy_to_comfy_input,
     _generation_poll_interval,
     _is_cancelled_job,
+    _mark_active_generation,
     _mark_cancelled_job,
+    _probe_media,
+    _probe_media_cached,
     _resolve_local_path,
     _runtime_command,
     _validate_request_runtime_constraints,
@@ -50,6 +56,7 @@ from modules_forge.minimax_h3_bridge import (
     history_html,
     inspect_readiness,
     list_history,
+    load_history_request,
     mirror_result,
     normalize_file_list,
     normalize_loopback_url,
@@ -78,9 +85,20 @@ class MiniMaxH3GeometryTests(unittest.TestCase):
             self.assertEqual(snap_h3_frames(seconds) % 17, 5)
 
     def test_duration_rejects_untrained_ui_range(self):
-        for seconds in (4.5, 15.5):
+        for seconds in (4.5, 15.5, float("inf"), float("-inf"), float("nan")):
             with self.subTest(seconds=seconds), self.assertRaises(H3BridgeError):
                 snap_h3_frames(seconds)
+
+    def test_non_finite_steps_and_seed_are_validation_errors(self):
+        for field in ("steps", "seed"):
+            with self.subTest(field=field), self.assertRaises(H3BridgeError):
+                validate_request(
+                    H3Request(
+                        mode=MODE_TEXT,
+                        prompt="A scene with synchronized audio.",
+                        **{field: float("inf")},
+                    )
+                )
 
     def test_every_quality_dimension_is_multiple_of_32(self):
         for quality in ("draft", "preview", "balanced", "native"):
@@ -138,17 +156,28 @@ class MiniMaxH3GeometryTests(unittest.TestCase):
         rendered = progress_html("queued", "待機中", 0.42)
         self.assertIn('role="progressbar"', rendered)
         self.assertIn('aria-valuenow="42"', rendered)
+        self.assertNotIn('aria-live=', rendered)
 
     def test_running_progress_is_indeterminate_and_errors_are_alerts(self):
         running = progress_html("running", "生成中", 0.42)
         self.assertIn('aria-valuetext="生成中"', running)
         self.assertNotIn("aria-valuenow", running)
+        self.assertNotIn('aria-live=', running)
         error = progress_html("error", "入力を確認", 0.0)
-        self.assertIn('role="alert"', error)
-        self.assertNotIn('role="alert" aria-live=', error)
+        self.assertNotIn('role="alert"', error)
+        self.assertNotIn('aria-live=', error)
         self.assertIn("エラー", error)
         validation = progress_html("validation", "入力欄を確認", 0.0)
         self.assertIn("入力修正待ち", validation)
+
+    def test_progress_normalizes_non_finite_values(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                rendered = progress_html("queued", "待機中", value)
+                self.assertIn('aria-valuenow="0"', rendered)
+                self.assertIn('style="width:0%"', rendered)
+                self.assertNotIn("nan", rendered.lower())
+                self.assertNotIn("inf", rendered.lower())
 
 
 class MiniMaxH3ValidationTests(unittest.TestCase):
@@ -210,6 +239,26 @@ class MiniMaxH3ValidationTests(unittest.TestCase):
             name = "b.png"
 
         self.assertEqual(normalize_file_list([{"path": "a.png"}, Named(), None]), ("a.png", "b.png"))
+
+    def test_media_probe_cache_reuses_unchanged_file_and_invalidates_on_change(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            media = Path(temporary) / "reference.mp4"
+            media.write_bytes(b"first")
+            opened = mock.MagicMock()
+            container = opened.return_value.__enter__.return_value
+            container.duration = 2_000_000
+            container.streams.audio = [object()]
+            container.streams.video = []
+            _probe_media_cached.cache_clear()
+            with mock.patch("av.open", opened):
+                first = _probe_media(media)
+                second = _probe_media(media)
+                media.write_bytes(b"changed-size")
+                third = _probe_media(media)
+            self.assertEqual(first, (2.0, True, None))
+            self.assertEqual(second, first)
+            self.assertEqual(third, first)
+            self.assertEqual(opened.call_count, 2)
 
 
 class MiniMaxH3WorkflowTests(unittest.TestCase):
@@ -441,6 +490,29 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
                 runtime_profile=RUNTIME_PROFILE_FAST,
             )
 
+    @mock.patch("modules_forge.minimax_h3_bridge.start_runtime")
+    @mock.patch("modules_forge.minimax_h3_bridge.inspect_readiness")
+    def test_ensure_ready_reuses_disconnected_snapshot_for_start(self, inspect, start):
+        disconnected = RuntimeReadiness(
+            runtime_root=Path("runtime"),
+            server_url="http://127.0.0.1:8188",
+            connected=False,
+            error="not running",
+        )
+        inspect.return_value = disconnected
+        start.return_value = self.ready_runtime()
+
+        actual = ensure_ready(
+            Path("runtime"),
+            "http://127.0.0.1:8188",
+            Path("logs"),
+            runtime_profile=RUNTIME_PROFILE_FAST,
+        )
+
+        self.assertTrue(actual.connected)
+        inspect.assert_called_once()
+        self.assertIs(start.call_args.kwargs["initial_readiness"], disconnected)
+
     @mock.patch("modules_forge.minimax_h3_bridge._loopback_server_process")
     @mock.patch("modules_forge.minimax_h3_bridge.ComfyH3Client")
     @mock.patch("modules_forge.minimax_h3_bridge.server_runtime_root")
@@ -465,6 +537,25 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
                         runtime_profile=RUNTIME_PROFILE_FAST,
                     )
         process.terminate.assert_not_called()
+
+    @mock.patch("modules_forge.minimax_h3_bridge.server_runtime_root")
+    def test_restart_is_blocked_until_active_generation_finishes_result_processing(self, server_root):
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary).resolve()
+            (runtime / "main.py").write_text("# test\n", encoding="utf-8")
+            (runtime / "models").mkdir()
+            _mark_active_generation("result-processing-job")
+            try:
+                with self.assertRaisesRegex(H3BridgeError, "生成結果を処理中"):
+                    restart_runtime(
+                        runtime,
+                        "http://127.0.0.1:8188",
+                        Path("logs"),
+                    )
+            finally:
+                _clear_active_generation("result-processing-job")
+        server_root.assert_not_called()
+        self.assertEqual(_active_generation_count(), 0)
 
     @mock.patch("modules_forge.minimax_h3_bridge.start_runtime")
     @mock.patch("modules_forge.minimax_h3_bridge._loopback_server_process")
@@ -725,6 +816,7 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
                 Path("logs"),
                 Path("output"),
             )
+            self.assertEqual(next(updates)["stage"], "runtime")
             self.assertEqual(next(updates)["stage"], "prepare")
             self.assertEqual(next(updates)["stage"], "queued")
             self.assertEqual(lifecycle_lock.depth, 0)
@@ -768,6 +860,7 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             Path("output"),
         )
 
+        self.assertEqual(next(updates)["stage"], "runtime")
         self.assertEqual(next(updates)["stage"], "prepare")
         with self.assertRaisesRegex(H3BridgeError, "空きRAMが不足"):
             next(updates)
@@ -803,6 +896,7 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             Path("output"),
             poll_seconds=0.5,
         )
+        self.assertEqual(next(updates)["stage"], "runtime")
         self.assertEqual(next(updates)["stage"], "prepare")
         self.assertEqual(next(updates)["stage"], "queued")
         running = next(updates)
@@ -838,12 +932,164 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             Path("logs"),
             Path("output"),
         )
+        self.assertEqual(next(updates)["stage"], "runtime")
         self.assertEqual(next(updates)["stage"], "prepare")
         self.assertEqual(next(updates)["stage"], "queued")
         with self.assertRaisesRegex(H3BridgeError, "停止"):
             next(updates)
         cleanup.assert_called_once_with({"images": []}, Path("runtime"))
         self.assertFalse(_is_cancelled_job("pending-job-id"))
+
+    def test_cancel_intent_is_visible_before_request_and_cleared_on_failure(self):
+        client = ComfyH3Client.__new__(ComfyH3Client)
+
+        def assert_intent(_path, _payload):
+            self.assertTrue(_is_cancelled_job("cancel-race-job"))
+            return {}
+
+        client._request_json = mock.Mock(side_effect=assert_intent)
+        try:
+            client.cancel("cancel-race-job")
+            self.assertTrue(_is_cancelled_job("cancel-race-job"))
+        finally:
+            _clear_cancelled_job("cancel-race-job")
+
+        client._request_json = mock.Mock(side_effect=H3BridgeError("cancel failed"))
+        with self.assertRaisesRegex(H3BridgeError, "cancel failed"):
+            client.cancel("cancel-failure-job")
+        self.assertFalse(_is_cancelled_job("cancel-failure-job"))
+
+    @mock.patch("modules_forge.minimax_h3_bridge.time.sleep")
+    @mock.patch("modules_forge.minimax_h3_bridge.cleanup_prepared_media")
+    @mock.patch("modules_forge.minimax_h3_bridge.ComfyH3Client")
+    @mock.patch("modules_forge.minimax_h3_bridge.mirror_result", return_value=Path("result.mp4"))
+    @mock.patch("modules_forge.minimax_h3_bridge.extract_history_video", return_value=Path("source.mp4"))
+    @mock.patch("modules_forge.minimax_h3_bridge.build_workflow", return_value={"graph": {}})
+    @mock.patch("modules_forge.minimax_h3_bridge.prepare_media", return_value={"images": []})
+    @mock.patch("modules_forge.minimax_h3_bridge.ensure_ready")
+    def test_temporary_poll_failure_recovers_without_cancelling_job(
+        self,
+        ready,
+        _prepare,
+        _workflow,
+        _extract,
+        _mirror,
+        client_class,
+        _cleanup,
+        sleep,
+    ):
+        ready.return_value = self.ready_runtime()
+        client = client_class.return_value
+        client.submit.return_value = "recovering-job"
+        client.job.side_effect = [
+            {"status": "in_progress"},
+            H3BridgeError("temporary timeout"),
+            {"status": "in_progress"},
+            {"status": "completed"},
+        ]
+        client.history.return_value = {}
+
+        updates = list(
+            run_generation(
+                H3Request(mode=MODE_TEXT, prompt="A scene with stereo ambience."),
+                Path("runtime"),
+                "http://127.0.0.1:8188",
+                Path("logs"),
+                Path("output"),
+                poll_seconds=0.5,
+            )
+        )
+
+        self.assertEqual(
+            [update["stage"] for update in updates],
+            ["runtime", "prepare", "queued", "running", "reconnecting", "running", "complete"],
+        )
+        client.cancel.assert_not_called()
+        self.assertEqual(_active_generation_count(), 0)
+        self.assertGreaterEqual(sleep.call_count, 3)
+
+    @mock.patch("modules_forge.minimax_h3_bridge.time.sleep")
+    @mock.patch("modules_forge.minimax_h3_bridge.cleanup_prepared_media")
+    @mock.patch("modules_forge.minimax_h3_bridge.ComfyH3Client")
+    @mock.patch("modules_forge.minimax_h3_bridge.mirror_result", return_value=Path("result.mp4"))
+    @mock.patch("modules_forge.minimax_h3_bridge.extract_history_video", return_value=Path("source.mp4"))
+    @mock.patch("modules_forge.minimax_h3_bridge.build_workflow", return_value={"graph": {}})
+    @mock.patch("modules_forge.minimax_h3_bridge.prepare_media", return_value={"images": []})
+    @mock.patch("modules_forge.minimax_h3_bridge.ensure_ready")
+    def test_completed_job_retries_transient_history_failure_before_mirroring(
+        self,
+        ready,
+        _prepare,
+        _workflow,
+        extract,
+        mirror,
+        client_class,
+        _cleanup,
+        sleep,
+    ):
+        ready.return_value = self.ready_runtime()
+        client = client_class.return_value
+        client.submit.return_value = "history-retry-job"
+        client.job.return_value = {"status": "completed"}
+        client.history.side_effect = [{}, {"ok": True}]
+        extract.side_effect = [H3BridgeError("result is not visible yet"), Path("source.mp4")]
+
+        updates = list(
+            run_generation(
+                H3Request(mode=MODE_TEXT, prompt="A scene with stereo ambience."),
+                Path("runtime"),
+                "http://127.0.0.1:8188",
+                Path("logs"),
+                Path("output"),
+                poll_seconds=0.5,
+            )
+        )
+
+        self.assertEqual(updates[-1]["stage"], "complete")
+        self.assertEqual(client.history.call_count, 2)
+        self.assertEqual(extract.call_count, 2)
+        mirror.assert_called_once()
+        client.cancel.assert_not_called()
+        sleep.assert_called_once_with(0.5)
+
+    @mock.patch("modules_forge.minimax_h3_bridge.time.sleep")
+    @mock.patch("modules_forge.minimax_h3_bridge.cleanup_prepared_media")
+    @mock.patch("modules_forge.minimax_h3_bridge._schedule_deferred_cleanup")
+    @mock.patch("modules_forge.minimax_h3_bridge.ComfyH3Client")
+    @mock.patch("modules_forge.minimax_h3_bridge.build_workflow", return_value={"graph": {}})
+    @mock.patch("modules_forge.minimax_h3_bridge.prepare_media", return_value={"images": []})
+    @mock.patch("modules_forge.minimax_h3_bridge.ensure_ready")
+    def test_repeated_poll_failures_cancel_only_after_retry_budget_is_exhausted(
+        self,
+        ready,
+        _prepare,
+        _workflow,
+        client_class,
+        schedule_cleanup,
+        _cleanup,
+        _sleep,
+    ):
+        ready.return_value = self.ready_runtime()
+        client = client_class.return_value
+        client.submit.return_value = "failing-poll-job"
+        client.job.side_effect = H3BridgeError("temporary timeout")
+
+        updates = run_generation(
+            H3Request(mode=MODE_TEXT, prompt="A scene with stereo ambience."),
+            Path("runtime"),
+            "http://127.0.0.1:8188",
+            Path("logs"),
+            Path("output"),
+            poll_seconds=0.5,
+        )
+        stages = [next(updates)["stage"] for _ in range(5)]
+        self.assertEqual(stages, ["runtime", "prepare", "queued", "reconnecting", "reconnecting"])
+        with self.assertRaisesRegex(H3BridgeError, "連続して失敗"):
+            next(updates)
+        self.assertEqual(client.job.call_count, 3)
+        client.cancel.assert_called_once_with("failing-poll-job")
+        schedule_cleanup.assert_called_once()
+        self.assertEqual(_active_generation_count(), 0)
 
     @mock.patch("modules_forge.minimax_h3_bridge.cleanup_prepared_media")
     @mock.patch("modules_forge.minimax_h3_bridge._schedule_deferred_cleanup")
@@ -871,6 +1117,7 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             Path("logs"),
             Path("output"),
         )
+        next(updates)
         next(updates)
         next(updates)
         next(updates)
@@ -906,6 +1153,7 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             Path("logs"),
             Path("output"),
         )
+        next(updates)
         next(updates)
         next(updates)
         next(updates)
@@ -983,7 +1231,10 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
                 )
             )
 
-            self.assertEqual([update["stage"] for update in updates], ["prepare", "queued", "complete"])
+            self.assertEqual(
+                [update["stage"] for update in updates],
+                ["runtime", "prepare", "queued", "complete"],
+            )
             mirrored = Path(updates[-1]["path"])
             self.assertEqual(mirrored.read_bytes(), b"generated video")
             metadata = json.loads(mirrored.with_suffix(".json").read_text(encoding="utf-8"))
@@ -1090,6 +1341,59 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(H3BridgeError, "削除されたか、移動"):
                 cache_history_video(str(video), [item], output)
 
+    def test_history_request_restores_valid_forge_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            output.mkdir()
+            video = output / "MiniMax_H3_restore.mp4"
+            video.write_bytes(b"video")
+            metadata = {
+                "model": "MiniMax H3",
+                "mode": MODE_REFERENCES,
+                "prompt": "Restore this synchronized scene.",
+                "aspect": "9:16",
+                "quality": "balanced",
+                "requested_seconds": 7.5,
+                "steps": 24,
+                "seed": 42,
+                "scheduler": "beta",
+                "ref_image_size": "max",
+            }
+            video.with_suffix(".json").write_text(json.dumps(metadata), encoding="utf-8")
+            item = HistoryItem(video.resolve(), video.stat().st_mtime, "Forge Neo")
+
+            request = load_history_request(str(video), [item], output)
+
+            self.assertEqual(request.mode, MODE_REFERENCES)
+            self.assertEqual(request.prompt, metadata["prompt"])
+            self.assertEqual(request.aspect, "9:16")
+            self.assertEqual(request.duration_seconds, 7.5)
+            self.assertEqual(request.steps, 24)
+            self.assertEqual(request.seed, 42)
+            self.assertEqual(request.ref_image_size, "max")
+
+    def test_history_request_rejects_external_or_incomplete_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "output"
+            output.mkdir()
+            external = root / "runtime" / "MiniMax_H3_external.mp4"
+            external.parent.mkdir()
+            external.write_bytes(b"video")
+            external_item = HistoryItem(external.resolve(), external.stat().st_mtime, "ComfyUI")
+            with self.assertRaisesRegex(H3BridgeError, "Forge Neoで保存"):
+                load_history_request(str(external), [external_item], output)
+
+            video = output / "MiniMax_H3_incomplete.mp4"
+            video.write_bytes(b"video")
+            video.with_suffix(".json").write_text(
+                json.dumps({"model": "MiniMax H3", "prompt": "missing fields"}),
+                encoding="utf-8",
+            )
+            item = HistoryItem(video.resolve(), video.stat().st_mtime, "Forge Neo")
+            with self.assertRaisesRegex(H3BridgeError, "設定が不足"):
+                load_history_request(str(video), [item], output)
+
     def test_mirror_result_writes_video_and_utf8_metadata_without_bom(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1125,6 +1429,7 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             self.assertEqual(metadata["frames"], 124)
             self.assertEqual(metadata["steps"], 20)
             self.assertEqual(metadata["seed"], 271828)
+            self.assertEqual(metadata["ref_image_size"], "match")
             self.assertEqual(metadata["attention_backend"], "comfy-kitchen-int8")
             self.assertEqual(metadata["comfyui_version"], "0.31.0")
             self.assertEqual(metadata["comfy_kitchen_version"], "0.2.30")
