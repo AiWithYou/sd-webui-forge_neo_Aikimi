@@ -66,17 +66,50 @@ Size: 1024x1024
 
 | 分類 | 最新upstream `neo` の基盤 | このforkで追加している差分 |
 |---|---|---|
+| Anima | Anima Base / Edit、Anima Region ControlNet | Anima-2.9Bの40層checkpointを実際のstate dictから検出。従来Animaの28層検出も維持 |
 | Krea2・量子化 | Krea2 Turbo / Raw、`int8_convrot`、`convrot_w4a4` | 固定revision downloader、BF16からのstreaming INT8 ConvRot変換、bnb-NF4元shape検出、Qwen3-VL入力検証、checkpoint・VAE・text encoderのruntime preflight、Krea2 presetと安全な既定値 |
 | 高解像度workflow | PiD Integrated、tiled Conv2d、標準img2img/upscale | Smart 4K/8K、2-stage upscale、VRAM-Canvas、PhaseWeave / DetailWeave、Local Supersample、Focused ROI、subject/tile refine、B5 whole-tile regeneration、approved-reference Identity Guard |
 | 生成的4K/8K処理 | upstream標準の生成・upscale経路 | built-in ExtensionのHyperWeave 4K/8KとProofWeave基盤。座標整合ノイズ、候補制約、周波数帯別合成、領域別pass、比較・品質gateを追加 |
 | 品質管理・後処理 | Extras、標準postprocessing / upscaler | Color Flatten / Smooth Gradient、chroma-only色ムラ解析、孤立粒補修、targeted white-speck regeneration、PNG metadata・manifest・QA・比較tool |
 | Forge連携・検証 | 最新Checkpoint Merger、Refiner、img2img / inpaint / mask処理 | model runtime status API、selectable script args overlay、Krea2 conditioning cache、Tiled VAEのsmoothstep合成・mask再利用・分母map削減、独自機能のテストと日本語技術資料 |
 
-今回の同期では、upstream側のAnima Edit、PiD Integrated / PiD 1.5、Anima Region ControlNet、Checkpoint Merger rewrite、Refiner CFG / Refiner LoRA、img2img / inpaint / mask更新、Krea・Ernie・Lumina系の高速化、`comfy-kitchen==0.2.22`などの依存更新も取り込んでいます。これらはupstream由来であり、このfork独自機能としては扱いません。
+今回の同期では、upstream側のAnima Edit、PiD Integrated / PiD 1.5、Anima Region ControlNet、Checkpoint Merger rewrite、Refiner CFG / Refiner LoRA、img2img / inpaint / mask更新、Krea・Ernie・Lumina系の高速化、`comfy-kitchen==0.2.22`などの依存更新も取り込んでいます。さらに、後続upstreamのAnima-2.9Bモデル検出を選択的に反映しています。これらはupstream由来であり、このfork独自機能としては扱いません。
 
 HyperWeaveの設計と制約は [built-in Extension README](extensions-builtin/hyperweave/README.md)、PhaseWeave / DetailWeaveは [実装・実画像比較ノート](docs/krea2_phaseweave_4k_ja.md) と [B5短報](docs/detailweave_4k_b5_ja.pdf) を参照してください。
 
 ## このforkで追加・反映した主な変更
+
+### Anima-2.9B
+
+Anima-2.9Bは従来Animaを28層から40層へ拡張した約2.9B parameterのcheckpointです。このforkでは層数を固定値で決めず、checkpoint内の連続した`blocks.0`〜`blocks.N`を数えて構成するため、Anima-2.9Bの40層を欠落させずロードし、従来Animaの28層もそのまま扱えます。
+
+必要なファイルを次の場所へ配置します。text encoderとVAEは従来Animaと共通です。
+
+```text
+models/Stable-diffusion/Anima-2.9B-preview-v1.safetensors
+models/text_encoder/qwen_3_06b_base.safetensors
+models/VAE/qwen_image_vae.safetensors
+```
+
+配布元:
+
+- [Anima-2.9B checkpoint](https://huggingface.co/Gazingstars123/Anima-2.9B)
+- [Anima共通のQwen3-0.6B text encoder / Qwen-Image VAE](https://huggingface.co/circlestone-labs/Anima/tree/main/split_files)
+
+Forge UIでは以下を選びます。
+
+```text
+Preset: anima
+Checkpoint: Anima-2.9B-preview-v1.safetensors
+VAE / Text Encoder:
+  qwen_image_vae.safetensors
+  qwen_3_06b_base.safetensors
+Diffusion in Low Bits: Automatic
+```
+
+配布元の推奨範囲は28〜50 steps、CFG 3.5〜5です。SamplerはEuler / Res Multistep / ER SDE、SchedulerはSGM Uniform / Beta / Linear Quadratic系が案内されています。まずは既存の`anima` presetから開始し、解像度とsampling設定を画像ごとに調整してください。
+
+Anima-2.9Bは学習継続中のpreviewモデルです。また、28層版Anima用LoRAと40層版は層の対応が異なります。このforkは旧LoRAを暗黙に複製・再配置しないため、Anima-2.9B用として公開・学習されたLoRAだけを使用してください。モデルweightはCircleStone Labs Non-Commercial Licenseのderivative modelとして配布されています。生成物の扱いを含む正確な条件は配布元の最新版ライセンスを確認してください。
 
 ### Krea2 bnb-nf4モデル検出
 
