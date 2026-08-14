@@ -66,7 +66,7 @@ Size: 1024x1024
 
 | 分類 | 最新upstream `neo` の基盤 | このforkで追加している差分 |
 |---|---|---|
-| Anima | Anima Base / Edit、Anima Region ControlNet | Anima-2.9Bの40層checkpointを実際のstate dictから検出。従来Animaの28層検出も維持 |
+| Anima | Anima Base / Edit、Anima Region ControlNet | Anima-2.9Bの40層checkpointを実際のstate dictから検出。従来Animaの28層検出と28層↔40層LoRA自動変換も維持 |
 | Krea2・量子化 | Krea2 Turbo / Raw、`int8_convrot`、`convrot_w4a4` | 固定revision downloader、BF16からのstreaming INT8 ConvRot変換、bnb-NF4元shape検出、Qwen3-VL入力検証、checkpoint・VAE・text encoderのruntime preflight、Krea2 presetと安全な既定値 |
 | 高解像度workflow | PiD Integrated、tiled Conv2d、標準img2img/upscale | Smart 4K/8K、2-stage upscale、VRAM-Canvas、PhaseWeave / DetailWeave、Local Supersample、Focused ROI、subject/tile refine、B5 whole-tile regeneration、approved-reference Identity Guard |
 | 生成的4K/8K処理 | upstream標準の生成・upscale経路 | built-in ExtensionのHyperWeave 4K/8KとProofWeave基盤。座標整合ノイズ、候補制約、周波数帯別合成、領域別pass、比較・品質gateを追加 |
@@ -95,6 +95,7 @@ models/VAE/qwen_image_vae.safetensors
 
 - [Anima-2.9B checkpoint](https://huggingface.co/Gazingstars123/Anima-2.9B)
 - [Anima共通のQwen3-0.6B text encoder / Qwen-Image VAE](https://huggingface.co/circlestone-labs/Anima/tree/main/split_files)
+- [CircleStone Labs公式Anima LoRA](https://huggingface.co/circlestone-labs/Anima-Official-LoRAs)
 
 Forge UIでは以下を選びます。
 
@@ -109,7 +110,9 @@ Diffusion in Low Bits: Automatic
 
 配布元の推奨範囲は28〜50 steps、CFG 3.5〜5です。SamplerはEuler / Res Multistep / ER SDE、SchedulerはSGM Uniform / Beta / Linear Quadratic系が案内されています。まずは既存の`anima` presetから開始し、解像度とsampling設定を画像ごとに調整してください。
 
-Anima-2.9Bは学習継続中のpreviewモデルです。また、28層版Anima用LoRAと40層版は層の対応が異なります。このforkは旧LoRAを暗黙に複製・再配置しないため、Anima-2.9B用として公開・学習されたLoRAだけを使用してください。モデルweightはCircleStone Labs Non-Commercial Licenseのderivative modelとして配布されています。生成物の扱いを含む正確な条件は配布元の最新版ライセンスを確認してください。
+Anima LoRAは、LoRA内のblock coverageが連続した28層または40層として安全に判定できる場合、ロード先モデルに合わせて自動変換します。28→40では公式の層拡張対応に従って旧LoRAを再配置し、追加12層には初期化元blockのLoRA tensorを共有して適用します。40→28では追加12層のLoRA tensorを破棄するため不可逆であり、ログに警告を出します。層を限定して学習したLoRAなど、28層版か40層版かを一意に判定できないものは誤変換を避けて変更せず、警告を出します。
+
+Anima-2.9Bは学習継続中のpreviewモデルです。モデルweightはCircleStone Labs Non-Commercial Licenseのderivative modelとして配布されています。生成物の扱いを含む正確な条件は配布元の最新版ライセンスを確認してください。
 
 ### Krea2 bnb-nf4モデル検出
 

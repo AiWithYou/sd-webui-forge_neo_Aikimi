@@ -17,6 +17,7 @@ from backend.patcher.lora import load_lora, model_lora_keys_clip, model_lora_key
 from backend.state_dict import state_dict_prefix_replace
 from backend.utils import load_torch_file
 from modules import errors, scripts, sd_models, shared
+from modules_forge.anima_lora import convert_anima_lora_layout
 
 logger = logging.getLogger("lora")
 setup_logger(logger)
@@ -25,7 +26,7 @@ setup_logger(logger)
 load_lora_state_dict = functools.partial(load_torch_file, safe_load=True)
 
 
-def process_anima(lora: dict[str, torch.Tensor]):
+def process_anima(lora: dict[str, torch.Tensor], target_blocks: int, filename: str = "default") -> dict[str, torch.Tensor]:
     # LLMAdapter was moved from transformer to text_encoder
 
     keys = list(lora.keys())
@@ -34,6 +35,28 @@ def process_anima(lora: dict[str, torch.Tensor]):
             lora[k.replace("diffusion_model", "text_encoders.qwen3_06b")] = lora.pop(k)
         elif k.startswith("lora_unet_llm_adapter"):
             lora[k.replace("lora_unet_llm_adapter", "lora_te_llm_adapter")] = lora.pop(k)
+
+    lora, report = convert_anima_lora_layout(lora, target_blocks)
+    display_name = os.path.basename(filename)
+    if report.direction == "28_to_40":
+        logger.info(
+            "[Anima LoRA] Expanded %s from 28 to 40 blocks; reused %d tensor entries for inserted blocks",
+            display_name,
+            report.duplicated_entries,
+        )
+    elif report.direction == "40_to_28":
+        logger.warning(
+            "[Anima LoRA] Collapsed %s from 40 to 28 blocks; discarded %d inserted-block tensor entries (lossy conversion)",
+            display_name,
+            report.dropped_entries,
+        )
+    elif report.direction == "ambiguous_source" and report.source_block_indices:
+        logger.warning(
+            "[Anima LoRA] Did not auto-convert %s because its block coverage is incomplete or ambiguous: %s",
+            display_name,
+            report.source_block_indices,
+        )
+    return lora
 
 
 def load_lora_for_models(model: "UnetPatcher", clip: "CLIP", lora: dict[str, torch.Tensor], strength_model: float, strength_clip: float, filename: str = "default", online_mode: bool = False):
@@ -46,8 +69,9 @@ def load_lora_for_models(model: "UnetPatcher", clip: "CLIP", lora: dict[str, tor
     unet_keys = model_lora_keys_unet(model.model) if model is not None else {}
     clip_keys = model_lora_keys_clip(clip.cond_stage_model) if clip is not None else {}
 
-    if model.model.diffusion_model.__class__.__name__ == "Anima":
-        process_anima(lora)
+    diffusion_model = model.model.diffusion_model
+    if diffusion_model.__class__.__name__ == "Anima":
+        lora = process_anima(lora, len(diffusion_model.blocks), filename)
 
     lora_unmatch = lora
     lora_unet, lora_unmatch = load_lora(lora_unmatch, unet_keys)
