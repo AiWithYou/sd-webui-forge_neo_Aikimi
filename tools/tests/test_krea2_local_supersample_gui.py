@@ -8,6 +8,7 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+import cv2  # noqa: F401 - keep the native module loaded across isolated script imports
 import numpy as np
 from PIL import Image
 

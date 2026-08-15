@@ -48,7 +48,7 @@ class ConditionCrossAttn(Condition):
         s1 = self.cond.shape
         s2 = other.cond.shape
         if s1 != s2:
-            if s1[0] != s2[0] or s1[2] != s2[2]:
+            if len(s1) != len(s2) or s1[0] != s2[0] or s1[2:] != s2[2:]:
                 return False
 
             mult_min = lcm(s1[1], s2[1])
@@ -68,7 +68,8 @@ class ConditionCrossAttn(Condition):
         out = []
         for c in conds:
             if c.shape[1] < crossattn_max_len:
-                c = c.repeat(1, crossattn_max_len // c.shape[1], 1)
+                repeats = [1, crossattn_max_len // c.shape[1]] + [1] * (c.dim() - 2)
+                c = c.repeat(*repeats)
             out.append(c)
         return torch.cat(out)
 

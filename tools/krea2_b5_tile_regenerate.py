@@ -23,6 +23,7 @@ import secrets
 import shutil
 import sys
 import time
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -47,6 +48,7 @@ from tools.vram_canvas_highres import prompt_from_png
 
 DEFAULT_API = "http://127.0.0.1:7861"
 DEFAULT_TARGET_SIZE = (2896, 4096)
+B5_ASPECT_REL_TOLERANCE = 0.01
 B5_HEIGHT_MM = 257.0
 LOCAL_TILE_PROMPT = (
     "An s5p2style faithful high-resolution restoration of the exact supplied "
@@ -255,6 +257,82 @@ def scale_protection_regions(
     ]
 
 
+def scale_protection_regions_xy(
+    regions: list[ProtectionEllipse],
+    x_scale: float,
+    y_scale: float,
+) -> list[ProtectionEllipse]:
+    """Scale source-coordinate ellipses to a potentially non-uniform target."""
+
+    if not math.isfinite(float(x_scale)) or x_scale <= 0:
+        raise ValueError("protection x scale must be > 0")
+    if not math.isfinite(float(y_scale)) or y_scale <= 0:
+        raise ValueError("protection y scale must be > 0")
+    feather_scale = min(float(x_scale), float(y_scale))
+    return [
+        ProtectionEllipse(
+            label=region.label,
+            box=(
+                int(round(region.box[0] * x_scale)),
+                int(round(region.box[1] * y_scale)),
+                int(round(region.box[2] * x_scale)),
+                int(round(region.box[3] * y_scale)),
+            ),
+            feather=max(1, int(round(region.feather * feather_scale))),
+        )
+        for region in regions
+    ]
+
+
+def validate_b5_aspect_ratio(
+    source_size: tuple[int, int],
+    target_size: tuple[int, int] = DEFAULT_TARGET_SIZE,
+    *,
+    relative_tolerance: float = B5_ASPECT_REL_TOLERANCE,
+) -> None:
+    """Reject inputs that would be visibly distorted by the final B5 resize."""
+
+    source_width, source_height = map(int, source_size)
+    target_width, target_height = map(int, target_size)
+    if min(source_width, source_height, target_width, target_height) <= 0:
+        raise ValueError("source and target dimensions must be > 0")
+    if not math.isfinite(float(relative_tolerance)) or relative_tolerance < 0:
+        raise ValueError("aspect-ratio tolerance must be finite and >= 0")
+    source_ratio = source_width / source_height
+    target_ratio = target_width / target_height
+    if not math.isclose(
+        source_ratio,
+        target_ratio,
+        rel_tol=float(relative_tolerance),
+        abs_tol=0.0,
+    ):
+        raise ValueError(
+            "input aspect ratio must already match portrait JIS B5 within "
+            f"{relative_tolerance * 100:.1f}% to avoid geometric distortion; "
+            f"got {source_width}x{source_height} for target "
+            f"{target_width}x{target_height}"
+        )
+
+
+def estimate_temporary_bytes(
+    source_size: tuple[int, int],
+    *,
+    working_scale: int,
+    stages: int,
+) -> int:
+    """Estimate stage memmaps and intermediate PNG storage with safety margin."""
+
+    width = int(source_size[0]) * int(working_scale)
+    height = int(source_size[1]) * int(working_scale)
+    total = 0
+    for _ in range(int(stages)):
+        width *= 2
+        height *= 2
+        pixels = width * height
+        total += pixels * (3 * 4 + 4 + 3 + 3)
+    return int(math.ceil(total * 1.25 + 512 * 1024**2))
+
+
 def apply_stage_protection(
     candidate: Image.Image,
     deterministic_base: Image.Image,
@@ -351,6 +429,8 @@ def regenerate_tile(
         "send_images": True,
         "save_images": False,
         "include_init_images": False,
+        "override_settings": {"img2img_fix_steps": True},
+        "override_settings_restore_afterwards": True,
     }
     started = time.perf_counter()
     response = request_json(
@@ -410,6 +490,10 @@ def regenerate_stage(
     stage_index: int,
     work_dir: Path,
     output_dir: Path,
+    tile_regenerator: Callable[..., tuple[Image.Image, float]] = regenerate_tile,
+    progress_callback: Callable[[dict], None] | None = None,
+    interrupted: Callable[[], bool] | None = None,
+    save_stage: bool = True,
 ) -> tuple[Image.Image, dict]:
     stage_number = stage_index + 1
     source_width, source_height = source.size
@@ -442,6 +526,10 @@ def regenerate_stage(
         sequence = 0
         for input_y0 in input_origins_y:
             for input_x0 in input_origins_x:
+                if interrupted is not None and interrupted():
+                    raise RuntimeError(
+                        "Krea2 B5 tile regeneration was interrupted before completion"
+                    )
                 sequence += 1
                 tile = source.crop(
                     (
@@ -473,7 +561,21 @@ def regenerate_stage(
                     f"PROCESS={args.process_edge} OUTPUT={output_tile_size} "
                     f"DENOISE={args.denoise:.3f} SEED={tile_seed}"
                 )
-                regenerated, elapsed = regenerate_tile(
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "stage": stage_number,
+                            "stages": args.stages,
+                            "tile": sequence,
+                            "tiles": total_tiles,
+                            "input_x": input_x0,
+                            "input_y": input_y0,
+                            "process_edge": args.process_edge,
+                            "steps": args.steps,
+                            "denoise": args.denoise,
+                        }
+                    )
+                regenerated, elapsed = tile_regenerator(
                     tile,
                     api=args.api,
                     prompt=prompt,
@@ -579,11 +681,13 @@ def regenerate_stage(
             deterministic_base,
             stage_regions,
         )
-        stage_path = (
-            output_dir
-            / f"stage_{stage_number:02d}_{target_size[0]}x{target_size[1]}.png"
-        )
-        result.save(stage_path, format="PNG", optimize=True)
+        stage_path = None
+        if save_stage:
+            stage_path = (
+                output_dir
+                / f"stage_{stage_number:02d}_{target_size[0]}x{target_size[1]}.png"
+            )
+            result.save(stage_path, format="PNG", optimize=True)
         return result, {
             "stage": stage_number,
             "source_size": [source_width, source_height],
@@ -596,7 +700,7 @@ def regenerate_stage(
             "tile_count": total_tiles,
             "elapsed_seconds": time.perf_counter() - stage_started,
             "protection": protection_report,
-            "output": str(stage_path),
+            "output": str(stage_path) if stage_path is not None else None,
             "tiles": records,
         }
     finally:
@@ -728,6 +832,10 @@ def main() -> int:
         source = ImageOps.exif_transpose(opened).convert("RGB")
     if source.width < args.tile_size or source.height < args.tile_size:
         raise ValueError("input image is smaller than one complete source tile")
+    validate_b5_aspect_ratio(
+        source.size,
+        (args.target_width, args.target_height),
+    )
     generated_size = (
         source.width * args.working_scale * (2**args.stages),
         source.height * args.working_scale * (2**args.stages),
@@ -758,6 +866,19 @@ def main() -> int:
     incomplete_dir.mkdir(parents=True)
     work_dir = incomplete_dir / "work"
     work_dir.mkdir()
+    required_bytes = estimate_temporary_bytes(
+        source.size,
+        working_scale=args.working_scale,
+        stages=args.stages,
+    )
+    free_bytes = shutil.disk_usage(work_dir).free
+    if free_bytes < required_bytes:
+        remove_scoped_tree(incomplete_dir, expected_parent=args.output_root)
+        raise RuntimeError(
+            "Krea2 B5 tile regeneration needs about "
+            f"{required_bytes / 1024**3:.2f} GiB of temporary disk space; "
+            f"only {free_bytes / 1024**3:.2f} GiB is free"
+        )
     started = time.perf_counter()
     manifest = {
         "format_version": 1,
@@ -838,8 +959,23 @@ def main() -> int:
             detail_threshold=args.print_detail_threshold,
             max_detail_delta=args.print_max_detail_delta,
         )
+        final_base = source.resize(
+            (args.target_width, args.target_height),
+            Image.Resampling.LANCZOS,
+        )
+        final_regions = scale_protection_regions_xy(
+            list(args.protect_ellipse),
+            args.target_width / source.width,
+            args.target_height / source.height,
+        )
+        final, final_protection = apply_stage_protection(
+            final,
+            final_base,
+            final_regions,
+        )
         dpi = args.target_height / (B5_HEIGHT_MM / 25.4)
         manifest["print_finish"] = print_finish
+        manifest["final_protection"] = final_protection
         manifest["b5_print"] = {
             "trim_mm": [182, 257],
             "pixel_size": [args.target_width, args.target_height],

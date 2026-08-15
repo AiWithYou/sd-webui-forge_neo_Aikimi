@@ -36,7 +36,7 @@ import torch
 
 from backend.args import args
 from backend.logging import setup_logger
-from backend.quant_ops import QuantizedTensor
+from backend.quant_ops import QuantizedTensor, ck
 
 if TYPE_CHECKING:
     from backend.patcher.base import ModelPatcher
@@ -468,7 +468,7 @@ class LoadedModel:
         return self.model.model_size() - self.model.loaded_size()
 
     def model_memory_required(self, device):
-        if device == self.model.current_loaded_device():
+        if device == self.model.current_device:
             return self.model_offloaded_memory()
         else:
             return self.model_memory()
@@ -1061,6 +1061,16 @@ def flash_enabled() -> bool:
 
 def bnb_enabled() -> bool:
     return BNB_IS_AVAILABLE
+
+
+def ck_enabled() -> bool:
+    if cpu_state is not CPUState.GPU:
+        return False
+    try:
+        available = ck.int8_attention_is_available()
+    except Exception:
+        return False
+    return bool(available and args.use_ck_attention)
 
 
 def pytorch_attention_enabled() -> bool:

@@ -680,7 +680,9 @@ def _loopback_server_process(server_url: str) -> Any | None:
     port = urllib.parse.urlsplit(normalized_url).port or 80
     try:
         import psutil
-
+    except ImportError as exc:
+        raise H3BridgeError(f"H3 backend processを確認できません: {exc}") from exc
+    try:
         listeners = [
             connection
             for connection in psutil.net_connections(kind="tcp")
@@ -688,7 +690,7 @@ def _loopback_server_process(server_url: str) -> Any | None:
             and connection.laddr
             and int(connection.laddr.port) == port
         ]
-    except (ImportError, OSError) as exc:
+    except (OSError, psutil.Error) as exc:
         raise H3BridgeError(f"H3 backend processを確認できません: {exc}") from exc
     if not listeners:
         return None
@@ -698,15 +700,20 @@ def _loopback_server_process(server_url: str) -> Any | None:
         for connection in listeners
         if str(connection.laddr.ip).split("%", 1)[0] in {"127.0.0.1", "::1"}
     ]
-    if not loopback:
+    if len(loopback) != len(listeners):
         raise H3BridgeError(
             f"port {port} のprocessはloopback専用ではありません。H3 backendは127.0.0.1だけで起動してください。"
         )
-    connection = loopback[0]
-    if connection.pid is None:
+    process_ids = {connection.pid for connection in loopback}
+    if None in process_ids:
         raise H3BridgeError(f"port {port} を使用中のprocess IDを確認できません。")
+    if len(process_ids) != 1:
+        raise H3BridgeError(
+            f"port {port} を複数のprocessが待ち受けています。H3 backendを1つだけ起動してください。"
+        )
+    process_id = process_ids.pop()
     try:
-        return psutil.Process(connection.pid)
+        return psutil.Process(process_id)
     except psutil.Error as exc:
         raise H3BridgeError(f"port {port} のprocessを確認できません: {exc}") from exc
 
@@ -1913,10 +1920,6 @@ def run_generation(
                     raise H3GenerationCancelled("生成を停止しました。") from None
                 raise
             except H3BridgeError as exc:
-                if _is_cancelled_job(prompt_id):
-                    terminal = True
-                    _clear_cancelled_job(prompt_id)
-                    raise H3GenerationCancelled("生成を停止しました。") from None
                 consecutive_poll_failures += 1
                 if consecutive_poll_failures >= H3_STATUS_POLL_MAX_FAILURES:
                     raise H3BridgeError(

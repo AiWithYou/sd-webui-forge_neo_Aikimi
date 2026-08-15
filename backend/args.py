@@ -69,6 +69,7 @@ parser.add_argument("--flash", action="store_true", help="install flash_attn")
 parser.add_argument("--xformers", action="store_true", help="install xformers")
 parser.add_argument("--nunchaku", action="store_true", help="install nunchaku for SVDQ inference")
 parser.add_argument("--bnb", action="store_true", help="install bitsandbytes for 4-bit inference")
+parser.add_argument("--use-ck-attention", action="store_true", help="use Comfy-Kitchen attention")
 parser.add_argument("--onnxruntime-gpu", action="store_true", help="install nightly onnxruntime-gpu with cu130 support")
 
 parser.add_argument("--disable-sage", action="store_true", help="disable sageattention")
@@ -166,6 +167,10 @@ class dynamic_args(metaclass=_DynamicArgsMeta):
     """Wan 2.2"""
     pid: bool = False
     """PiD"""
+    anima: bool = False
+    """Anima"""
+    krea2: bool = False
+    """Krea 2"""
     ref_latents: list["torch.Tensor"] = []
     """Reference Latent(s) for Flux Kontext / Qwen-Image-Edit / Flux.2 Klein"""
     concat_latent: "torch.Tensor" = None

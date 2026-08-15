@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -35,6 +36,7 @@ from modules_forge.minimax_h3_bridge import (
     _copy_to_comfy_input,
     _generation_poll_interval,
     _is_cancelled_job,
+    _loopback_server_process,
     _mark_active_generation,
     _mark_cancelled_job,
     _probe_media,
@@ -389,6 +391,80 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             model_files=files,
             server_model_files=files,
         )
+
+    def test_listener_rejects_mixed_loopback_and_public_bindings(self):
+        class FakePsutilError(Exception):
+            pass
+
+        listeners = [
+            SimpleNamespace(
+                status="LISTEN",
+                laddr=SimpleNamespace(ip="127.0.0.1", port=8188),
+                pid=123,
+            ),
+            SimpleNamespace(
+                status="LISTEN",
+                laddr=SimpleNamespace(ip="0.0.0.0", port=8188),
+                pid=123,
+            ),
+        ]
+        fake_psutil = SimpleNamespace(
+            CONN_LISTEN="LISTEN",
+            Error=FakePsutilError,
+            net_connections=lambda kind: listeners,
+            Process=mock.Mock(),
+        )
+
+        with mock.patch.dict(sys.modules, {"psutil": fake_psutil}):
+            with self.assertRaisesRegex(H3BridgeError, "loopback専用"):
+                _loopback_server_process("http://127.0.0.1:8188")
+        fake_psutil.Process.assert_not_called()
+
+    def test_listener_rejects_multiple_loopback_processes(self):
+        class FakePsutilError(Exception):
+            pass
+
+        listeners = [
+            SimpleNamespace(
+                status="LISTEN",
+                laddr=SimpleNamespace(ip="127.0.0.1", port=8188),
+                pid=123,
+            ),
+            SimpleNamespace(
+                status="LISTEN",
+                laddr=SimpleNamespace(ip="::1", port=8188),
+                pid=456,
+            ),
+        ]
+        fake_psutil = SimpleNamespace(
+            CONN_LISTEN="LISTEN",
+            Error=FakePsutilError,
+            net_connections=lambda kind: listeners,
+            Process=mock.Mock(),
+        )
+
+        with mock.patch.dict(sys.modules, {"psutil": fake_psutil}):
+            with self.assertRaisesRegex(H3BridgeError, "複数のprocess"):
+                _loopback_server_process("http://127.0.0.1:8188")
+        fake_psutil.Process.assert_not_called()
+
+    def test_listener_wraps_psutil_access_error(self):
+        class FakePsutilError(Exception):
+            pass
+
+        def denied(kind):
+            raise FakePsutilError("access denied")
+
+        fake_psutil = SimpleNamespace(
+            CONN_LISTEN="LISTEN",
+            Error=FakePsutilError,
+            net_connections=denied,
+            Process=mock.Mock(),
+        )
+
+        with mock.patch.dict(sys.modules, {"psutil": fake_psutil}):
+            with self.assertRaisesRegex(H3BridgeError, "access denied"):
+                _loopback_server_process("http://127.0.0.1:8188")
 
     def test_runtime_command_uses_3090_optimized_offload_without_usb_disk_flags(self):
         command = _runtime_command(
@@ -1007,6 +1083,52 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
         client.cancel.assert_not_called()
         self.assertEqual(_active_generation_count(), 0)
         self.assertGreaterEqual(sleep.call_count, 3)
+
+    @mock.patch("modules_forge.minimax_h3_bridge.time.sleep")
+    @mock.patch("modules_forge.minimax_h3_bridge.cleanup_prepared_media")
+    @mock.patch("modules_forge.minimax_h3_bridge._schedule_deferred_cleanup")
+    @mock.patch("modules_forge.minimax_h3_bridge.ComfyH3Client")
+    @mock.patch("modules_forge.minimax_h3_bridge.build_workflow", return_value={"graph": {}})
+    @mock.patch("modules_forge.minimax_h3_bridge.prepare_media", return_value={"images": []})
+    @mock.patch("modules_forge.minimax_h3_bridge.ensure_ready")
+    def test_cancel_intent_keeps_inputs_until_backend_confirms_terminal_status(
+        self,
+        ready,
+        _prepare,
+        _workflow,
+        client_class,
+        schedule_cleanup,
+        cleanup,
+        _sleep,
+    ):
+        ready.return_value = self.ready_runtime()
+        client = client_class.return_value
+        client.submit.return_value = "cancel-poll-race"
+        client.job.side_effect = [
+            H3BridgeError("temporary timeout"),
+            {"status": "cancelled"},
+        ]
+        updates = run_generation(
+            H3Request(mode=MODE_TEXT, prompt="A scene with stereo ambience."),
+            Path("runtime"),
+            "http://127.0.0.1:8188",
+            Path("logs"),
+            Path("output"),
+            poll_seconds=0.5,
+        )
+        self.assertEqual(next(updates)["stage"], "runtime")
+        self.assertEqual(next(updates)["stage"], "prepare")
+        self.assertEqual(next(updates)["stage"], "queued")
+        _mark_cancelled_job("cancel-poll-race")
+        self.assertEqual(next(updates)["stage"], "reconnecting")
+        cleanup.assert_not_called()
+
+        with self.assertRaisesRegex(H3BridgeError, "停止"):
+            next(updates)
+
+        cleanup.assert_called_once_with({"images": []}, Path("runtime"))
+        schedule_cleanup.assert_not_called()
+        self.assertFalse(_is_cancelled_job("cancel-poll-race"))
 
     @mock.patch("modules_forge.minimax_h3_bridge.time.sleep")
     @mock.patch("modules_forge.minimax_h3_bridge.cleanup_prepared_media")

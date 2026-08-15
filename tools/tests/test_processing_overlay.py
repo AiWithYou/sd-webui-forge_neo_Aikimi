@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -100,6 +101,42 @@ class OverrideSettingsTests(unittest.TestCase):
             processing.opts = original_opts
 
         self.assertEqual(captured, {"img2img_fix_steps": False})
+
+
+class HiresModuleSwitchTests(unittest.TestCase):
+    def test_unspecified_or_empty_modules_keep_the_current_choices(self):
+        with patch.object(processing.main_entry, "modules_change") as modules_change:
+            for module_values in (None, []):
+                with self.subTest(module_values=module_values):
+                    self.assertFalse(
+                        processing._change_hires_modules_if_needed(module_values)
+                    )
+
+        modules_change.assert_not_called()
+
+    def test_same_choices_marker_keeps_the_current_choices(self):
+        with patch.object(processing.main_entry, "modules_change") as modules_change:
+            self.assertFalse(
+                processing._change_hires_modules_if_needed(["Use same choices"])
+            )
+
+        modules_change.assert_not_called()
+
+    def test_explicit_modules_request_a_temporary_switch(self):
+        selected = ["qwen_image_vae.safetensors", "qwen3vl_4b.safetensors"]
+        with patch.object(
+            processing.main_entry,
+            "modules_change",
+            return_value=True,
+        ) as modules_change:
+            self.assertTrue(processing._change_hires_modules_if_needed(selected))
+
+        modules_change.assert_called_once_with(
+            selected,
+            preset=None,
+            save=False,
+            refresh=False,
+        )
 
 
 if __name__ == "__main__":

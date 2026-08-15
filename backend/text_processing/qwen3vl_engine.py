@@ -30,13 +30,15 @@ class Qwen3VLTextProcessingEngine:
         self.id_template = 151644
         self.id_image = 151655
         self.llama_template = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
-        self.image_template = "<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>{}<|im_end|>\n<|im_start|>assistant\n"
         self.vision_block = "<|vision_start|><|image_pad|><|vision_end|>"
 
     def tokenize(self, texts, images=None):
         images = images or []
-        template = self.image_template.replace(self.vision_block, self.vision_block * len(images), 1) if images else self.llama_template
-        llama_texts = [template.format(text or " ") for text in texts]
+        prompts = [
+            f"{self.vision_block * len(images)}{str(text).strip()}"
+            for text in texts
+        ]
+        llama_texts = [self.llama_template.format(prompt or " ") for prompt in prompts]
         return self.tokenizer(llama_texts)["input_ids"]
 
     def tokenize_line(self, line: str, images=None):
@@ -53,6 +55,11 @@ class Qwen3VLTextProcessingEngine:
             chunk.tokens.append(token)
             chunk.multipliers.append(1.0)
 
+        if embed_count != len(images):
+            raise ValueError(
+                "Qwen3VL tokenizer produced fewer image tokens than supplied images"
+            )
+
         return [chunk]
 
     def __call__(self, texts, images=None):
@@ -66,7 +73,18 @@ class Qwen3VLTextProcessingEngine:
                 line_z_values = []
                 for chunk in self.tokenize_line(line, images):
                     z = self.process_tokens([chunk.tokens], [chunk.multipliers])
-                    line_z_values.append(self.strip_template(z, chunk.tokens))
+                    z = self.strip_template(z, chunk.tokens)
+                    batch, sequence, fused = z.shape
+                    expected_fused = len(KREA2_TAP_LAYERS) * 2560
+                    if batch != 1 or fused != expected_fused:
+                        raise ValueError(
+                            "Krea2 expects one Qwen3-VL conditioning batch with "
+                            f"{len(KREA2_TAP_LAYERS)}x2560={expected_fused} features; "
+                            f"got {tuple(z.shape)}"
+                        )
+                    line_z_values.append(
+                        z.reshape(batch * sequence, len(KREA2_TAP_LAYERS), 2560)
+                    )
                 cache[line] = line_z_values
             zs.extend(cache[line])
         return zs

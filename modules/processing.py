@@ -46,6 +46,18 @@ opt_f = 8
 _INPAINT_FULL_RES_OVERLAY_MASK = "inpaint_full_res_overlay_mask"
 
 
+def _change_hires_modules_if_needed(hr_additional_modules: list | None) -> bool:
+    if not hr_additional_modules or "Use same choices" in hr_additional_modules:
+        return False
+
+    return main_entry.modules_change(
+        hr_additional_modules,
+        preset=None,
+        save=False,
+        refresh=False,
+    )
+
+
 def setup_color_correction(image: Image.Image) -> np.ndarray:
     correction_target = cv2.cvtColor(np.asarray(image.copy(), dtype=np.uint8), cv2.COLOR_RGB2LAB)
     return correction_target
@@ -1449,10 +1461,8 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
         fp_additional_modules = getattr(shared.opts, "forge_additional_modules")
 
         reload = False
-        if hasattr(self, "hr_additional_modules") and "Use same choices" not in self.hr_additional_modules:
-            modules_changed = main_entry.modules_change(self.hr_additional_modules, preset=None, save=False, refresh=False)
-            if modules_changed:
-                reload = True
+        if _change_hires_modules_if_needed(self.hr_additional_modules):
+            reload = True
 
         if self.hr_checkpoint_name and self.hr_checkpoint_name != "Use same checkpoint":
             checkpoint_changed = main_entry.checkpoint_change(self.hr_checkpoint_name, preset=None, save=False, refresh=False)

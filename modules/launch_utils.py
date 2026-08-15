@@ -291,7 +291,7 @@ def prepare_environment():
     xformers_package = os.environ.get("XFORMERS_PACKAGE", f"xformers==0.0.35 --extra-index-url {torch_index_url}")
     bnb_package = os.environ.get("BNB_PACKAGE", "bitsandbytes==0.49.2")
 
-    packaging_package = os.environ.get("PACKAGING_PACKAGE", "packaging==26.0")
+    packaging_package = os.environ.get("PACKAGING_PACKAGE", "packaging==26.2")
     gradio_package = os.environ.get("GRADIO_PACKAGE", "gradio==4.40.0 gradio_rangeslider==0.0.8")
     requirements_file = os.environ.get("REQS_FILE", "requirements.txt")
 
@@ -328,8 +328,8 @@ assert cuda or xpu or mps
         success, err = check_run_python(TORCH_CHECK, return_error=True)
         if not success:
             if "older driver" in str(err).lower():
-                raise SystemError("Please update your GPU driver to support cu130 ; or manually install older PyTorch")
-            raise RuntimeError("PyTorch is not able to access GPU")
+                raise SystemError("Please update your GPU driver or manually install older version of PyTorch")
+            raise RuntimeError("PyTorch is not able to access any compute device (GPU)")
         startup_timer.record("torch GPU test")
 
     if not is_installed("packaging"):
