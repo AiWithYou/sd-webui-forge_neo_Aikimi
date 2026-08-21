@@ -1,6 +1,6 @@
 # Forge NeoW
 
-`Forge NeoW`は、[Stable Diffusion WebUI Forge - Neo](https://github.com/Haoming02/sd-webui-forge-classic)を基盤に、Krea2の導入と高解像度ワークフロー、MiniMax H3 Studio、画像品質処理、Anima LoRA互換性を追加したWindows向けforkです。
+`Forge NeoW`は、[Stable Diffusion WebUI Forge - Neo](https://github.com/Haoming02/sd-webui-forge-classic)を基盤に、Krea2の導入と高解像度ワークフロー、SenseNova U1.5 Studio、MiniMax H3 Studio、画像品質処理、Anima LoRA互換性を追加したWindows向けforkです。
 
 通常のForge Neo機能はupstreamから継承しています。このREADMEでは、NeoW固有の追加と、初めて使うときの入口を中心に説明します。
 
@@ -10,7 +10,7 @@
 | upstream | `Haoming02/sd-webui-forge-classic` の `neo` |
 | 同期基準 | `origin/neo` `6009ffff99b5d5b4312dc8a8f6476ec0a69b37b1` |
 | 同期日 | 2026-08-15 |
-| 主な対象 | Krea2、4K/8K img2img、MiniMax H3、Anima |
+| 主な対象 | Krea2、4K/8K img2img、SenseNova U1.5、MiniMax H3、Anima |
 
 ## 目的別の入口
 
@@ -18,6 +18,7 @@
 |---|---|
 | 通常のForge画像生成を使う | `webui-user.bat` |
 | Krea2 INT8モデルをまとめて導入する | `download_krea2_int8_convrot_models.bat` |
+| SenseNova U1.5をQ8 INT8で使う | `download_sensenova_u15_int8.bat` → `SenseNova U1.5`タブ |
 | Krea2画像を安全側で4Kまたは8Kへ仕上げる | `img2img` → `Krea2 2-Stage Upscale` |
 | VRAM予算を固定して段階的に高解像度化する | `img2img` → `VRAM-Canvas 4K/8K Highres` |
 | 承認済み4K画像の局所ディテールを増やす | `img2img` → `Krea2 Local Supersample Detail` |
@@ -97,7 +98,41 @@ Size: 1024x1024
 
 Krea2のmodel shiftはcheckpoint設定の`1.15`を使います。Qwen3-VL text encoderでは、重要な内容を自然文で明示してください。A1111形式のweight構文は数値weightとして適用されません。
 
+### SenseNova U1.5 Q8 INT8を使う場合
+
+次をダブルクリックします。
+
+```text
+download_sensenova_u15_int8.bat
+```
+
+このセットアップでは、次のファイルと実行環境を準備して検証します。
+
+- 公式推論コードのうち実行に必要な`src/sensenova_u1`だけを固定revisionから取得し、各Git blob SHA-1を検証
+- Forgeの既存PyTorchを変更せず、tokenizerに必要な`sentencepiece==0.2.1`だけを追加
+- 約18.58 GiBの`SenseNova-U1.5-8B-MoT-Preview-Q8.gguf`を再開可能な方式で取得
+- GGUF header、19,947,887,936 bytesのサイズ、SHA-256を検証
+
+完了後にForgeを起動し、`SenseNova U1.5`タブを開きます。既定値は`INT8 · Q8_0 GGUF`、`Low · RTX 3090推奨`、BF16計算、50 Steps、CFG 4.0です。
+
+Q8_0 GGUFは、公式SenseNova推論コードが対応する量子化読み込み経路を使います。ただし、Q8変換weight自体はコミュニティ管理であり、SenseNova公式配布のweightではありません。公式BF16も画面から選べますが、初回取得量とRAM・VRAM使用量が大きくなります。
+
 ## NeoW固有の追加
+
+### SenseNova U1.5 Studio
+
+`SenseNova U1.5`は、NEO-unify固有の生成ループをForgeの通常samplerへ変換せず、公式推論コードを隔離workerで実行する専用GUIです。
+
+- テキスト生成と複数画像編集に対応
+- 参照画像を最大8枚まで追加し、選択画像の差し替え、削除、前後移動が可能
+- 1枚目と2枚目は最大2048²、3枚以上は合計予算を分配する入力画像の自動リサイズ
+- 公式解像度bucketと、編集時に1枚目の比率を維持する約4MPの自動出力
+- Q8_0 GGUF（INT8）と公式BF16を明示的に選択
+- 生成前に公式コードrevision、Python依存、GGUFのサイズとheaderを検査
+- 生成時に通常のForgeモデルを退避し、キャンセル時は隔離workerを停止してメモリを解放
+- 完成PNGと生成条件JSONを`outputs/sensenova_u15`へ保存
+
+詳しい設定、複数画像の順序、Q8とBF16の違いは[SenseNova U1.5 Studioガイド](extensions-builtin/sensenova-u15-studio/README.md)を参照してください。
 
 ### MiniMax H3 Studio
 
@@ -268,7 +303,10 @@ NeoWでは、その同期で削除対象となったBnB/NF4/GGUF互換経路を�
 
 - モデル、dataset、checkpoint、生成画像、動画はGit管理対象ではありません。
 - モデルと生成物の利用条件は、各配布元の最新ライセンスを確認してください。
-- MiniMax H3 Studioには、対応する別のローカルComfyUI runtimeとモデルが必要です。
+- MiniMax H3 Studioを使う前に、対応するローカルComfyUI runtimeとモデルを別途用意してください。
+- SenseNova U1.5 Previewは18B parametersであり、Q8でも約18.58 GiBのweightに加えて、CPU RAM、GPU activation、Hugging Faceのconfig・tokenizer取得領域が必要になります。
+- SenseNovaのQ8_0 GGUFはコミュニティ管理の変換weightです。公式BF16と同一の品質や数値一致を保証するものではありません。
+- SenseNovaの複数画像数と入力解像度を増やすと、画像token列とメモリ使用量が増えます。最初は2枚以下、1024²の動作確認、Low VRAMモードで確認してください。
 - H3のContext-IRと2K Regenerateは外部有料API用であり、このStudioは呼び出しません。
 - 4K/8K処理はVRAMだけでなくCPU RAM、一時disk、長い処理時間を必要とします。
 - 高解像度処理は、まず4Kと低いdenoising strengthで構図と顔を確認してください。
@@ -291,6 +329,7 @@ NeoWでは、その同期で削除対象となったBnB/NF4/GGUF互換経路を�
 ```powershell
 .\venv\Scripts\python.exe -m unittest -v tools.tests.test_anima_lora
 .\venv\Scripts\python.exe -m unittest -v tools.tests.test_minimax_h3_bridge
+.\venv\Scripts\python.exe -m unittest -v tools.tests.test_sensenova_u15_bridge tools.tests.test_sensenova_u15_worker
 .\venv\Scripts\python.exe -m unittest discover -s tools\tests -p "test_hyperweave_*.py" -v
 ```
 
@@ -310,5 +349,6 @@ Forge NeoWは、次のプロジェクトと関連コントリビューターの�
 - [Stable Diffusion WebUI Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge)
 - [Stable Diffusion WebUI Forge - Neo](https://github.com/Haoming02/sd-webui-forge-classic)
 - [ComfyUI](https://github.com/Comfy-Org/ComfyUI)
+- [OpenSenseNova/SenseNova-U1](https://github.com/OpenSenseNova/SenseNova-U1)
 
 コードのライセンスは[LICENSE](LICENSE)を参照してください。モデルweight、VAE、text encoder、LoRA、生成物には、それぞれの配布元が定める別の条件が適用される場合があります。
