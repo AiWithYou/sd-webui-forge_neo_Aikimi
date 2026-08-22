@@ -33,6 +33,14 @@ class Anima29BDetectionTests(unittest.TestCase):
         self.assertEqual(config["model_channels"], 2048)
         self.assertEqual(config["in_channels"], 16)
 
+    def test_detects_anima_38b_as_52_blocks(self):
+        config = detect_unet_config(anima_state_dict(52), "")
+
+        self.assertEqual(config["image_model"], "anima")
+        self.assertEqual(config["num_blocks"], 52)
+        self.assertEqual(config["model_channels"], 2048)
+        self.assertEqual(config["in_channels"], 16)
+
     def test_counts_blocks_below_a_checkpoint_prefix(self):
         prefix = "model.diffusion_model."
 

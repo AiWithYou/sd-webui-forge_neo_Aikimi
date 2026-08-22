@@ -1,6 +1,6 @@
 # Forge NeoW
 
-`Forge NeoW`は、[Stable Diffusion WebUI Forge - Neo](https://github.com/Haoming02/sd-webui-forge-classic)を基盤に、Krea2の導入と高解像度ワークフロー、SenseNova U1.5 Studio、MiniMax H3 Studio、画像品質処理、Anima LoRA互換性を追加したWindows向けforkです。
+`Forge NeoW`は、[Stable Diffusion WebUI Forge - Neo](https://github.com/Haoming02/sd-webui-forge-classic)を基盤に、Krea2の導入と高解像度ワークフロー、SenseNova U1.5 Studio、MiniMax H3 Studio、画像品質処理、Anima 3.8Bの軽量構成とLoRA互換性を追加したWindows向けforkです。
 
 通常のForge Neo機能はupstreamから継承しています。このREADMEでは、NeoW固有の追加と、初めて使うときの入口を中心に説明します。
 
@@ -10,7 +10,7 @@
 | upstream | `Haoming02/sd-webui-forge-classic` の `neo` |
 | 同期基準 | `origin/neo` `6009ffff99b5d5b4312dc8a8f6476ec0a69b37b1` |
 | 同期日 | 2026-08-15 |
-| 主な対象 | Krea2、4K/8K img2img、SenseNova U1.5、MiniMax H3、Anima |
+| 主な対象 | Krea2、4K/8K img2img、SenseNova U1.5、MiniMax H3、Anima 3.8B |
 
 ## 目的別の入口
 
@@ -18,6 +18,7 @@
 |---|---|
 | 通常のForge画像生成を使う | `webui-user.bat` |
 | Krea2 INT8モデルをまとめて導入する | `download_krea2_int8_convrot_models.bat` |
+| Anima 3.8Bを軽量構成で導入する | `download_anima38_int8_convrot_models.bat` → 通常の`txt2img` |
 | SenseNova U1.5正式版をINT8 ConvRotで使う | `download_sensenova_u15_int8.bat` → `SenseNova U1.5`タブ |
 | Krea2画像を安全側で4Kまたは8Kへ仕上げる | `img2img` → `Krea2 2-Stage Upscale` |
 | VRAM予算を固定して段階的に高解像度化する | `img2img` → `VRAM-Canvas 4K/8K Highres` |
@@ -25,7 +26,7 @@
 | B5判・縦の印刷向け画像をタイル単位で再生成する | `img2img` → `Krea2 B5 Whole-Tile Regeneration` |
 | 候補比較と品質gateを使って再作画upscaleする | `img2img` → `HyperWeave 4K/8K` |
 | MiniMax H3で音声付き動画を生成する | `H3 Studio`タブ |
-| 28層・40層のAnima LoRAを使う | 通常どおりLoRAを選択。必要な場合だけ自動変換 |
+| 28層・40層・52層のAnima LoRAを使う | 通常どおりLoRAを選択。必要な場合だけ自動変換 |
 | AI画像の色ムラや細かな網目を整える | `Extras` → `Color Flatten / 色ムラ補正` |
 
 高解像度ワークフローの一部は実験機能です。入力に存在しない細部は生成モデルによる推定であり、未知の正解画像を復元する機能ではありません。
@@ -97,6 +98,49 @@ Size: 1024x1024
 ```
 
 Krea2のmodel shiftはcheckpoint設定の`1.15`を使います。Qwen3-VL text encoderでは、重要な内容を自然文で明示してください。A1111形式のweight構文は数値weightとして適用されません。
+
+### Anima 3.8Bを軽量構成で使う場合
+
+Anima 3.8Bは、52層へ拡張したDiT、Qwen3.5 4B、専用のprogressive cross-attention adapterを組み合わせるモデルです。Qwen3.5の配布weightは、約34.98億parameterがFP8、約6.40億parameterがBF16の混合精度です。NeoWではQwen3.5を再量子化せず、全BF16のDiTだけをINT8 ConvRotへ変換します。変換後のDiTは7,504,189,974 bytesから4,238,326,342 bytesになり、約43.5%小さくなります。
+
+次をダブルクリックしてください。
+
+```text
+download_anima38_int8_convrot_models.bat
+```
+
+セットアップは固定したHugging Face revisionから3ファイルを取得します。BF16 DiTは変換用の一時ファイルとして扱い、変換、520層分のConvRot署名、ファイルサイズ、SHA-256 sidecarの検証が成功した後に削除します。元のBF16も残す場合は、PowerShellから`-KeepSource`を指定してください。
+
+```text
+一時取得: Anima-3.8B.safetensors
+配置: models/Stable-diffusion/Anima-3.8B-int8-convrot.safetensors
+配置: models/Stable-diffusion/Anima-3.8B-int8-convrot.safetensors.sha256
+配置: models/text_encoder/qwen35_4b.safetensors
+配置: models/text_encoder/Anima-3.8B-expanded_adapter.safetensors
+```
+
+既存のAnima共通ファイルも必要です。
+
+```text
+models/text_encoder/qwen_3_06b_base.safetensors
+models/VAE/qwen_image_vae.safetensors
+```
+
+起動後、Forge UIで次を選びます。
+
+```text
+Preset: anima
+Checkpoint: Anima-3.8B-int8-convrot.safetensors
+VAE / Text Encoder:
+  qwen_image_vae.safetensors
+  qwen_3_06b_base.safetensors
+Diffusion in Low Bits: Automatic
+Anima 3.8B (Qwen3.5): enabled
+Adapter strength: 1.0
+Use adapter on negative prompt: off
+```
+
+最初は`832x1216`前後の約1MP、`res_multistep + Beta`、28〜50 Steps、CFG 7〜8を基準にしてください。positive promptでは、品質tagの後に`Description:`を置いて自然文を続けます。adapterを無効にした場合やstrengthを`0.0`にした場合は、Qwen3-0.6Bによる通常のAnima conditioningへ戻ります。
 
 ### SenseNova U1.5正式版のINT8 ConvRotを使う場合
 
@@ -205,18 +249,18 @@ HyperWeaveは、現在Forgeに読み込まれている生成モデルで入力�
 
 Krea2のSmart FinishはLab a/b中心のchroma-only解析を行い、指標が改善する候補だけを採用します。雪、星、そばかす、粒子を誤って消す可能性があるため、孤立した白黒粒の補修は既定で無効です。
 
-### Anima LoRAの厳密な28層・40層変換
+### Anima 3.8BとLoRAの厳密な28層・40層・52層変換
 
-AnimaおよびAnima-2.9Bの基本モデル対応、40層checkpoint検出、基本的な28→40 LoRA remapはupstream由来です。
+AnimaおよびAnima-2.9Bの基本モデル対応、40層checkpoint検出、基本的な28→40 LoRA remapはupstream由来です。NeoWは52層checkpointの検出、Qwen3.5 adapter、INT8 ConvRot変換を追加しています。
 
 NeoWはLoRA変換を次のように強化しています。
 
-- 完全な`0..27`または`0..39`のblock coverageだけを自動変換
+- 完全な`0..27`、`0..39`、`0..51`のblock coverageだけを自動変換
 - Kohya、Forge generic、PEFT、Comfy形式のblock keyに対応
-- 28→40と40→28の双方向変換
-- 28→40では同じtensor storageを共有し、変換だけでtensor本体を複製しない
+- 公開checkpointの挿入manifestに基づく28↔40↔52の双方向変換
+- 28→40、28→52、40→52では同じtensor storageを共有し、変換だけでtensor本体を複製しない
 - sparse LoRAや層限定LoRAは誤変換せず警告
-- 40→28では追加12層を破棄するため、不可逆であることを警告
+- 52→40、52→28、40→28では追加層を破棄するため、不可逆であることを警告
 
 モデルの配置例:
 
@@ -229,6 +273,8 @@ models/VAE/qwen_image_vae.safetensors
 UIでは`Preset: anima`を選び、checkpoint、Qwen3-0.6B text encoder、Qwen Image VAEを指定します。
 
 - [Anima-2.9B checkpoint](https://huggingface.co/Gazingstars123/Anima-2.9B)
+- [Anima-3.8B checkpoint、Qwen3.5、adapter](https://huggingface.co/lylogummy/Anima-3.8B)
+- [Forge Neo向けAnima 3.8B extension原典](https://github.com/GumGum10/forge-anima-3.8B)
 - [Anima共通text encoder / VAE](https://huggingface.co/circlestone-labs/Anima/tree/main/split_files)
 - [CircleStone Labs公式Anima LoRA](https://huggingface.co/circlestone-labs/Anima-Official-LoRAs)
 
@@ -313,7 +359,9 @@ NeoWでは、その同期で削除対象となったBnB/NF4/GGUF互換経路を�
 - 8K、全候補保存、全debug出力を同時に有効にすると、一時disk使用量が大きくなります。
 - 生成的upscaleは入力にない細部を推定します。顔、文字、ロゴ、精密形状は必ず原寸で確認してください。
 - Animaの40→28 LoRA変換は追加12層を破棄するため不可逆です。
-- sparseなAnima LoRAは28層版か40層版か安全に断定できないため自動変換しません。
+- Animaの52→40と52→28 LoRA変換も追加層を破棄するため不可逆です。
+- sparseなAnima LoRAは28層版、40層版、52層版のいずれかを安全に断定できないため自動変換しません。
+- Anima 3.8BのINT8 ConvRotはコミュニティ変換であり、配布元のBF16と同じ数値結果にはなりません。AdaLN、埋め込み、入出力、正規化層はBF16のまま保持します。
 - Krea2でCFG 1.0を使う場合、negative promptは実質的に使われません。重要な条件はpositive promptにも書いてください。
 
 ## テスト

@@ -38,16 +38,20 @@ def process_anima(lora: dict[str, torch.Tensor], target_blocks: int, filename: s
 
     lora, report = convert_anima_lora_layout(lora, target_blocks)
     display_name = os.path.basename(filename)
-    if report.direction == "28_to_40":
+    if report.direction in {"28_to_40", "28_to_52", "40_to_52"}:
         logger.info(
-            "[Anima LoRA] Expanded %s from 28 to 40 blocks; reused %d tensor entries for inserted blocks",
+            "[Anima LoRA] Expanded %s from %d to %d blocks; reused %d tensor entries for inserted blocks",
             display_name,
+            report.source_blocks,
+            report.target_blocks,
             report.duplicated_entries,
         )
-    elif report.direction == "40_to_28":
+    elif report.direction in {"40_to_28", "52_to_40", "52_to_28"}:
         logger.warning(
-            "[Anima LoRA] Collapsed %s from 40 to 28 blocks; discarded %d inserted-block tensor entries (lossy conversion)",
+            "[Anima LoRA] Collapsed %s from %d to %d blocks; discarded %d inserted-block tensor entries (lossy conversion)",
             display_name,
+            report.source_blocks,
+            report.target_blocks,
             report.dropped_entries,
         )
     elif report.direction == "ambiguous_source" and report.source_block_indices:

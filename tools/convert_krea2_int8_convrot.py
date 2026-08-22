@@ -99,6 +99,7 @@ def validate_conversion_resources(
     *,
     available_memory_bytes: int | None = None,
     free_disk_bytes: int | None = None,
+    profile_name: str = "Krea2",
 ) -> dict[str, int]:
     if not source_path.is_file():
         raise FileNotFoundError(f"Source checkpoint does not exist: {source_path}")
@@ -111,14 +112,14 @@ def validate_conversion_resources(
         free_disk_bytes = int(shutil.disk_usage(output_path.parent).free)
     if available_memory_bytes < requirements["required_available_memory_bytes"]:
         raise RuntimeError(
-            "Insufficient available RAM for Krea2 conversion: "
+            f"Insufficient available RAM for {profile_name} conversion: "
             f"need at least {requirements['required_available_memory_bytes'] / GIB:.2f} GiB, "
             f"have {available_memory_bytes / GIB:.2f} GiB. Stop memory-heavy processes "
             "before converting."
         )
     if free_disk_bytes < requirements["required_free_disk_bytes"]:
         raise RuntimeError(
-            "Insufficient free output-disk space for Krea2 conversion: "
+            f"Insufficient free output-disk space for {profile_name} conversion: "
             f"need at least {requirements['required_free_disk_bytes'] / GIB:.2f} GiB, "
             f"have {free_disk_bytes / GIB:.2f} GiB."
         )
@@ -150,7 +151,11 @@ def companion_keys(weight_key: str) -> tuple[str, str]:
 
 
 def output_tensor_specs(
-    source_path: Path, source_keys: list[str], group_size: int
+    source_path: Path,
+    source_keys: list[str],
+    group_size: int,
+    *,
+    quantized_weight_keys: frozenset[str] = KREA2_QUANTIZED_WEIGHT_KEYS,
 ) -> list[TensorSpec]:
     config_size = quant_config_tensor(group_size).numel()
     specs: list[TensorSpec] = []
@@ -159,7 +164,7 @@ def output_tensor_specs(
             tensor_slice = source.get_slice(key)
             shape = tuple(tensor_slice.get_shape())
             dtype = str(tensor_slice.get_dtype())
-            if key not in KREA2_QUANTIZED_WEIGHT_KEYS:
+            if key not in quantized_weight_keys:
                 specs.append(TensorSpec(key, dtype, shape))
                 continue
 
@@ -214,7 +219,13 @@ def write_tensor_bytes(
         )
 
 
-def source_layout(path: Path, group_size: int) -> tuple[list[str], dict[str, str]]:
+def source_layout(
+    path: Path,
+    group_size: int,
+    *,
+    quantized_weight_keys: frozenset[str] = KREA2_QUANTIZED_WEIGHT_KEYS,
+    profile_name: str = "Krea2",
+) -> tuple[list[str], dict[str, str]]:
     if not path.is_file():
         raise FileNotFoundError(f"Source checkpoint does not exist: {path}")
     if path.suffix.lower() != ".safetensors":
@@ -225,11 +236,11 @@ def source_layout(path: Path, group_size: int) -> tuple[list[str], dict[str, str
     with safe_open(path, framework="pt", device="cpu") as source:
         keys = list(source.keys())
         key_set = set(keys)
-        missing = sorted(KREA2_QUANTIZED_WEIGHT_KEYS - key_set)
+        missing = sorted(quantized_weight_keys - key_set)
         if missing:
             preview = ", ".join(missing[:5])
             raise ValueError(
-                f"Source is not the expected Krea2 layout: {len(missing)} quantized weights are missing ({preview})"
+                f"Source is not the expected {profile_name} layout: {len(missing)} quantized weights are missing ({preview})"
             )
         prequantized = sorted(key for key in keys if key.endswith(".comfy_quant"))
         if prequantized:
@@ -237,7 +248,7 @@ def source_layout(path: Path, group_size: int) -> tuple[list[str], dict[str, str
                 f"Source already contains quantization metadata ({prequantized[0]}); convert the BF16 merged checkpoint, not a quantized model"
             )
 
-        for key in sorted(KREA2_QUANTIZED_WEIGHT_KEYS):
+        for key in sorted(quantized_weight_keys):
             tensor_slice = source.get_slice(key)
             shape = tuple(tensor_slice.get_shape())
             dtype = str(tensor_slice.get_dtype())
@@ -257,7 +268,15 @@ def source_layout(path: Path, group_size: int) -> tuple[list[str], dict[str, str
     return keys, metadata
 
 
-def output_metadata(source: Path, output: Path, source_metadata: dict[str, str], group_size: int) -> dict[str, str]:
+def output_metadata(
+    source: Path,
+    output: Path,
+    source_metadata: dict[str, str],
+    group_size: int,
+    *,
+    quantized_weight_keys: frozenset[str] = KREA2_QUANTIZED_WEIGHT_KEYS,
+    metadata_updates: dict[str, str] | None = None,
+) -> dict[str, str]:
     metadata = dict(source_metadata)
     tags = [tag.strip() for tag in metadata.get("modelspec.tags", "").split(",") if tag.strip()]
     tags = [tag for tag in tags if tag.lower() != "bf16"]
@@ -274,21 +293,30 @@ def output_metadata(source: Path, output: Path, source_metadata: dict[str, str],
             "forge.quantization.format": "int8_tensorwise",
             "forge.quantization.convrot": "true",
             "forge.quantization.convrot_groupsize": str(group_size),
-            "forge.quantization.quantized_layers": str(len(KREA2_QUANTIZED_WEIGHT_KEYS)),
+            "forge.quantization.quantized_layers": str(len(quantized_weight_keys)),
             "forge.quantization.comfy_kitchen": version("comfy-kitchen"),
         }
     )
+    if metadata_updates:
+        metadata.update(metadata_updates)
     return metadata
 
 
-def validate_checkpoint(source_path: Path, output_path: Path, group_size: int) -> None:
+def validate_checkpoint(
+    source_path: Path,
+    output_path: Path,
+    group_size: int,
+    *,
+    quantized_weight_keys: frozenset[str] = KREA2_QUANTIZED_WEIGHT_KEYS,
+    profile_name: str = "Krea2",
+) -> None:
     expected_config = quant_config(group_size)
     with safe_open(source_path, framework="pt", device="cpu") as source, safe_open(
         output_path, framework="pt", device="cpu"
     ) as output:
         source_keys = set(source.keys())
         expected_output_keys = set(source_keys)
-        for weight_key in KREA2_QUANTIZED_WEIGHT_KEYS:
+        for weight_key in quantized_weight_keys:
             expected_output_keys.update(companion_keys(weight_key))
 
         output_keys = set(output.keys())
@@ -299,7 +327,7 @@ def validate_checkpoint(source_path: Path, output_path: Path, group_size: int) -
                 f"Output key mismatch: {len(missing)} missing, {len(unexpected)} unexpected"
             )
 
-        for key in sorted(source_keys - KREA2_QUANTIZED_WEIGHT_KEYS):
+        for key in sorted(source_keys - quantized_weight_keys):
             source_slice = source.get_slice(key)
             output_slice = output.get_slice(key)
             if source_slice.get_shape() != output_slice.get_shape():
@@ -307,7 +335,7 @@ def validate_checkpoint(source_path: Path, output_path: Path, group_size: int) -
             if source_slice.get_dtype() != output_slice.get_dtype():
                 raise ValueError(f"Non-quantized tensor dtype changed: {key}")
 
-        for weight_key in sorted(KREA2_QUANTIZED_WEIGHT_KEYS):
+        for weight_key in sorted(quantized_weight_keys):
             scale_key, config_key = companion_keys(weight_key)
             source_shape = tuple(source.get_slice(weight_key).get_shape())
             output_weight = output.get_slice(weight_key)
@@ -324,11 +352,22 @@ def validate_checkpoint(source_path: Path, output_path: Path, group_size: int) -
                 raise ValueError(f"Invalid quantization metadata for {config_key}: {loaded_config}")
 
         metadata = output.metadata() or {}
-        if metadata.get("forge.quantization.quantized_layers") != str(len(KREA2_QUANTIZED_WEIGHT_KEYS)):
-            raise ValueError("Output metadata does not record all 224 quantized Krea2 layers")
+        if metadata.get("forge.quantization.quantized_layers") != str(len(quantized_weight_keys)):
+            raise ValueError(
+                f"Output metadata does not record all {len(quantized_weight_keys)} quantized {profile_name} layers"
+            )
 
 
-def convert_checkpoint(source_path: Path, output_path: Path, device: torch.device, group_size: int) -> None:
+def convert_checkpoint(
+    source_path: Path,
+    output_path: Path,
+    device: torch.device,
+    group_size: int,
+    *,
+    quantized_weight_keys: frozenset[str] = KREA2_QUANTIZED_WEIGHT_KEYS,
+    profile_name: str = "Krea2",
+    metadata_updates: dict[str, str] | None = None,
+) -> None:
     source_path = source_path.resolve()
     output_path = output_path.resolve()
     if source_path == output_path:
@@ -342,7 +381,9 @@ def convert_checkpoint(source_path: Path, output_path: Path, device: torch.devic
             f"Partial output already exists; it was left intact for inspection: {partial_path}"
         )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    resource_report = validate_conversion_resources(source_path, output_path)
+    resource_report = validate_conversion_resources(
+        source_path, output_path, profile_name=profile_name
+    )
     logger.info(
         "Resource preflight: RAM %.2f/%.2f GiB available/required, disk %.2f/%.2f GiB free/required",
         resource_report["available_memory_bytes"] / GIB,
@@ -352,17 +393,36 @@ def convert_checkpoint(source_path: Path, output_path: Path, device: torch.devic
     )
 
     if device.type != "cuda":
-        raise ValueError("Krea2 ConvRot conversion requires a CUDA device")
+        raise ValueError(f"{profile_name} ConvRot conversion requires a CUDA device")
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is unavailable; cannot quantize Krea2 ConvRot weights")
+        raise RuntimeError(
+            f"CUDA is unavailable; cannot quantize {profile_name} ConvRot weights"
+        )
     capability = torch.cuda.get_device_capability(device)
     if capability < (7, 5):
         raise RuntimeError(f"INT8 tensor cores require SM 7.5 or newer, found SM {capability[0]}.{capability[1]}")
 
-    source_keys, source_metadata = source_layout(source_path, group_size)
-    metadata = output_metadata(source_path, output_path, source_metadata, group_size)
+    source_keys, source_metadata = source_layout(
+        source_path,
+        group_size,
+        quantized_weight_keys=quantized_weight_keys,
+        profile_name=profile_name,
+    )
+    metadata = output_metadata(
+        source_path,
+        output_path,
+        source_metadata,
+        group_size,
+        quantized_weight_keys=quantized_weight_keys,
+        metadata_updates=metadata_updates,
+    )
     config_tensor = quant_config_tensor(group_size)
-    specs = output_tensor_specs(source_path, source_keys, group_size)
+    specs = output_tensor_specs(
+        source_path,
+        source_keys,
+        group_size,
+        quantized_weight_keys=quantized_weight_keys,
+    )
     specs_by_name = {spec.name: spec for spec in specs}
     header, expected_data_bytes = build_safetensors_header(specs, metadata)
     started = time.perf_counter()
@@ -373,7 +433,7 @@ def convert_checkpoint(source_path: Path, output_path: Path, device: torch.devic
         f"Device: {torch.cuda.get_device_name(device)} (SM {capability[0]}.{capability[1]})",
     )
     logger.info(
-        f"Profile: int8_tensorwise + ConvRot, group size {group_size}, {len(KREA2_QUANTIZED_WEIGHT_KEYS)} weights",
+        f"Profile: int8_tensorwise + ConvRot, group size {group_size}, {len(quantized_weight_keys)} weights",
     )
 
     logger.info("Streaming temporary checkpoint: %s", partial_path)
@@ -383,7 +443,7 @@ def convert_checkpoint(source_path: Path, output_path: Path, device: torch.devic
         with safe_open(source_path, framework="pt", device="cpu") as source:
             quantized_index = 0
             for key in source_keys:
-                if key not in KREA2_QUANTIZED_WEIGHT_KEYS:
+                if key not in quantized_weight_keys:
                     source_tensor = source.get_tensor(key)
                     write_tensor_bytes(
                         destination,
@@ -425,7 +485,7 @@ def convert_checkpoint(source_path: Path, output_path: Path, device: torch.devic
                 torch.cuda.empty_cache()
                 elapsed = time.perf_counter() - started
                 logger.info(
-                    f"[{quantized_index:03d}/{len(KREA2_QUANTIZED_WEIGHT_KEYS)}] {key} ({elapsed:.1f}s)",
+                    f"[{quantized_index:03d}/{len(quantized_weight_keys)}] {key} ({elapsed:.1f}s)",
                 )
 
         written_data_bytes = destination.tell() - data_start
@@ -438,7 +498,13 @@ def convert_checkpoint(source_path: Path, output_path: Path, device: torch.devic
         os.fsync(destination.fileno())
 
     logger.info("Validating all tensor headers and ConvRot metadata...")
-    validate_checkpoint(source_path, partial_path, group_size)
+    validate_checkpoint(
+        source_path,
+        partial_path,
+        group_size,
+        quantized_weight_keys=quantized_weight_keys,
+        profile_name=profile_name,
+    )
     os.rename(partial_path, output_path)
     elapsed = time.perf_counter() - started
     logger.info("Completed: %s", output_path)

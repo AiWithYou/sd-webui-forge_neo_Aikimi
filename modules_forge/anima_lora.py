@@ -1,9 +1,9 @@
 """Block-layout conversion helpers for Anima LoRAs.
 
-Anima-2.9B expands the original 28 transformer blocks to 40 blocks.  The
-inserted blocks were initialized from specific original blocks, so a LoRA can
-be expanded without copying tensor storage by exposing the same tensor under
-each corresponding 40-block key.
+Anima-2.9B expands the original 28 transformer blocks to 40 blocks, and
+Anima-3.8B expands that layout to 52.  The inserted blocks were initialized
+from specific source blocks, so a LoRA can be expanded without copying tensor
+storage by exposing the same tensor under each corresponding target key.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from typing import TypeVar
 
 ANIMA_BASE_BLOCKS = 28
 ANIMA_29B_BLOCKS = 40
+ANIMA_38B_BLOCKS = 52
 
 # Positions inserted by the published Anima-2.9B expansion manifest.
 ANIMA_29B_INSERTED_BLOCKS = (2, 5, 8, 11, 14, 17, 21, 24, 27, 30, 33, 36)
@@ -41,10 +42,59 @@ ANIMA_29B_TO_BASE = tuple(
     _ANIMA_29B_INSERTED_TO_BASE.get(expanded, _ANIMA_29B_ORIGINAL_TO_BASE.get(expanded))
     for expanded in range(ANIMA_29B_BLOCKS)
 )
-_ANIMA_BASE_TO_29B_TARGETS = tuple(
-    tuple(expanded for expanded, base in enumerate(ANIMA_29B_TO_BASE) if base == source)
-    for source in range(ANIMA_BASE_BLOCKS)
+# Positions and sources recorded by the published Anima-3.8B Pro52 manifest.
+ANIMA_38B_INSERTED_BLOCKS = (3, 7, 11, 15, 19, 23, 27, 31, 35, 39, 43, 47)
+_ANIMA_38B_INSERTED_TO_29B = {
+    3: 2,
+    7: 5,
+    11: 8,
+    15: 11,
+    19: 14,
+    23: 17,
+    27: 20,
+    31: 23,
+    35: 26,
+    39: 29,
+    43: 32,
+    47: 35,
+}
+ANIMA_29B_TO_38B = tuple(
+    block
+    for block in range(ANIMA_38B_BLOCKS)
+    if block not in ANIMA_38B_INSERTED_BLOCKS
 )
+_ANIMA_38B_ORIGINAL_TO_29B = {
+    expanded: source for source, expanded in enumerate(ANIMA_29B_TO_38B)
+}
+ANIMA_38B_TO_29B = tuple(
+    _ANIMA_38B_INSERTED_TO_29B.get(
+        expanded, _ANIMA_38B_ORIGINAL_TO_29B.get(expanded)
+    )
+    for expanded in range(ANIMA_38B_BLOCKS)
+)
+
+
+def _target_to_source_blocks(
+    source_blocks: int, target_blocks: int
+) -> tuple[int, ...]:
+    if (source_blocks, target_blocks) == (ANIMA_BASE_BLOCKS, ANIMA_29B_BLOCKS):
+        return ANIMA_29B_TO_BASE
+    if (source_blocks, target_blocks) == (ANIMA_29B_BLOCKS, ANIMA_BASE_BLOCKS):
+        return ANIMA_BASE_TO_29B
+    if (source_blocks, target_blocks) == (ANIMA_29B_BLOCKS, ANIMA_38B_BLOCKS):
+        return ANIMA_38B_TO_29B
+    if (source_blocks, target_blocks) == (ANIMA_38B_BLOCKS, ANIMA_29B_BLOCKS):
+        return ANIMA_29B_TO_38B
+    if (source_blocks, target_blocks) == (ANIMA_BASE_BLOCKS, ANIMA_38B_BLOCKS):
+        return tuple(ANIMA_29B_TO_BASE[block] for block in ANIMA_38B_TO_29B)
+    if (source_blocks, target_blocks) == (ANIMA_38B_BLOCKS, ANIMA_BASE_BLOCKS):
+        return tuple(
+            ANIMA_29B_TO_38B[ANIMA_BASE_TO_29B[block]]
+            for block in range(ANIMA_BASE_BLOCKS)
+        )
+    raise ValueError(
+        f"Unsupported Anima LoRA layout conversion: {source_blocks} to {target_blocks}"
+    )
 
 
 # Kohya, Forge generic, PEFT-style, and bare Comfy-style block names.
@@ -66,7 +116,11 @@ class AnimaLoraConversionReport:
 
     @property
     def converted(self) -> bool:
-        return self.direction in {"28_to_40", "40_to_28"}
+        return self.direction not in {
+            "native",
+            "ambiguous_source",
+            "unsupported_target",
+        }
 
 
 _Value = TypeVar("_Value")
@@ -92,20 +146,22 @@ def anima_lora_block_indices(lora: dict[str, _Value]) -> tuple[int, ...]:
 
 
 def detect_anima_lora_block_count(lora: dict[str, _Value]) -> int | None:
-    """Detect only complete 28- or 40-block layouts to avoid unsafe guessing."""
+    """Detect only complete supported layouts to avoid unsafe guessing."""
 
     indices = anima_lora_block_indices(lora)
     if indices == tuple(range(ANIMA_BASE_BLOCKS)):
         return ANIMA_BASE_BLOCKS
     if indices == tuple(range(ANIMA_29B_BLOCKS)):
         return ANIMA_29B_BLOCKS
+    if indices == tuple(range(ANIMA_38B_BLOCKS)):
+        return ANIMA_38B_BLOCKS
     return None
 
 
 def convert_anima_lora_layout(
     lora: dict[str, _Value], target_blocks: int
 ) -> tuple[dict[str, _Value], AnimaLoraConversionReport]:
-    """Convert a complete Anima LoRA between the 28- and 40-block layouts.
+    """Convert a complete Anima LoRA between the 28-, 40-, and 52-block layouts.
 
     Conversion is deliberately skipped for sparse or otherwise ambiguous block
     coverage.  Expanding reuses tensor objects for inserted blocks, avoiding a
@@ -116,7 +172,12 @@ def convert_anima_lora_layout(
     source_indices = anima_lora_block_indices(lora)
     source_blocks = detect_anima_lora_block_count(lora)
 
-    if target_blocks not in {ANIMA_BASE_BLOCKS, ANIMA_29B_BLOCKS}:
+    supported_blocks = {
+        ANIMA_BASE_BLOCKS,
+        ANIMA_29B_BLOCKS,
+        ANIMA_38B_BLOCKS,
+    }
+    if target_blocks not in supported_blocks:
         return lora, AnimaLoraConversionReport(source_blocks, target_blocks, source_indices, "unsupported_target")
 
     if source_blocks is None:
@@ -124,6 +185,16 @@ def convert_anima_lora_layout(
 
     if source_blocks == target_blocks:
         return lora, AnimaLoraConversionReport(source_blocks, target_blocks, source_indices, "native")
+
+    target_to_source = _target_to_source_blocks(source_blocks, target_blocks)
+    targets_by_source = tuple(
+        tuple(
+            target
+            for target, source in enumerate(target_to_source)
+            if source == source_block
+        )
+        for source_block in range(source_blocks)
+    )
 
     converted: dict[str, _Value] = {}
     source_for_output: dict[str, str] = {}
@@ -144,20 +215,15 @@ def convert_anima_lora_layout(
             continue
 
         source_block, prefix, suffix = parsed
-        if source_blocks == ANIMA_BASE_BLOCKS and target_blocks == ANIMA_29B_BLOCKS:
-            targets = _ANIMA_BASE_TO_29B_TARGETS[source_block]
-            for target_block in targets:
-                add(f"{prefix}{target_block}{suffix}", value, key)
-            duplicated_entries += len(targets) - 1
-            continue
-
-        base_block = _ANIMA_29B_ORIGINAL_TO_BASE.get(source_block)
-        if base_block is None:
+        targets = targets_by_source[source_block]
+        if not targets:
             dropped_entries += 1
             continue
-        add(f"{prefix}{base_block}{suffix}", value, key)
+        for target_block in targets:
+            add(f"{prefix}{target_block}{suffix}", value, key)
+        duplicated_entries += len(targets) - 1
 
-    direction = "28_to_40" if source_blocks == ANIMA_BASE_BLOCKS else "40_to_28"
+    direction = f"{source_blocks}_to_{target_blocks}"
     return converted, AnimaLoraConversionReport(
         source_blocks,
         target_blocks,
