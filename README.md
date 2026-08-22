@@ -113,7 +113,7 @@ download_sensenova_u15_int8.bat
 - 約16.52 GiBの`SenseNova-U1.5-8B-MoT-pruned-int8_convrot.safetensors`を再開可能な方式で取得
 - ConvRot署名、17,734,813,848 bytesのサイズ、SHA-256を検証
 
-完了後にForgeを起動し、`SenseNova U1.5`タブを開きます。既定値は`正式版 · INT8 ConvRot`、`Low · RTX 3090推奨`、BF16計算、50 Steps、CFG 4.0です。
+完了後にForgeを起動し、`SenseNova U1.5`タブを開きます。既定値は`正式版 · INT8 ConvRot`、`24GB Safe · 2K出力優先`、2048²以下の出力、参照各512²、BF16計算、50 Steps、CFG 4.0です。
 
 このINT8 ConvRotは正式版SenseNova U1.5を基にしています。ただし、変換weightと専用loaderはコミュニティ管理であり、SenseNova公式配布のweightではありません。Studioは固定したcheckpointだけを受け付け、Preview、GGUF、BF16へ暗黙に切り替えません。
 
@@ -125,8 +125,8 @@ download_sensenova_u15_int8.bat
 
 - テキスト生成と複数画像編集に対応
 - 参照画像を最大64枚まで一括または個別に追加し、差し替え、削除、前後移動が可能
-- 全参照画像を合計4096² pixels以内へ収め、各画像を512²〜2048²へ配分する自動リサイズ
-- 公式解像度bucketと、編集時に1枚目の比率を維持する約4MPの自動出力
+- 24GB Safeでは2K出力を維持し、参照2枚を各512²へ縮小して、過大な参照入力をモデル読込前に拒否
+- 編集時に1枚目の比率を維持する約4MPの自動出力と、参照画像の縮小モードを独立して選択可能
 - 正式版を基にしたINT8 ConvRotを固定し、Previewとの混在を防止
 - 生成前にruntime revision、Python依存、safetensorsのサイズ、ConvRot署名、完全性記録を検査
 - 生成時に通常のForgeモデルを退避し、キャンセル時は隔離workerを停止してメモリを解放
@@ -306,7 +306,7 @@ NeoWでは、その同期で削除対象となったBnB/NF4/GGUF互換経路を�
 - MiniMax H3 Studioを使う前に、対応するローカルComfyUI runtimeとモデルを別途用意してください。
 - SenseNova U1.5正式版では、約16.52 GiBのINT8 ConvRot checkpointに加え、CPU RAM、GPU activation、画像token、decoder用のメモリも必要になります。
 - SenseNovaのINT8 ConvRotはコミュニティ管理の変換weightであり、公式BF16と同一の品質や数値一致は保証されません。
-- SenseNovaの参照画像数と入力解像度を増やすと、画像token列とメモリ使用量が増えます。最初は2枚以下、512²入力、512×512出力、1 Step、Low VRAMモードで確認してください。
+- SenseNovaの参照画像数と入力解像度を増やすと、三分岐cacheと画像token列が急増します。RTX 3090では2参照、入力各512²、出力2048²、1 Stepを完走確認済みです。1664×2496でも参照入力を各512²へ縮小すれば同等画素数なので、24GB Safeの範囲に収まります。
 - H3のContext-IRと2K Regenerateは外部有料API用であり、このStudioは呼び出しません。
 - 4K/8K処理はVRAMだけでなくCPU RAM、一時disk、長い処理時間を必要とします。
 - 高解像度処理は、まず4Kと低いdenoising strengthで構図と顔を確認してください。

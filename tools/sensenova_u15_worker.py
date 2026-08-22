@@ -32,6 +32,9 @@ MAX_INPUT_PIXELS = 2048 * 2048
 TOTAL_INPUT_PIXELS = 4096 * 4096
 MAX_REFERENCE_IMAGES = 64
 EXPECTED_CONVROT_LAYERS = 588
+LOW_VRAM_MAX_OUTPUT_PIXELS = 2048 * 2048
+LOW_VRAM_MAX_INPUT_PIXELS = 512 * 512
+LOW_VRAM_MAX_REFERENCE_IMAGES = 2
 FINAL_MODEL_ID = "sensenova/SenseNova-U1.5-8B-MoT"
 CHECKPOINT_REVISION = "57de22ad4e2fc24c77f56dfe45dbb87a60dfebee"
 RUNTIME_REVISION = "e6dfd45762eb46f805067fe079c14bcb643ccccd"
@@ -210,6 +213,35 @@ def _validate_payload(payload: dict[str, Any]) -> None:
     checkpoint = Path(str(payload.get("checkpoint", "")))
     if checkpoint.suffix.lower() != ".safetensors" or not checkpoint.is_file():
         raise RuntimeError(f"INT8 ConvRot checkpoint does not exist: {checkpoint}")
+    vram_mode = str(payload.get("vram_mode", "low"))
+    if vram_mode not in {"low", "unrestricted", "full"}:
+        raise RuntimeError(f"Unsupported VRAM mode: {vram_mode}")
+    if vram_mode == "low":
+        output_pixels = (
+            int(payload.get("target_pixels", DEFAULT_TARGET_PIXELS))
+            if width is None
+            else int(width) * int(height)
+        )
+        requested_input = payload.get("input_max_pixels", "auto")
+        safe_input = (
+            None if requested_input == "auto" else int(requested_input)
+        )
+        if (
+            output_pixels > LOW_VRAM_MAX_OUTPUT_PIXELS
+            or len(image_paths) > LOW_VRAM_MAX_REFERENCE_IMAGES
+            or (
+                mode == "edit"
+                and (
+                    safe_input is None
+                    or safe_input > LOW_VRAM_MAX_INPUT_PIXELS
+                )
+            )
+        ):
+            raise RuntimeError(
+                "The 24 GB safe profile requires output <= 2048^2, at most 2 references, "
+                "and input_max_pixels <= 512^2 per reference. Use unrestricted mode explicitly "
+                "for a larger workload."
+            )
 
 
 def _load_runtime(payload: dict[str, Any]):
@@ -239,9 +271,9 @@ def _load_runtime(payload: dict[str, Any]):
         raise RuntimeError("INT8 ConvRot inference is fixed to bfloat16 compute.")
     dtype = torch.bfloat16
     vram_mode = str(payload.get("vram_mode", "low"))
-    if vram_mode not in {"low", "full"}:
+    if vram_mode not in {"low", "unrestricted", "full"}:
         raise RuntimeError(f"Unsupported VRAM mode: {vram_mode}")
-    prefetch_count = 1 if vram_mode == "low" else None
+    prefetch_count = 1 if vram_mode in {"low", "unrestricted"} else None
     checkpoint = Path(payload["checkpoint"]).resolve()
     device = torch.device(str(payload.get("device", "cuda")))
     if device.type != "cuda" or not torch.cuda.is_available():

@@ -56,8 +56,59 @@ class SenseNovaWorkerTests(unittest.TestCase):
                     "checkpoint": str(checkpoint),
                     "width": 1024,
                     "height": 1024,
+                    "input_max_pixels": 512 * 512,
+                    "vram_mode": "low",
                 }
             )
+
+    def test_low_vram_payload_rejects_uncapped_four_megapixel_edit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            image = root / "reference.png"
+            checkpoint = root / "model.safetensors"
+            Image.new("RGB", (16, 16)).save(image)
+            checkpoint.write_bytes(b"test")
+            payload = {
+                "mode": "edit",
+                "prompt": "combine",
+                "input_images": [str(image), str(image)],
+                "quantization": "int8_convrot",
+                "model_path": worker.FINAL_MODEL_ID,
+                "checkpoint_revision": worker.CHECKPOINT_REVISION,
+                "checkpoint": str(checkpoint),
+                "width": 1664,
+                "height": 2496,
+                "input_max_pixels": "auto",
+                "vram_mode": "low",
+            }
+            with self.assertRaisesRegex(RuntimeError, "24 GB safe profile"):
+                worker._validate_payload(payload)
+
+            payload["vram_mode"] = "unrestricted"
+            worker._validate_payload(payload)
+
+            payload.update(
+                {
+                    "vram_mode": "low",
+                    "width": 2048,
+                    "height": 2048,
+                    "input_max_pixels": 512 * 512,
+                    "input_images": [str(image), str(image)],
+                }
+            )
+            worker._validate_payload(payload)
+
+            payload.update(
+                {
+                    "vram_mode": "low",
+                    "width": 1024,
+                    "height": 1024,
+                    "input_max_pixels": 512 * 512,
+                    "input_images": [str(image), str(image), str(image)],
+                }
+            )
+            with self.assertRaisesRegex(RuntimeError, "at most 2 references"):
+                worker._validate_payload(payload)
 
     def test_normalized_tensor_is_converted_to_rgb_image(self):
         batch = torch.tensor([[[[-1.0]], [[0.0]], [[1.0]]]])

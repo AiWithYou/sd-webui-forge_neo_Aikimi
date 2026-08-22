@@ -24,16 +24,22 @@ ROOT = Path(__file__).resolve().parents[2]
     "opt-in real SenseNova final INT8 ConvRot GPU test",
 )
 class SenseNovaU15LiveTest(unittest.TestCase):
-    def test_convrot_two_image_edit_generates_nonuniform_png(self):
-        status = inspect_runtime(DEFAULT_SOURCE_PATH, checkpoint=DEFAULT_CHECKPOINT_PATH)
-        self.assertTrue(status.ready, " / ".join(status.messages))
-
+    @staticmethod
+    def _reference_images() -> tuple[Image.Image, Image.Image]:
         first = Image.new("RGB", (512, 512), (235, 242, 250))
         first_draw = ImageDraw.Draw(first)
         first_draw.ellipse((100, 80, 412, 392), fill=(30, 90, 190))
         second = Image.new("RGB", (512, 512), (250, 235, 220))
         second_draw = ImageDraw.Draw(second)
         second_draw.rectangle((112, 112, 400, 400), fill=(220, 70, 55))
+        return first, second
+
+    def _run_two_image_edit(
+        self, output_size: int, *, vram_mode: str = "low"
+    ) -> dict:
+        status = inspect_runtime(DEFAULT_SOURCE_PATH, checkpoint=DEFAULT_CHECKPOINT_PATH)
+        self.assertTrue(status.ready, " / ".join(status.messages))
+        first, second = self._reference_images()
 
         request = SenseNovaRequest(
             mode=MODE_EDIT,
@@ -45,15 +51,15 @@ class SenseNovaU15LiveTest(unittest.TestCase):
             checkpoint=str(DEFAULT_CHECKPOINT_PATH),
             source_path=str(DEFAULT_SOURCE_PATH),
             input_images=(first, second),
-            width=512,
-            height=512,
+            width=output_size,
+            height=output_size,
             input_max_pixels=str(512 * 512),
             steps=1,
             cfg_scale=4.0,
             img_cfg_scale=1.0,
             timestep_shift=3.0,
             seed=42,
-            vram_mode="low",
+            vram_mode=vram_mode,
             attn_backend="sdpa",
             dtype="bfloat16",
         )
@@ -70,7 +76,7 @@ class SenseNovaU15LiveTest(unittest.TestCase):
         output_path = Path(complete[0]["path"])
         self.assertTrue(output_path.is_file())
         with Image.open(output_path) as image:
-            self.assertEqual(image.size, (512, 512))
+            self.assertEqual(image.size, (output_size, output_size))
             values = np.asarray(image.convert("RGB"), dtype=np.float32)
         self.assertGreater(float(values.var()), 1.0)
         self.assertEqual(complete[0]["metadata"]["input_image_count"], 2)
@@ -80,6 +86,18 @@ class SenseNovaU15LiveTest(unittest.TestCase):
         self.assertEqual(complete[0]["metadata"]["release_variant"], "final")
         self.assertEqual(complete[0]["metadata"]["loaded_int8_layers"], 588)
         self.assertEqual(complete[0]["metadata"]["schema_version"], 2)
+        return complete[0]
+
+    def test_convrot_two_image_edit_generates_nonuniform_png(self):
+        self._run_two_image_edit(512)
+
+    def test_low_vram_1024_profile_generates_two_image_edit(self):
+        completed = self._run_two_image_edit(1024)
+        self.assertEqual(completed["metadata"]["effective_input_max_pixels"], 512 * 512)
+
+    def test_low_vram_2048_profile_with_downscaled_references(self):
+        completed = self._run_two_image_edit(2048)
+        self.assertEqual(completed["metadata"]["effective_input_max_pixels"], 512 * 512)
 
 
 if __name__ == "__main__":

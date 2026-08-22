@@ -43,12 +43,16 @@ MIN_OUTPUT_SIDE = 512
 MAX_OUTPUT_SIDE = 4096
 MIN_PIXEL_BUDGET = 512 * 512
 MAX_PIXEL_BUDGET = 2048 * 2048
+LOW_VRAM_MAX_OUTPUT_PIXELS = 2048 * 2048
+LOW_VRAM_MAX_INPUT_PIXELS = 512 * 512
+LOW_VRAM_MAX_REFERENCE_IMAGES = 2
 
-VRAM_MODES = ("low", "full")
+VRAM_MODES = ("low", "unrestricted", "full")
 ATTENTION_BACKENDS = ("auto", "sdpa", "flash")
 DTYPES = ("bfloat16",)
 
 RESOLUTIONS: dict[str, tuple[int, int]] = {
+    "512x512": (512, 512),
     "1024x1024": (1024, 1024),
     "2048x2048": (2048, 2048),
     "2720x1536": (2720, 1536),
@@ -110,7 +114,7 @@ class SenseNovaRequest:
     width: int | None = 2048
     height: int | None = 2048
     target_pixels: int = 2048 * 2048
-    input_max_pixels: int | str = "auto"
+    input_max_pixels: int | str = 512 * 512
     steps: int = 50
     cfg_scale: float = 4.0
     img_cfg_scale: float = 1.0
@@ -147,11 +151,12 @@ def parse_resolution(value: str, mode: str) -> tuple[int | None, int | None]:
 def resolution_choices(mode: str) -> list[tuple[str, str]]:
     choices: list[tuple[str, str]] = []
     if mode == MODE_EDIT:
-        choices.append(("入力1枚目の比率を維持 · 約4MP", "auto"))
+        choices.append(("入力1枚目の比率を維持 · 約4MP · 2K出力優先", "auto"))
     choices.extend(
         [
-            ("1024 × 1024 · 動作確認（学習解像度外）", "1024x1024"),
-            ("2048 × 2048 · 1:1 公式", "2048x2048"),
+            ("512 × 512 · 最小VRAM動作確認", "512x512"),
+            ("1024 × 1024 · 省VRAM（学習解像度外）", "1024x1024"),
+            ("2048 × 2048 · 1:1 · 24GB Safe実測済み", "2048x2048"),
             ("2720 × 1536 · 16:9 公式", "2720x1536"),
             ("1536 × 2720 · 9:16 公式", "1536x2720"),
             ("2496 × 1664 · 3:2 公式", "2496x1664"),
@@ -274,6 +279,7 @@ def validate_request(request: SenseNovaRequest) -> None:
         raise SenseNovaBridgeError(
             "自動出力の画素数は512²〜2048²の範囲にしてください。"
         )
+    input_budget: int | None = None
     if request.input_max_pixels != "auto":
         try:
             input_budget = int(request.input_max_pixels)
@@ -299,6 +305,34 @@ def validate_request(request: SenseNovaRequest) -> None:
         raise SenseNovaBridgeError(
             f"VRAMモードは {', '.join(VRAM_MODES)} から選択してください。"
         )
+    if request.vram_mode == "low":
+        output_pixels = (
+            int(request.target_pixels)
+            if request.width is None
+            else int(request.width) * int(request.height or 0)
+        )
+        low_vram_errors: list[str] = []
+        if output_pixels > LOW_VRAM_MAX_OUTPUT_PIXELS:
+            low_vram_errors.append(
+                f"出力{request.width or '自動'}×{request.height or '自動'}"
+            )
+        if request.mode == MODE_EDIT:
+            if len(request.input_images) > LOW_VRAM_MAX_REFERENCE_IMAGES:
+                low_vram_errors.append(f"参照{len(request.input_images)}枚")
+            if input_budget is None or input_budget > LOW_VRAM_MAX_INPUT_PIXELS:
+                budget_label = (
+                    "自動"
+                    if input_budget is None
+                    else f"{round(input_budget**0.5):,}²/画像"
+                )
+                low_vram_errors.append(f"入力予算{budget_label}")
+        if low_vram_errors:
+            details = "、".join(low_vram_errors)
+            raise SenseNovaBridgeError(
+                "Low（RTX 3090・24GB安全）では、出力を2048²以下、参照画像を2枚以下、"
+                "参照画像縮小モードを512²/画像にしてください。"
+                f"現在の超過条件: {details}。大きい条件はUncapped streamingを選択してください。"
+            )
     if request.attn_backend not in ATTENTION_BACKENDS:
         raise SenseNovaBridgeError("Attention backendの指定が不正です。")
     if request.dtype not in DTYPES:
@@ -813,16 +847,21 @@ def request_summary_html(request: SenseNovaRequest) -> str:
     mode = "複数画像編集" if request.mode == MODE_EDIT else "テキスト生成"
     quantization = "正式版 · INT8 ConvRot"
     size = (
-        "入力1枚目の比率 · 約4MP"
+        f"入力1枚目の比率 · 約{request.target_pixels / 1_000_000:.1f}MP"
         if request.width is None
         else f"{request.width} × {request.height}"
     )
+    vram_label = {
+        "low": "24GB SAFE",
+        "unrestricted": "UNCAPPED",
+        "full": "FULL GPU",
+    }.get(request.vram_mode, request.vram_mode.upper())
     return (
         '<div class="sn-summary">'
         f"<span><small>MODE</small>{html.escape(mode)}</span>"
         f"<span><small>WEIGHTS</small>{html.escape(quantization)}</span>"
         f"<span><small>OUTPUT</small>{html.escape(size)}</span>"
         f"<span><small>REFERENCES</small>{len(request.input_images)}枚</span>"
-        f"<span><small>SAMPLING</small>{request.steps} steps · CFG {request.cfg_scale:g}</span>"
+        f"<span><small>SAMPLING</small>{html.escape(vram_label)} · {request.steps} steps · CFG {request.cfg_scale:g}</span>"
         "</div>"
     )

@@ -42,6 +42,7 @@ class SenseNovaRequestTests(unittest.TestCase):
             input_images=images,
             width=None,
             height=None,
+            vram_mode="unrestricted",
         )
         bridge.validate_request(request)
 
@@ -53,6 +54,63 @@ class SenseNovaRequestTests(unittest.TestCase):
                     input_images=images + (Image.new("RGB", (32, 32)),),
                 )
             )
+
+    def test_low_vram_profile_rejects_the_failed_four_megapixel_workload(self):
+        images = (
+            Image.new("RGB", (32, 32), (255, 0, 0)),
+            Image.new("RGB", (32, 32), (0, 0, 255)),
+        )
+        unsafe = bridge.SenseNovaRequest(
+            mode=bridge.MODE_EDIT,
+            prompt="Combine two references",
+            input_images=images,
+            width=1664,
+            height=2496,
+            input_max_pixels="auto",
+            vram_mode="low",
+        )
+        with self.assertRaisesRegex(bridge.SenseNovaBridgeError, "24GB安全"):
+            bridge.validate_request(unsafe)
+
+        unrestricted = bridge.SenseNovaRequest(
+            **{**unsafe.__dict__, "vram_mode": "unrestricted"}
+        )
+        bridge.validate_request(unrestricted)
+
+    def test_low_vram_defaults_match_the_measured_3090_profile(self):
+        request = bridge.SenseNovaRequest(
+            mode=bridge.MODE_EDIT,
+            prompt="Combine two references",
+            input_images=(
+                Image.new("RGB", (32, 32)),
+                Image.new("RGB", (32, 32)),
+            ),
+            width=None,
+            height=None,
+        )
+        bridge.validate_request(request)
+        self.assertEqual(request.target_pixels, 2048 * 2048)
+        self.assertEqual(request.input_max_pixels, 512 * 512)
+        self.assertEqual(request.vram_mode, "low")
+
+        three_references = bridge.SenseNovaRequest(
+            **{
+                **request.__dict__,
+                "input_images": request.input_images
+                + (Image.new("RGB", (32, 32)),),
+            }
+        )
+        with self.assertRaisesRegex(bridge.SenseNovaBridgeError, "参照3枚"):
+            bridge.validate_request(three_references)
+
+        two_k = bridge.SenseNovaRequest(
+            mode=bridge.MODE_EDIT,
+            prompt="2K edit",
+            input_images=request.input_images,
+            width=2048,
+            height=2048,
+        )
+        bridge.validate_request(two_k)
 
     def test_text_mode_rejects_hidden_reference_data(self):
         request = bridge.SenseNovaRequest(

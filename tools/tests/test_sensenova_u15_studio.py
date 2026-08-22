@@ -76,7 +76,9 @@ class SenseNovaStudioSourceTests(unittest.TestCase):
         self.assertIn(".sn-bulk-row", self.style)
         self.assertIn("選択画像を差し替え", self.script)
         self.assertIn("_move_reference", self.script)
-        self.assertIn("最大64枚", self.script)
+        self.assertIn(
+            'label=f"参照画像（最大{MAX_REFERENCE_IMAGES}枚）"', self.script
+        )
 
     def test_final_int8_convrot_is_the_fixed_model(self):
         self.assertIn("gr.State(QUANT_INT8_CONVROT)", self.script)
@@ -95,6 +97,14 @@ class SenseNovaStudioSourceTests(unittest.TestCase):
         self.assertIn("job_id = gr.State", self.script)
         self.assertNotIn("def _generate(*values)", self.script)
         self.assertNotIn("def _summary_from_ui(*values)", self.script)
+
+    def test_measured_24gb_safe_defaults_are_visible(self):
+        self.assertIn('value="2048x2048"', self.script)
+        self.assertIn("24GB Safe · 2K出力優先", self.script)
+        self.assertIn("Uncapped streaming", self.script)
+        updates = self.studio._mode_updates(self.studio.MODE_EDIT, "2048x2048")
+        self.assertEqual(updates[1]["value"], "auto")
+        self.assertEqual(updates[3]["value"], str(512 * 512))
 
     def test_responsive_and_accessible_ui_contracts(self):
         self.assertIn("@media (max-width: 640px)", self.style)

@@ -147,10 +147,13 @@ def _mode_updates(mode: str, current_resolution: str):
         gr.update(visible=mode == MODE_EDIT),
         gr.update(choices=choices, value=selected),
         gr.update(visible=mode == MODE_EDIT),
-        gr.update(visible=mode == MODE_EDIT),
+        gr.update(
+            visible=mode == MODE_EDIT,
+            value=str(512 * 512) if mode == MODE_EDIT else "auto",
+        ),
         gr.update(
             value=(
-                f'<div class="sn-mode-note"><b>MULTI-IMAGE EDIT</b><span>入力順を保ったまま最大{MAX_REFERENCE_IMAGES}枚を渡します。プロンプトでは Image-1、Image-2 のように指定できます。</span></div>'
+                f'<div class="sn-mode-note"><b>MULTI-IMAGE EDIT</b><span>モデル上限は{MAX_REFERENCE_IMAGES}枚。RTX 3090では2K出力を維持し、参照2枚を各512²へ縮小して渡します。</span></div>'
                 if mode == MODE_EDIT
                 else '<div class="sn-mode-note"><b>TEXT TO IMAGE</b><span>参照画像を使わず、公式解像度バケットから生成します。</span></div>'
             )
@@ -392,7 +395,7 @@ def _build_ui():
                   <div>
                     <span class="sn-eyebrow">FORGE NEO · NATIVE MULTIMODAL</span>
                     <h2>SenseNova U1.5 Studio</h2>
-                    <p>正式版モデルによるテキスト生成と、最大64枚を順番どおり使う複数参照画像編集。INT8 ConvRotをRTX 3090向け低VRAM経路で実行します。</p>
+                    <p>正式版モデルによるテキスト生成と複数参照画像編集。RTX 3090では2K出力を保ち、参照画像だけを縮小する実測済みの24GB Safeから開始します。</p>
                   </div>
                   <div class="sn-hero-mark" aria-hidden="true"><b>U1.5</b><small>MoT</small></div>
                 </section>
@@ -541,21 +544,22 @@ def _build_ui():
                             )
                         input_max_pixels = gr.Dropdown(
                             choices=[
-                                ("自動 · 画像枚数に応じて配分", "auto"),
-                                ("2048² / 画像 · 高忠実度", str(2048 * 2048)),
-                                ("1024² / 画像 · 省メモリ", str(1024 * 1024)),
-                                ("512² / 画像 · 動作確認", str(512 * 512)),
+                                ("2K出力優先 · 各512²へ縮小 · RTX 3090推奨", str(512 * 512)),
+                                ("中間 · 各1024²へ縮小 · 大容量GPU向け", str(1024 * 1024)),
+                                ("高忠実度 · 各2048²へ縮小", str(2048 * 2048)),
+                                ("自動 · モデル上限まで配分 · 実験用", "auto"),
                             ],
-                            value="auto",
-                            label="参照画像ごとの入力予算",
+                            value=str(512 * 512),
+                            label="参照画像縮小モード",
                             visible=False,
                         )
                         with gr.Accordion("詳細設定", open=False):
                             with gr.Row():
                                 vram_mode = gr.Dropdown(
                                     choices=[
-                                        ("Low · RTX 3090推奨", "low"),
-                                        ("Full · 全重みをGPUへ", "full"),
+                                        ("24GB Safe · 2K出力優先 · RTX 3090", "low"),
+                                        ("Uncapped streaming · 大容量GPU・実験用", "unrestricted"),
+                                        ("Full GPU · 全重み配置・実験用", "full"),
                                     ],
                                     value="low",
                                     label="VRAMモード",
@@ -580,7 +584,7 @@ def _build_ui():
                     with gr.Group(elem_classes=["sn-model-card"]):
                         quantization = gr.State(QUANT_INT8_CONVROT)
                         gr.HTML(
-                            '<p class="sn-quant-note"><strong>正式版 · INT8 ConvRot</strong><br>約16.52 GiB。588個のLinear層をINT8のまま保持し、実行時に層単位で復号します。変換weightと専用ローダーはコミュニティ配布です。</p>'
+                            '<p class="sn-quant-note"><strong>正式版 · INT8 ConvRot</strong><br>24GB Safeでは2K出力を維持し、参照2枚だけを各512²へ縮小します。入力原寸を優先する場合のみUncapped streamingへ切り替えます。</p>'
                         )
                         model_path = gr.Textbox(
                             value=DEFAULT_MODEL_ID,
