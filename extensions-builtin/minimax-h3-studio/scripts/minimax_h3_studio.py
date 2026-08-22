@@ -139,12 +139,25 @@ def _mode_updates(
     )
 
 
-def _status_error(message: str) -> str:
+def _runtime_notice_html(
+    title: str,
+    message: str,
+    *,
+    tone: str = "active",
+    role: str = "status",
+) -> str:
     return (
-        '<div class="h3-runtime-card" data-tone="error" role="alert">'
-        '<div class="h3-runtime-badges"><span data-tone="error"><i></i>確認が必要</span></div>'
-        f'<p>{html.escape(message)}</p></div>'
+        f'<div class="h3-runtime-card" data-tone="{html.escape(tone, quote=True)}" '
+        f'role="{html.escape(role, quote=True)}" aria-live="polite" aria-atomic="true">'
+        '<div class="h3-runtime-summary">'
+        f'<span class="h3-runtime-primary" data-tone="{html.escape(tone, quote=True)}">'
+        f'<i aria-hidden="true"></i><strong>{html.escape(title)}</strong></span>'
+        f'<p>{html.escape(message)}</p></div></div>'
     )
+
+
+def _status_error(message: str) -> str:
+    return _runtime_notice_html("確認が必要です", message, tone="error", role="alert")
 
 
 def _preset_state_html(preset: str) -> str:
@@ -445,10 +458,7 @@ def _rescan_runtime(runtime_value: str, server_url: str, runtime_profile: str) -
 
 def _runtime_operation(callback, message: str, runtime_value: str, server_url: str, runtime_profile: str):
     yield (
-        '<div class="h3-runtime-card" data-tone="active" role="status" '
-        'aria-live="polite" aria-atomic="true">'
-        '<div class="h3-runtime-badges"><span><i></i>処理中</span></div>'
-        f'<p>{html.escape(message)}</p></div>',
+        _runtime_notice_html("実行環境を更新中", message),
         gr.update(interactive=False),
         gr.update(interactive=False),
         gr.update(interactive=False),
@@ -828,11 +838,9 @@ def _cancel(prompt_id: str, server_url: str):
 
 
 def _runtime_checking_html() -> str:
-    return (
-        '<div class="h3-runtime-card" data-tone="active" role="status" '
-        'aria-live="polite" aria-atomic="true">'
-        '<div class="h3-runtime-badges"><span><i></i>状態を確認中</span></div>'
-        '<p>H3 Studioを表示しました。backend・モデル・利用可能なメモリを確認しています…</p></div>'
+    return _runtime_notice_html(
+        "生成準備を確認中",
+        "backend・モデル・利用可能なメモリを確認しています…",
     )
 
 
@@ -894,11 +902,10 @@ def _runtime_profile_pending(runtime_profile: str) -> str:
     label = labels.get(runtime_profile)
     if label is None:
         return _status_error(f"未対応のH3 runtime profileです: {runtime_profile}")
-    return (
-        '<div class="h3-runtime-card" data-tone="warn" role="status" '
-        'aria-live="polite" aria-atomic="true">'
-        '<div class="h3-runtime-badges"><span><i></i>再起動待ち</span></div>'
-        f'<p>{html.escape(label)}を選択しました。「選択設定で再起動」で反映してください。</p></div>'
+    return _runtime_notice_html(
+        "再起動すると反映されます",
+        f"{label}を選択しました。「選択設定で再起動」を押してください。",
+        tone="warn",
     )
 
 
@@ -924,11 +931,8 @@ def _build_ui():
                 """
                 <section class="h3-hero">
                   <div class="h3-hero-copy">
-                    <span class="h3-eyebrow">FORGE NEO · MINIMAX H3 STUDIO</span>
-                    <h2>映像と音を、ひとつの流れで。</h2>
-                    <p>テキスト、キーフレーム、参照素材から、映像と32kHzステレオ音声を一度に生成します。</p>
+                    <h2>MiniMax H3 Studio</h2>
                   </div>
-                  <div class="h3-hero-mark" aria-hidden="true"><span>H3</span><small>AV</small></div>
                 </section>
                 """
             )
@@ -940,8 +944,7 @@ def _build_ui():
             with gr.Row(elem_classes=["h3-main-grid"]):
                 with gr.Column(scale=6, min_width=420, elem_classes=["h3-compose"]):
                     gr.HTML(
-                        '<div class="h3-section-kicker"><span aria-hidden="true">01</span>'
-                        '<h3>つくり方</h3></div>'
+                        '<div class="h3-section-kicker"><h3>つくり方</h3></div>'
                     )
                     mode = gr.Radio(
                         choices=[
@@ -972,8 +975,8 @@ def _build_ui():
                                 "例: 雨上がりの東京。赤い傘を持つ人物を低いカメラで追う。\n"
                                 "3秒で振り返り、遠くの雷に合わせて街の環境音が一瞬静まる。"
                             ),
-                            lines=7,
-                            max_lines=16,
+                            lines=4,
+                            max_lines=14,
                             label="H3 プロンプト",
                             show_label=False,
                             elem_id="h3-prompt",
@@ -1039,8 +1042,7 @@ def _build_ui():
                         )
 
                     gr.HTML(
-                        '<div class="h3-section-kicker"><span aria-hidden="true">02</span>'
-                        '<h3>生成設定</h3></div>'
+                        '<div class="h3-section-kicker"><h3>生成設定</h3></div>'
                     )
                     with gr.Group(elem_classes=["h3-settings-card"]):
                         gr.Markdown("#### 用途で選ぶ\n解像度・5秒・20 Stepsを用途別の標準値へまとめて揃えます。")
@@ -1091,6 +1093,22 @@ def _build_ui():
                             interactive=False,
                             elem_id="h3-duration",
                         )
+                        with gr.Row(elem_classes=["h3-generate-row"]):
+                            generate_button = gr.Button(
+                                "映像＋音声を生成",
+                                variant="primary",
+                                size="lg",
+                                interactive=False,
+                                elem_id="h3-generate",
+                                elem_classes=["h3-generate-button"],
+                            )
+                            cancel_button = gr.Button(
+                                "停止",
+                                size="lg",
+                                interactive=False,
+                                elem_id="h3-cancel",
+                                elem_classes=["h3-cancel-button"],
+                            )
                         settings_summary = gr.HTML(
                             value=initial_settings_summary,
                             elem_id="h3-settings-summary",
@@ -1138,22 +1156,6 @@ def _build_ui():
                                     elem_id="h3-ref-image-size",
                                 )
 
-                    with gr.Row(elem_classes=["h3-generate-row"]):
-                        generate_button = gr.Button(
-                            "映像＋音声を生成",
-                            variant="primary",
-                            size="lg",
-                            interactive=False,
-                            elem_id="h3-generate",
-                            elem_classes=["h3-generate-button"],
-                        )
-                        cancel_button = gr.Button(
-                            "停止",
-                            size="lg",
-                            interactive=False,
-                            elem_id="h3-cancel",
-                            elem_classes=["h3-cancel-button"],
-                        )
                     gr.HTML(
                         """
                         <nav class="h3-mobile-actions" aria-label="MiniMax H3 生成操作">
@@ -1166,8 +1168,7 @@ def _build_ui():
 
                 with gr.Column(scale=5, min_width=390, elem_classes=["h3-output"]):
                     gr.HTML(
-                        '<div class="h3-section-kicker"><span aria-hidden="true">RESULT</span>'
-                        '<h3>生成結果</h3></div>'
+                        '<div class="h3-section-kicker"><h3>生成結果</h3></div>'
                     )
                     result_video = gr.Video(
                         label="MiniMax H3 生成結果",
@@ -1190,9 +1191,75 @@ def _build_ui():
                         elem_id="h3-progress-announcer",
                     )
                     gr.HTML(
-                        '<div class="h3-output-note"><span>NATIVE AUDIO</span>'
-                        '<p>映像と32kHzステレオ音声は同じモデル推論から生成され、MP4へ同期保存されます。</p></div>'
+                        '<p class="h3-output-note">映像と32kHzステレオ音声は同じ推論から生成され、MP4へ同期保存されます。</p>'
                     )
+
+                    with gr.Accordion("実行環境とモデル", open=False, elem_id="h3-runtime-setup"):
+                        gr.Markdown(
+                            "Forge NeoはローカルのComfyUI H3 runtimeを使用し、外部URLに素材を送信しません。"
+                            "H3だけにComfy Kitchen INT8 attentionを適用します。"
+                        )
+                        runtime_profile = gr.Radio(
+                            choices=[
+                                (
+                                    "高速・推奨 · Pinned Memory + Async 2",
+                                    RUNTIME_PROFILE_FAST,
+                                ),
+                                (
+                                    "省RAM・低速 · cacheなし + Pinned/Async無効",
+                                    RUNTIME_PROFILE_LOW_RAM,
+                                ),
+                            ],
+                            value=initial_runtime_profile,
+                            label="起動プロファイル",
+                            interactive=False,
+                            elem_id="h3-runtime-profile",
+                        )
+                        gr.Markdown(
+                            "profile変更は「選択設定で再起動」を押すと反映されます。"
+                            "外部起動processは自動停止しません。"
+                        )
+                        with gr.Row():
+                            runtime_path = gr.Textbox(
+                                value=runtime_value,
+                                label="ComfyUI フォルダー",
+                                placeholder=r"H:\path\to\ComfyUI",
+                                interactive=False,
+                                elem_id="h3-runtime-path",
+                            )
+                            server_url = gr.Textbox(
+                                value=H3_SERVER_URL,
+                                label="ローカルBackend URL",
+                                interactive=False,
+                                elem_id="h3-server-url",
+                            )
+                        with gr.Row():
+                            connect_button = gr.Button(
+                                "接続 / 起動",
+                                variant="primary",
+                                interactive=False,
+                                elem_id="h3-connect",
+                            )
+                            restart_button = gr.Button(
+                                "選択設定で再起動",
+                                interactive=False,
+                                elem_id="h3-restart",
+                            )
+                            rescan_button = gr.Button(
+                                "状態を再確認",
+                                interactive=False,
+                                elem_id="h3-rescan",
+                            )
+                        gr.HTML(
+                            """
+                            <div class="h3-license-note">
+                              <strong>Local Base · 768p</strong>
+                              <span>ローカル公開weightはBaseです。Context-IRと2K Regenerateは外部の有料API専用で、この画面からは呼びません。</span>
+                              <a href="https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MiniMax H3 Community License</a>
+                              <a href="https://docs.comfy.org/tutorials/video/minimax/minimax-h3" target="_blank" rel="noopener noreferrer">Official ComfyUI guide</a>
+                            </div>
+                            """
+                        )
 
                     with gr.Accordion("最近の生成", open=True, elem_id="h3-history-accordion"):
                         history_panel = gr.HTML(value=initial_history_html, elem_id="h3-history")
@@ -1220,74 +1287,6 @@ def _build_ui():
                                 size="sm",
                                 elem_id="h3-history-refresh",
                             )
-
-            with gr.Accordion("実行環境とモデル", open=False, elem_id="h3-runtime-setup"):
-                gr.Markdown(
-                    "Forge Neo はローカルの ComfyUI H3 runtime を使用します。外部URLには素材を送信しません。"
-                    " H3だけにComfy Kitchen INT8 attentionを適用します。生成品質とは別に、"
-                    "高速または省RAMの起動profileを明示選択できます。"
-                )
-                runtime_profile = gr.Radio(
-                    choices=[
-                        (
-                            "高速・推奨 · Pinned Memory + Async 2",
-                            RUNTIME_PROFILE_FAST,
-                        ),
-                        (
-                            "省RAM・低速 · cacheなし + Pinned/Async無効",
-                            RUNTIME_PROFILE_LOW_RAM,
-                        ),
-                    ],
-                    value=initial_runtime_profile,
-                    label="起動プロファイル",
-                    interactive=False,
-                    elem_id="h3-runtime-profile",
-                )
-                gr.Markdown(
-                    "profile変更は選択しただけでは反映されません。キューが空のときに"
-                    "「選択設定で再起動」を押してください。外部起動processは自動停止しません。"
-                )
-                with gr.Row():
-                    runtime_path = gr.Textbox(
-                        value=runtime_value,
-                        label="ComfyUI フォルダー",
-                        placeholder=r"H:\path\to\ComfyUI",
-                        interactive=False,
-                        elem_id="h3-runtime-path",
-                    )
-                    server_url = gr.Textbox(
-                        value=H3_SERVER_URL,
-                        label="ローカルBackend URL",
-                        interactive=False,
-                        elem_id="h3-server-url",
-                    )
-                with gr.Row():
-                    connect_button = gr.Button(
-                        "接続 / 起動",
-                        variant="primary",
-                        interactive=False,
-                        elem_id="h3-connect",
-                    )
-                    restart_button = gr.Button(
-                        "選択設定で再起動",
-                        interactive=False,
-                        elem_id="h3-restart",
-                    )
-                    rescan_button = gr.Button(
-                        "状態を再確認",
-                        interactive=False,
-                        elem_id="h3-rescan",
-                    )
-                gr.HTML(
-                    """
-                    <div class="h3-license-note">
-                      <strong>Local Base · 768p</strong>
-                      <span>ローカル公開weightはBaseです。Context-IRと2K Regenerateは外部の有料API専用で、この画面からは呼びません。</span>
-                      <a href="https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MiniMax H3 Community License</a>
-                      <a href="https://docs.comfy.org/tutorials/video/minimax/minimax-h3" target="_blank" rel="noopener noreferrer">Official ComfyUI guide</a>
-                    </div>
-                    """
-                )
 
             prompt_id_state = gr.State("")
             initialize_trigger = gr.Button(

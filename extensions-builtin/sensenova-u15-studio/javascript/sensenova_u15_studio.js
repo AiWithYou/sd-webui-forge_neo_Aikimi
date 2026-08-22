@@ -1,6 +1,7 @@
 (function () {
     const DRAFT_KEY = "forge-neo:sensenova-u15:prompt-draft:v1";
     let draftTimer = null;
+    let chromeFrame = null;
 
     function studioIsActive() {
         const studio = gradioApp().querySelector("#sensenova-u15-studio");
@@ -13,6 +14,39 @@
 
     function buttonElement(id) {
         return gradioApp().querySelector(`#${id} button, button#${id}`);
+    }
+
+    function syncStudioChrome() {
+        const app = gradioApp();
+        app.classList.toggle("sensenova-studio-active", studioIsActive());
+    }
+
+    function syncControlSemantics() {
+        const app = gradioApp();
+        const prompt = promptElement();
+        const generate = buttonElement("sn-generate");
+        const cancel = buttonElement("sn-cancel");
+        const mode = app.querySelector("#sn-mode fieldset, #sn-mode > div");
+        if (prompt) {
+            prompt.setAttribute("aria-label", "SenseNova プロンプト");
+            prompt.setAttribute("aria-describedby", "sn-prompt-help");
+        }
+        if (generate) {
+            generate.setAttribute("aria-keyshortcuts", "Control+Enter Meta+Enter");
+        }
+        if (cancel) cancel.setAttribute("aria-keyshortcuts", "Escape");
+        if (mode) {
+            mode.setAttribute("role", "radiogroup");
+            mode.setAttribute("aria-label", "生成モード");
+        }
+    }
+
+    function scheduleStudioChrome() {
+        if (chromeFrame !== null) return;
+        chromeFrame = window.requestAnimationFrame(function () {
+            chromeFrame = null;
+            syncStudioChrome();
+        });
     }
 
     function syncPromptCount() {
@@ -59,11 +93,13 @@
     }
 
     function syncBusyState() {
+        const studio = gradioApp().querySelector("#sensenova-u15-studio");
         const progress = gradioApp().querySelector("#sn-progress [data-stage]");
         const generate = buttonElement("sn-generate");
         if (!generate || !progress) return;
         const stage = progress.dataset.stage || "idle";
         const busy = !["idle", "complete", "error", "cancelled", "cancel"].includes(stage);
+        if (studio) studio.dataset.snBusy = String(busy);
         generate.setAttribute("aria-busy", String(busy));
     }
 
@@ -77,13 +113,22 @@
         syncPromptCount();
         syncDraftStatus();
         syncBusyState();
+        syncStudioChrome();
+        syncControlSemantics();
+        window.addEventListener("resize", scheduleStudioChrome, { passive: true });
     }
 
     onUiLoaded(setupStudio);
+    onUiTabChange(function () {
+        syncStudioChrome();
+        syncControlSemantics();
+    });
     onAfterUiUpdate(function () {
         syncPromptCount();
         syncDraftStatus();
         syncBusyState();
+        syncStudioChrome();
+        syncControlSemantics();
     });
 
     document.addEventListener("keydown", function (event) {

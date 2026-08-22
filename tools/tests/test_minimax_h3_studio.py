@@ -17,6 +17,7 @@ STUDIO_PATH = (
     / "minimax_h3_studio.py"
 )
 JAVASCRIPT_PATH = STUDIO_PATH.parents[1] / "javascript" / "minimax_h3_studio.js"
+STYLE_PATH = STUDIO_PATH.parents[1] / "style.css"
 
 
 def load_studio_module():
@@ -490,6 +491,14 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
         self.assertIn("h3-history-refresh", component_ids)
         self.assertIn("h3-mobile-action-bar", component_ids)
         self.assertIn("h3-initialize-trigger", component_ids)
+        self.assertLess(
+            element_ids.index("h3-generate"),
+            element_ids.index("h3-settings-summary"),
+        )
+        self.assertLess(
+            element_ids.index("h3-runtime-setup"),
+            element_ids.index("h3-history-accordion"),
+        )
         self.assertGreater(
             element_ids.index("h3-mobile-action-bar"),
             element_ids.index("h3-generate"),
@@ -746,6 +755,19 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
         self.assertIn("function requestH3Initialization()", source)
         self.assertIn("trigger === h3InitializationTrigger", source)
         self.assertIn("h3InitializationTrigger = trigger", source)
+
+    def test_apple_inspired_workspace_keeps_web_accessibility_fallbacks(self):
+        script = STUDIO_PATH.read_text(encoding="utf-8")
+        style = STYLE_PATH.read_text(encoding="utf-8")
+        self.assertIn("<h2>MiniMax H3 Studio</h2>", script)
+        self.assertNotIn('class="h3-eyebrow"', script)
+        self.assertIn("Apple-inspired workspace v2", style)
+        self.assertIn(".h3-runtime-summary", style)
+        self.assertIn("min-height: 44px", style)
+        self.assertIn("prefers-reduced-motion", style)
+        self.assertIn("prefers-reduced-transparency", style)
+        self.assertIn("prefers-contrast: more", style)
+        self.assertIn("forced-colors: active", style)
 
 
 if __name__ == "__main__":

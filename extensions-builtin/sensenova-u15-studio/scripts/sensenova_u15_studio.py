@@ -394,22 +394,21 @@ def _build_ui():
                 """
                 <section class="sn-hero">
                   <div>
-                    <span class="sn-eyebrow">FORGE NEO · NATIVE MULTIMODAL</span>
                     <h2>SenseNova U1.5 Studio</h2>
-                    <p>正式版モデルによるテキスト生成と複数参照画像編集。RTX 3090では2K出力を保ち、参照画像だけを縮小する実測済みの24GB Safeから開始します。</p>
                   </div>
-                  <div class="sn-hero-mark" aria-hidden="true"><b>U1.5</b><small>MoT</small></div>
                 </section>
                 """
             )
             runtime_status = gr.HTML(
                 value=runtime_status_html(initial_status), elem_id="sn-runtime-status"
             )
+            quantization = gr.State(QUANT_INT8_CONVROT)
+            job_id = gr.State("")
 
             with gr.Row(elem_classes=["sn-main-grid"]):
                 with gr.Column(scale=6, min_width=430, elem_classes=["sn-compose"]):
                     gr.HTML(
-                        '<div class="sn-section-title"><span>01</span><h3>つくる</h3></div>'
+                        '<div class="sn-section-title"><h3>つくる</h3></div>'
                     )
                     mode = gr.Radio(
                         choices=[
@@ -433,13 +432,13 @@ def _build_ui():
                         prompt = gr.Textbox(
                             label="SenseNovaプロンプト",
                             show_label=False,
-                            lines=8,
+                            lines=6,
                             max_lines=18,
                             placeholder="例: 1枚目の人物と2枚目の衣装を組み合わせ、3枚目の照明と色調を保った広告写真にする。背景の構図は変えない。",
                             elem_id="sn-prompt",
                         )
                         gr.HTML(
-                            '<div class="sn-prompt-meta"><span>Ctrl / ⌘ + Enter で生成</span>'
+                            '<div class="sn-prompt-meta" id="sn-prompt-help"><span>Ctrl / ⌘ + Enter で生成</span>'
                             '<span id="sn-draft-status">下書きをこの端末に自動保存</span>'
                             '<span id="sn-prompt-count">0 / 20,000</span></div>'
                         )
@@ -459,8 +458,8 @@ def _build_ui():
                             label=f"参照画像（最大{MAX_REFERENCE_IMAGES}枚）",
                             show_label=False,
                             columns=4,
-                            rows=3,
-                            height=390,
+                            rows=2,
+                            height=280,
                             allow_preview=True,
                             object_fit="contain",
                             elem_id="sn-reference-gallery",
@@ -489,7 +488,7 @@ def _build_ui():
                                 type="pil",
                                 sources=["upload", "clipboard"],
                                 label="追加・差し替え画像",
-                                height=210,
+                                height=170,
                                 elem_id="sn-reference-upload",
                             )
                             with gr.Column(min_width=190):
@@ -508,7 +507,7 @@ def _build_ui():
                                 clear_button = gr.Button("すべて消去", variant="stop")
 
                     gr.HTML(
-                        '<div class="sn-section-title"><span>02</span><h3>生成設定</h3></div>'
+                        '<div class="sn-section-title"><h3>生成設定</h3></div>'
                     )
                     with gr.Group(elem_classes=["sn-settings-card"]):
                         resolution = gr.Dropdown(
@@ -517,31 +516,6 @@ def _build_ui():
                             label="出力解像度",
                             elem_id="sn-resolution",
                         )
-                        with gr.Row():
-                            steps = gr.Slider(1, 100, value=50, step=1, label="Steps")
-                            seed = gr.Number(
-                                value=42,
-                                precision=0,
-                                label="Seed",
-                                minimum=0,
-                                maximum=2**32 - 1,
-                            )
-                        with gr.Row():
-                            cfg_scale = gr.Slider(
-                                0, 20, value=4.0, step=0.1, label="CFG"
-                            )
-                            img_cfg_scale = gr.Slider(
-                                0,
-                                20,
-                                value=1.0,
-                                step=0.1,
-                                label="Image CFG",
-                                visible=False,
-                                elem_id="sn-image-cfg",
-                            )
-                            timestep_shift = gr.Slider(
-                                0.1, 20, value=3.0, step=0.1, label="Timestep Shift"
-                            )
                         input_max_pixels = gr.Dropdown(
                             choices=[
                                 ("2K出力優先 · 各約0.26MP · 比率保護 · RTX 3090推奨", str(512 * 512)),
@@ -553,7 +527,36 @@ def _build_ui():
                             label="参照画像の情報量",
                             visible=False,
                         )
-                        with gr.Accordion("詳細設定", open=False):
+                        with gr.Accordion("詳細設定", open=False, elem_id="sn-advanced"):
+                            with gr.Row():
+                                steps = gr.Slider(1, 100, value=50, step=1, label="Steps")
+                                seed = gr.Number(
+                                    value=42,
+                                    precision=0,
+                                    label="Seed",
+                                    minimum=0,
+                                    maximum=2**32 - 1,
+                                )
+                            with gr.Row():
+                                cfg_scale = gr.Slider(
+                                    0, 20, value=4.0, step=0.1, label="CFG"
+                                )
+                                img_cfg_scale = gr.Slider(
+                                    0,
+                                    20,
+                                    value=1.0,
+                                    step=0.1,
+                                    label="Image CFG",
+                                    visible=False,
+                                    elem_id="sn-image-cfg",
+                                )
+                                timestep_shift = gr.Slider(
+                                    0.1,
+                                    20,
+                                    value=3.0,
+                                    step=0.1,
+                                    label="Timestep Shift",
+                                )
                             with gr.Row():
                                 vram_mode = gr.Dropdown(
                                     choices=[
@@ -575,60 +578,6 @@ def _build_ui():
                                 )
                                 dtype = gr.State("bfloat16")
 
-                with gr.Column(
-                    scale=5, min_width=390, elem_classes=["sn-result-column"]
-                ):
-                    gr.HTML(
-                        '<div class="sn-section-title"><span>03</span><h3>モデルと結果</h3></div>'
-                    )
-                    with gr.Group(elem_classes=["sn-model-card"]):
-                        quantization = gr.State(QUANT_INT8_CONVROT)
-                        gr.HTML(
-                            '<p class="sn-quant-note"><strong>正式版 · INT8 ConvRot</strong><br>24GB Safeでは2K出力を維持し、参照2枚を各約0.26MPに抑えます。被写体の比率は保ち、32pxグリッドの余白は端の画素で補います。入力の情報量を優先する場合のみUncapped streamingへ切り替えます。</p>'
-                        )
-                        model_path = gr.Textbox(
-                            value=DEFAULT_MODEL_ID,
-                            label="正式版モデルID",
-                            interactive=False,
-                        )
-                        checkpoint_path = gr.Textbox(
-                            value=os.fspath(DEFAULT_CHECKPOINT_PATH),
-                            label="INT8 ConvRot checkpoint",
-                        )
-                        with gr.Accordion("ランタイム場所", open=False):
-                            source_path = gr.Textbox(
-                                value=os.fspath(DEFAULT_SOURCE_PATH),
-                                label="固定済みConvRotランタイム",
-                            )
-                            gr.Markdown(
-                                "未準備の場合は Forge Neo 直下の `download_sensenova_u15_int8.bat` を実行します。"
-                            )
-                        refresh_button = gr.Button(
-                            "準備状況を再確認",
-                            variant="secondary",
-                            elem_id="sn-refresh-runtime",
-                        )
-
-                    summary = gr.HTML(
-                        value=request_summary_html(initial_request),
-                        elem_id="sn-summary",
-                    )
-                    progress = gr.HTML(
-                        value=progress_html("idle", "生成待ち", 0.0),
-                        elem_id="sn-progress",
-                    )
-                    result_image = gr.Image(
-                        type="filepath",
-                        label="生成結果",
-                        interactive=False,
-                        height=520,
-                        elem_id="sn-result-image",
-                    )
-                    with gr.Row():
-                        result_file = gr.File(label="PNG", interactive=False)
-                        metadata_file = gr.File(label="設定JSON", interactive=False)
-                    metadata = gr.JSON(label="生成メタデータ", visible=True)
-                    job_id = gr.State("")
                     validation = gr.HTML(value="", elem_id="sn-validation")
                     with gr.Row(elem_classes=["sn-actions"]):
                         cancel_button = gr.Button(
@@ -638,8 +587,79 @@ def _build_ui():
                             elem_id="sn-cancel",
                         )
                         generate_button = gr.Button(
-                            "画像を生成", variant="primary", elem_id="sn-generate"
+                            "画像を生成",
+                            variant="primary",
+                            elem_id="sn-generate",
                         )
+
+                with gr.Column(
+                    scale=5, min_width=390, elem_classes=["sn-result-column"]
+                ):
+                    gr.HTML(
+                        '<div class="sn-section-title"><h3>生成結果</h3></div>'
+                    )
+                    result_image = gr.Image(
+                        type="filepath",
+                        label="生成結果",
+                        interactive=False,
+                        height=420,
+                        elem_id="sn-result-image",
+                    )
+                    with gr.Row(elem_classes=["sn-downloads"]):
+                        result_file = gr.File(
+                            label="PNG",
+                            interactive=False,
+                            elem_id="sn-result-png",
+                        )
+                        metadata_file = gr.File(
+                            label="設定JSON",
+                            interactive=False,
+                            elem_id="sn-result-json",
+                        )
+                    progress = gr.HTML(
+                        value=progress_html("idle", "生成待ち", 0.0),
+                        elem_id="sn-progress",
+                    )
+                    summary = gr.HTML(
+                        value=request_summary_html(initial_request),
+                        elem_id="sn-summary",
+                    )
+                    with gr.Accordion(
+                        "生成メタデータ",
+                        open=False,
+                        elem_id="sn-metadata-panel",
+                    ):
+                        metadata = gr.JSON(label="生成メタデータ", visible=True)
+                    with gr.Accordion(
+                        "実行環境とモデル",
+                        open=False,
+                        elem_id="sn-runtime-setup",
+                    ):
+                        with gr.Group(elem_classes=["sn-model-card"]):
+                            gr.HTML(
+                                '<p class="sn-quant-note"><strong>正式版 · INT8 ConvRot</strong><br>24GB Safeでは2K出力を維持し、参照2枚を各約0.26MPに抑えます。被写体の比率は保ち、32pxグリッドの余白は端の画素で補います。</p>'
+                            )
+                            model_path = gr.Textbox(
+                                value=DEFAULT_MODEL_ID,
+                                label="正式版モデルID",
+                                interactive=False,
+                            )
+                            checkpoint_path = gr.Textbox(
+                                value=os.fspath(DEFAULT_CHECKPOINT_PATH),
+                                label="INT8 ConvRot checkpoint",
+                            )
+                            source_path = gr.Textbox(
+                                value=os.fspath(DEFAULT_SOURCE_PATH),
+                                label="固定済みConvRotランタイム",
+                            )
+                            gr.Markdown(
+                                "未準備の場合はForge Neo直下の`download_sensenova_u15_int8.bat`を実行します。"
+                            )
+                            refresh_button = gr.Button(
+                                "準備状況を再確認",
+                                variant="secondary",
+                                elem_id="sn-refresh-runtime",
+                            )
 
         reference_gallery.select(
             _select_reference,

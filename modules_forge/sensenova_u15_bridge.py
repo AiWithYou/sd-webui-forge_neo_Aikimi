@@ -478,10 +478,18 @@ def runtime_status_html(status: RuntimeStatus) -> str:
     state = "ready" if status.ready else "setup"
     title = "生成できます" if status.ready else "準備が必要です"
     items = "".join(f"<li>{html.escape(message)}</li>" for message in status.messages)
+    summary = status.messages[0] if status.messages else (
+        "正式版INT8 ConvRotを使用できます。"
+        if status.ready
+        else "実行環境の設定を確認してください。"
+    )
     return (
         f'<section class="sn-runtime sn-runtime-{state}" role="status">'
-        f'<div><span class="sn-status-dot" aria-hidden="true"></span><strong>{title}</strong></div>'
-        f"<ul>{items}</ul></section>"
+        '<div class="sn-runtime-summary">'
+        f'<span class="sn-status-dot" aria-hidden="true"></span><strong>{title}</strong>'
+        f'<p>{html.escape(summary)}</p></div>'
+        '<details class="sn-runtime-details"><summary>詳細を開く</summary>'
+        f"<ul>{items}</ul></details></section>"
     )
 
 

@@ -18,12 +18,12 @@ Forge Neo は `forge_neo_model_paths.yaml` からモデルを持つ ComfyUI runt
 
 ## 使い方
 
-1. `H3 Studio` タブを開きます。画面を先に表示し、backend・モデル・RAMの確認はタブ内で非同期に行います。
-2. `テキスト`、`キーフレーム`、`参照素材`からモードを選びます。
-3. 映像のショット、カメラ、台詞、効果音、音楽を同じプロンプトへ記述します。
-4. Aspect、Quality、Duration を選択します。Duration は自動で H3 の `17k+5` frame grid に揃います。
-5. `映像＋音声を生成`を押します。backend が停止中なら、設定済みのローカル runtime を自動起動します。
-6. 完成した MP4 は `outputs/minimax_h3` に保存され、`最近の生成` から再表示できます。Forge Neoで保存した履歴は `設定を復元` でプロンプト・品質・長さ・Steps・Seed・Schedulerを戻せます。誤った素材の再利用を防ぐため、キーフレームと参照素材は復元時に消去されます。
+1. `H3 Studio`タブを開くと、画面が先に表示されます。backend・モデル・RAMの確認は、表示を妨げずタブ内で非同期に進みます。
+2. `テキスト`、`キーフレーム`、`参照素材`から、目的に合うモードを選択してください。
+3. 映像のショット、カメラ、台詞、効果音、音楽を一つのプロンプトへまとめてください。
+4. Aspect、Quality、Durationを指定します。DurationはH3の`17k+5` frame gridへ自動的に揃う仕組みです。
+5. `映像＋音声を生成`を押してください。backendが停止中でも設定済みのローカルruntimeを自動起動するため、事前起動は不要です。
+6. 完成したMP4は`outputs/minimax_h3`に保存され、`最近の生成`から再表示できます。`設定を復元`で戻るのは、プロンプト・品質・長さ・Steps・Seed・Schedulerです。誤った素材の再利用を防ぐため、キーフレームと参照素材は復元対象に含めません。
 
 入力中のプロンプトは300msの待ち時間を置いてブラウザー内だけに自動保存し、同じ端末で画面を再読み込みしたときに復元します。外部サービスやbackendへは生成を実行するまで送信しません。空欄に戻すと保存した下書きも削除されます。
 
@@ -46,7 +46,7 @@ profileを変えただけでは接続中のprocessを書き換えません。キ
 
 ローカルAPIはHTTP接続を再利用し、短い生成の最初の60秒は2秒間隔、長時間生成は5秒間隔で状態を確認します。一時的なstatus/history取得失敗は回数を限定して再試行し、正常に進んでいる長時間ジョブを1回の瞬断だけで停止しません。結果をForge Neoへ保存し終わるまではruntime再起動を拒否します。完成動画とJSONは一時ファイルへ書いてから公開するため、コピー失敗時に途中のMP4を履歴へ残しません。
 
-Comfy Kitchen INT8 attentionはH3ワークフロー内だけに限定しているため、同じComfyUIにある他モデルのattentionは変更しません。Kitchenが利用できない環境では標準attentionへ黙って切り替えず、生成前に更新方法を表示して停止します。生成JSONには実際に選んだattention、起動profile、ComfyUI revision、ComfyUI/Kitchen versionを保存します。
+Comfy Kitchen INT8 attentionはH3ワークフロー内だけに限定しているため、同じComfyUIにある他モデルのattentionは変更しません。Kitchenが利用できない環境では標準attentionへ黙って切り替えず、生成前に更新方法を表示して停止します。生成JSONには、選択したattentionと起動profileに加え、ComfyUI revisionおよびComfyUI/Kitchen versionを記録します。
 
 この構成には、公式coreのH3 video VAE chunked I/OとQ/K/V peak-memory修正も含まれます。起動前にローカルGit revisionが最低commit `62b3c94bd45154f6486c7abf1b9efcacee96ea69` を含むことを検査し、版番号だけではready扱いしません。モデルは従来どおり公式のINT8 ConvRot DiTとNVFP4-AWQ text encoderを使い、互換性未検証のthird-party INT4/GGUF、generic FP8、Torch Compileは自動適用しません。
 

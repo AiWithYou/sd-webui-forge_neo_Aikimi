@@ -111,12 +111,18 @@ class SenseNovaStudioSourceTests(unittest.TestCase):
     def test_responsive_and_accessible_ui_contracts(self):
         self.assertIn("@media (max-width: 640px)", self.style)
         self.assertIn("prefers-reduced-motion", self.style)
+        self.assertIn("prefers-reduced-transparency", self.style)
+        self.assertIn("prefers-contrast: more", self.style)
+        self.assertIn("forced-colors: active", self.style)
         self.assertIn(":focus-visible", self.style)
         self.assertIn('role="status"', self.bridge)
         self.assertIn("Ctrl / ⌘ + Enter", self.script)
         self.assertIn("onUiLoaded(setupStudio)", self.javascript)
         self.assertIn("window.localStorage", self.javascript)
         self.assertNotIn("function restoreDraft", self.javascript)
+        self.assertIn("sensenova-studio-active", self.javascript)
+        self.assertIn('aria-keyshortcuts", "Control+Enter Meta+Enter"', self.javascript)
+        self.assertIn("min-height: 44px", self.style)
 
     def test_real_gradio_ui_builds_with_unique_controls(self):
         status = RuntimeStatus(
@@ -140,6 +146,11 @@ class SenseNovaStudioSourceTests(unittest.TestCase):
         self.assertIn("sn-reference-gallery", element_ids)
         self.assertIn("sn-reference-bulk-upload", element_ids)
         self.assertIn("sn-generate", element_ids)
+        self.assertIn("sn-result-png", element_ids)
+        self.assertIn("sn-result-json", element_ids)
+        self.assertIn("sn-advanced", element_ids)
+        self.assertIn("sn-metadata-panel", element_ids)
+        self.assertIn("sn-runtime-setup", element_ids)
 
         prompt_id = next(
             component["id"]
@@ -156,9 +167,18 @@ class SenseNovaStudioSourceTests(unittest.TestCase):
         self.assertEqual(len(draft_loads), 1)
         self.assertFalse(draft_loads[0]["backend_fn"])
         self.assertLess(
-            self.script.index('elem_id="sn-progress"'),
             self.script.index('elem_id="sn-validation"'),
+            self.script.index('elem_classes=["sn-actions"]'),
         )
+        self.assertLess(
+            self.script.index('elem_id="sn-generate"'),
+            self.script.index('elem_id="sn-result-image"'),
+        )
+        self.assertLess(
+            self.script.index('elem_id="sn-result-image"'),
+            self.script.index('elem_id="sn-runtime-setup"'),
+        )
+        self.assertNotIn('class="sn-eyebrow"', self.script)
 
     def test_bulk_reference_files_keep_selection_order(self):
         with tempfile.TemporaryDirectory() as temp:

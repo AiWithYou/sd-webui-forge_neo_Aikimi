@@ -2398,8 +2398,33 @@ def readiness_html(
     profile_detail = RUNTIME_PROFILE_LABELS.get(readiness.runtime_profile or "", "未対応の起動設定")
     expected_detail = RUNTIME_PROFILE_LABELS[expected_profile]
     revision_detail = readiness.core_revision or "未確認"
+    runtime_ready = (
+        readiness.connected
+        and files_ready == total_files
+        and server_files_ready == server_files_total
+        and not readiness.missing_nodes
+        and readiness.ck_attention_available
+        and readiness.h3_core_optimized
+        and profile_matches
+        and not memory_low
+    )
+    if runtime_ready:
+        summary_title = "生成できます"
+        summary_tone = "ready"
+    elif not readiness.connected and files_ready == total_files:
+        summary_title = "生成時にH3を起動します"
+        summary_tone = "warn"
+    else:
+        summary_title = "準備を確認してください"
+        summary_tone = "error" if readiness.error else "warn"
     return (
-        '<div class="h3-runtime-card" role="status" aria-live="polite" aria-atomic="true">'
+        f'<div class="h3-runtime-card" data-tone="{summary_tone}" role="status" '
+        'aria-live="polite" aria-atomic="true">'
+        '<div class="h3-runtime-summary">'
+        f'<span class="h3-runtime-primary" data-tone="{summary_tone}" data-mobile="primary">'
+        f'<i aria-hidden="true"></i><strong>{html.escape(summary_title)}</strong></span>'
+        f'<p>{html.escape(details)}</p>'
+        '</div><details class="h3-runtime-details"><summary>詳細を開く</summary>'
         '<div class="h3-runtime-badges">'
         f'<span data-tone="{connected_tone}" data-mobile="primary"><i></i>{html.escape(connected_text)}</span>'
         f'<span title="{html.escape(gpu_detail, quote=True)}"><i></i>{html.escape(gpu)}</span>'
@@ -2411,9 +2436,7 @@ def readiness_html(
         f'<span data-tone="{"ready" if profile_matches else "warn"}" data-mobile="primary" title="{html.escape(profile_detail, quote=True)}"><i></i>{html.escape(runtime_text)}</span>'
         f"{memory_badge}"
         f'<span title="ComfyUI {html.escape(readiness.comfy_version or "不明", quote=True)} / comfy-kitchen {html.escape(kitchen_version or "不明", quote=True)}"><i></i>Comfy {html.escape(readiness.comfy_version or "不明")} · Kitchen {html.escape(kitchen_version or "不明")}</span>'
-        "</div>"
-        f'<p>{html.escape(details)}</p>'
-        '<details class="h3-runtime-details"><summary>環境詳細</summary><dl>'
+        '</div><dl>'
         f'<dt>GPU</dt><dd>{html.escape(gpu_detail)}</dd>'
         f'<dt>RAM</dt><dd>{html.escape(ram_detail)}</dd>'
         f'<dt>接続中profile</dt><dd>{html.escape(profile_detail)}</dd>'
