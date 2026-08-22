@@ -491,9 +491,14 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
         self.assertIn("h3-history-refresh", component_ids)
         self.assertIn("h3-mobile-action-bar", component_ids)
         self.assertIn("h3-initialize-trigger", component_ids)
+        self.assertIn("h3-prompt-assists", component_ids)
         self.assertLess(
             element_ids.index("h3-generate"),
             element_ids.index("h3-settings-summary"),
+        )
+        self.assertLess(
+            element_ids.index("h3-generate"),
+            element_ids.index("h3-prompt-assists"),
         )
         self.assertLess(
             element_ids.index("h3-runtime-setup"),

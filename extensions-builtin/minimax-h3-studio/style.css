@@ -1500,18 +1500,33 @@
 }
 
 #h3-studio .h3-mode-help {
-    min-height: 30px;
-    padding: 4px 2px;
-    border: 0;
-    color: var(--h3-muted);
-    background: transparent;
-    font-size: 0.8rem;
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
 }
 
 #h3-studio .h3-mode-help span {
     color: var(--h3-accent-bright);
     font-size: 0.68rem;
     letter-spacing: 0.04em;
+}
+
+#h3-studio .h3-mode-help p {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
 }
 
 #h3-studio .h3-prompt-card,
@@ -1610,7 +1625,7 @@
 }
 
 #h3-studio .h3-speed-presets button {
-    min-height: 66px;
+    min-height: 56px;
     border: 1px solid var(--h3-line) !important;
     border-radius: 9px !important;
     color: var(--h3-muted) !important;
@@ -1661,6 +1676,7 @@
 }
 
 #h3-studio #h3-advanced,
+#h3-studio #h3-prompt-assists,
 #h3-studio #h3-history-accordion,
 #h3-studio #h3-runtime-setup {
     overflow: hidden;
@@ -1671,6 +1687,8 @@
 
 #h3-studio #h3-advanced > button,
 #h3-studio #h3-advanced summary,
+#h3-studio #h3-prompt-assists > button,
+#h3-studio #h3-prompt-assists summary,
 #h3-studio #h3-history-accordion > button,
 #h3-studio #h3-history-accordion summary,
 #h3-studio #h3-runtime-setup > button,

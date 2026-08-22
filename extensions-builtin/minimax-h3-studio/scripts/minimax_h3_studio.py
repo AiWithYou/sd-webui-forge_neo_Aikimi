@@ -988,11 +988,6 @@ def _build_ui():
                             elem_id="h3-prompt-meta",
                         )
                         input_validation = gr.HTML(value="", elem_id="h3-input-validation")
-                        with gr.Row(elem_classes=["h3-prompt-chips"]):
-                            camera_button = gr.Button("＋ カメラ", size="sm")
-                            dialogue_button = gr.Button("＋ 台詞", size="sm")
-                            sfx_button = gr.Button("＋ 効果音", size="sm")
-                            music_button = gr.Button("＋ 音楽", size="sm")
 
                     with gr.Group(visible=False, elem_id="h3-keyframes", elem_classes=["h3-media-panel"]) as keyframe_group:
                         gr.Markdown("### キーフレーム\n片方だけでも使えます。両方指定すると、その間の動きを補間します。")
@@ -1109,6 +1104,16 @@ def _build_ui():
                                 elem_id="h3-cancel",
                                 elem_classes=["h3-cancel-button"],
                             )
+                        with gr.Accordion(
+                            "プロンプト補助",
+                            open=False,
+                            elem_id="h3-prompt-assists",
+                        ):
+                            with gr.Row(elem_classes=["h3-prompt-chips"]):
+                                camera_button = gr.Button("＋ カメラ", size="sm")
+                                dialogue_button = gr.Button("＋ 台詞", size="sm")
+                                sfx_button = gr.Button("＋ 効果音", size="sm")
+                                music_button = gr.Button("＋ 音楽", size="sm")
                         settings_summary = gr.HTML(
                             value=initial_settings_summary,
                             elem_id="h3-settings-summary",
