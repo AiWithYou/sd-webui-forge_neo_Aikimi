@@ -1,8 +1,8 @@
 # SenseNova U1.5 Studio
 
-SenseNova U1.5 Studioは、[sensenova/SenseNova-U1.5-8B-MoT-Preview](https://huggingface.co/sensenova/SenseNova-U1.5-8B-MoT-Preview)をForge NeoWから実行する専用GUIです。テキスト生成、単一画像編集、複数画像編集、Q8_0 GGUF（INT8）、公式BF16に対応します。
+SenseNova U1.5 Studioは、正式版の[sensenova/SenseNova-U1.5-8B-MoT](https://huggingface.co/sensenova/SenseNova-U1.5-8B-MoT)をForge NeoWから実行する専用GUIです。テキスト生成と、単一または複数の参照画像を使った画像編集に対応します。
 
-SenseNovaはNEO-unify固有の画像token化、scheduler、画像decoder、生成ループを持ちます。このため、Forgeの通常checkpointやKSamplerへweightだけを読み込む方式は採用していません。Forgeは入力検証、画面、保存、キャンセルを担当し、生成処理は公式推論コードを読み込む隔離workerが担当します。
+既定のweightは、正式版を基にしたコミュニティ配布のINT8 ConvRotです。SenseNova固有の画像token化、画像decoder、三分岐guidance、生成ループを保つため、Forgeの通常checkpointやKSamplerには接続しません。Forgeは入力検証、画面、保存、キャンセルを担当し、生成は隔離workerが専用ランタイムを使って実行します。
 
 ## セットアップ
 
@@ -16,97 +16,94 @@ download_sensenova_u15_int8.bat
 
 | 項目 | 内容 |
 |---|---|
-| 公式推論コード | `OpenSenseNova/SenseNova-U1`の固定revision `12a2bd9cba22a5317164b55db4f7c6209a371f83` |
-| 取得範囲 | `src/sensenova_u1`と公式`LICENSE` |
-| tokenizer依存 | `sentencepiece==0.2.1` |
-| Q8 weight | `SenseNova-U1.5-8B-MoT-Preview-Q8.gguf` |
-| Q8配布元revision | `smthem/SenseNova-U1-8B-MoT-Merger-gguf`の`e63b0a7e483bffdb1ff0463a39fbfd04ad3c85d9` |
-| Q8サイズ | 19,947,887,936 bytes（約18.58 GiB） |
-| Q8 SHA-256 | `8b655046f6e22c22258607556cacee3c1d82ae534146fb9c0faba04a0e4b3c8f` |
+| 対象モデル | 正式版`SenseNova-U1.5-8B-MoT` |
+| ConvRotランタイム | `starsFriday/ComfyUI-SenseNova`の固定revision `e6dfd45762eb46f805067fe079c14bcb643ccccd` |
+| checkpoint | `SenseNova-U1.5-8B-MoT-pruned-int8_convrot.safetensors` |
+| 配布元 | `joyfox/SenseNova-U1.5-8B-MoT-FP8` |
+| 配布元revision | `57de22ad4e2fc24c77f56dfe45dbb87a60dfebee` |
+| ファイルサイズ | 17,734,813,848 bytes（約16.52 GiB） |
+| SHA-256 | `cf6ed9ee3be516612b7fe083edfc7c9dd5d059cc759e300d2cf1f2726c0d250e` |
+| 量子化構成 | `int8_tensorwise`、ConvRot group size 256、588 Linear層 |
 
-Q8の取得を中断した場合は、同じbatを再実行してください。`.part`ファイルから再開します。既存の完成ファイルは、サイズ、GGUF header、SHA-256がすべて一致した場合だけ再利用します。
+checkpointは32 MiB単位に分け、最大16接続で取得します。中断した場合は同じbatを再実行すると、完成済み部分と未完了chunkの先頭から続行できます。完成ファイルは、サイズ、safetensors内のConvRot署名、SHA-256の各検証値がすべて同じ場合だけ利用可能です。
 
-推論コードだけを準備する場合はPowerShell 7から次を実行できます。
+ランタイムだけを準備する場合はPowerShell 7から次を実行します。
 
 ```powershell
 .\download_sensenova_u15_int8.ps1 -RuntimeOnly
 ```
 
-Q8 weightだけを取得または再検証する場合は、次を実行します。
+checkpointだけを取得または再検証する場合は、次を実行します。
 
 ```powershell
 .\download_sensenova_u15_int8.ps1 -ModelOnly
 ```
 
-## 基本操作
+## テキストから生成
 
-### テキストから生成
+1. `SenseNova U1.5`タブを開き、`テキストから生成`を選びます。
+2. 解像度、Steps、CFG、Seedを確認してから、プロンプトを入力してください。
+3. 初回の読み込み確認には、`1024 × 1024 · 動作確認`と1〜2 Stepsが適しています。
+4. `画像を生成`を押すとForgeモデルが退避し、その後に専用workerが起動する流れです。
 
-1. `SenseNova U1.5`タブを開き、`テキストから生成`を選択します。
-2. プロンプトを入力したら、公式解像度bucket、Steps、CFG、Seedを確認してください。
-3. 初回は`1024 × 1024 · 動作確認`と1〜2 Stepsを使い、読み込み経路だけを確認します。
-4. 設定を確定し、`画像を生成`を押すと実行が始まります。
+品質確認の開始値は50 Steps、CFG 4.0、Timestep Shift 3.0です。1024×1024は短い動作確認用です。最終生成では2048×2048などの公式解像度bucketを選んでください。
 
-モデルカードの推奨値は50 Steps、CFG 4.0、Timestep Shift 3.0です。1024×1024は短い動作確認用であり、公式の学習解像度bucketではありません。品質確認では2048×2048などの公式bucketへ戻してください。
+## 複数参照画像を編集
 
-### 複数画像を編集
+1. まず`複数画像を編集`へ切り替えてください。
+2. `複数画像を一括選択`ならまとめて登録でき、`追加・差し替え画像`なら1枚ずつ扱えます。
+3. 表示順は、対象画像を選択して`← 前へ`または`後ろへ →`で調整します。
+4. プロンプト内では、`Image-1`、`Image-2`のように各画像と役割を対応させてください。
+5. 最後に出力解像度と入力画像予算を確認し、生成を始めます。
 
-1. `複数画像を編集`へ切り替え、`追加・差し替え画像`へ最初の画像を入れます。
-2. `末尾へ追加`を押し、必要な画像を同じ手順で登録してください。
-3. 順序を直す場合は画像を選択し、`← 前へ`または`後ろへ →`を使います。
-4. プロンプトには「1枚目の人物」「2枚目の衣装」「3枚目の照明」のように、各画像の役割を明記します。
-5. 最後に`入力1枚目の比率を維持 · 約4MP`または公式解像度bucketを選び、生成を開始してください。
+GUIとworkerは最大64枚を受け付け、表示順を保ったまま`it2i_generate`へ渡します。正式版実装の制約は、各画像が最低512² pixels、全参照画像が合計4096² pixels以内です。自動設定では各画像を最大2048² pixelsとするため、16枚なら各1024²、64枚なら各512²が目安になります。
 
-画像は画面に表示された順序のまま`it2i_generate`へ渡します。プロンプトに`<image>`を1つも書かない場合は、公式実装が入力画像数分を先頭へ補います。自分で記述する場合は、入力順と個数を合わせてください。
+参照画像を増やすほど、画像token列、CPU転送量、処理時間が増えます。まず2枚、512²入力、512×512出力、1 Stepで動作を確認し、その後に品質設定を上げてください。
 
-入力画像予算の`自動`は、1〜2枚を各2048²まで、3枚以上を合計約8.39 MPの範囲で均等配分し、各画像の下限を512²にします。画像数を増やすほど、個々の参照画像へ割り当てる解像度は下がります。
+## INT8 ConvRot
 
-## INT8とBF16
+このcheckpointでは、588個のLinear層を`int8_tensorwise`形式で保持します。各層はHadamard回転を戻しながらBF16へ復号され、Lowモードでは対象層だけをGPUへ移して演算後にCPUへ戻します。activationと演算精度はBF16です。
 
-`INT8 · Q8_0 GGUF`は、量子化されたLinear weightをGGUFとして保持し、公式SenseNovaコードがdiffusersの`GGUFLinear`経路で演算時に復号します。画面上ではINT8と表記しますが、activationと計算精度は別です。既定ではBF16計算を使い、configとの不整合を防ぐためモデルIDをPreviewへ固定します。
+正式版のモデル構成とtokenizerを使いますが、INT8変換weightと専用ローダーはコミュニティが管理しています。公式BF16との品質一致や数値一致は保証されません。このStudioは固定した配布ファイルだけを完全性確認し、任意のGGUF、bitsandbytes、別のsafetensorsを自動変換しません。
 
-Q8変換weightはコミュニティが管理しています。SenseNova公式の配布形式はBF16であり、Q8と公式BF16の品質一致や再現性は保証されません。モデルカードと公式ComfyUI実装が案内する対応経路に限定しており、任意のGGUFやbitsandbytes形式を自動変換しません。
-
-`公式 BF16`を選ぶと、モデルIDから公式weightを取得します。初回downloadと保存容量が大きく、RTX 3090では`Low`または`Balanced`のlayer offloadが必要です。
+pruned checkpointはテキスト出力用の`language_model.lm_head`を削除しています。テキストからの画像生成と画像編集には使えますが、Think mode、VQAのテキスト回答、テキストと画像の交互出力には使えません。
 
 ## VRAMモード
 
 | モード | 用途 |
 |---|---|
-| `Low` | 1 layerずつ同期転送。RTX 3090で最初に確認する場合の推奨設定。 |
-| `Balanced` | 複数layerを先読みし、CPUからGPUへの転送と計算を重ねる方式。 |
-| `Fast` | 生成layerをVRAM予算内で保持。十分な余裕がある環境向け。 |
-| `Full` | モデル全体をGPUへ配置。24 GiB級GPUには非推奨。 |
+| `Low` | Transformerを1層ずつ転送する、RTX 3090向けの推奨設定。 |
+| `Full` | 量子化weight全体をGPUへ配置。24 GiB GPUではactivationやKV cacheを含めると不足する可能性があります。 |
 
-生成開始時は通常のForge画像モデルを退避してVRAMを確保します。SenseNova workerは1回の生成後に終了し、weightとactivationをOSへ返すため、次回生成時はモデルを先頭から再読込します。
+生成開始時は通常のForge画像モデルを退避してVRAMを確保し、SenseNova workerは1回の生成後にweightとactivationをOSへ返します。この設計によりメモリを確実に解放できますが、次回の生成時にはモデルを先頭から読み込みます。
 
 ## 保存とキャンセル
 
-完成したファイルは次へ保存します。
+完成ファイルは次へ保存します。
 
 ```text
 outputs/sensenova_u15/sensenova_u15_YYYYMMDD_HHMMSS_<job>.png
 outputs/sensenova_u15/sensenova_u15_YYYYMMDD_HHMMSS_<job>.json
 ```
 
-JSONにはモデルID、量子化方式、公式コードrevision、解像度、Steps、CFG、Seed、入力画像数、入力順、出力SHA-256、処理時間を記録します。参照画像本体は一時jobフォルダーへ複製し、生成終了またはキャンセル後に削除します。
+JSONにはモデルID、固定revision、checkpoint、量子化方式、ロードしたINT8層数、解像度、Steps、CFG、Seed、入力画像数、入力順、出力SHA-256、処理時間を記録します。参照画像本体は一時jobフォルダーへ複製し、生成終了またはキャンセル後に削除します。
 
 キャンセルは隔離workerを停止します。モデル読み込み中とsampling中のどちらでも停止できますが、次回はモデルを先頭から読み込みます。
 
 ## 既知の制限
 
-- Previewモデルは正式版前の公開weightです。モデルカードが示す既知の品質制限があります。
-- Q8 weightは約18.58 GiBです。weight以外にCPU RAM、GPU activation、画像token、decoder用メモリが必要です。
-- 参照画像数と解像度を増やすと、入力token列と処理時間が増えます。
-- 複数画像編集では、保持対象と変更対象をプロンプト内で明示してください。入力が多いほど、被写体や構図がdriftする可能性があります。
-- `FlashAttention`を明示した場合、互換wheelが未導入なら生成前に失敗します。通常は`自動`または`PyTorch SDPA`を使ってください。
-- Prompt Enhanceは外部モデル呼び出しを伴うため、このStudioからは自動実行しません。
+- checkpointだけで約16.52 GiBあり、CPU RAM、GPU activation、画像token、decoderにもメモリが必要です。
+- 参照画像を増やすほど、1枚ごとの入力解像度は下がります。
+- 多数の参照画像を使う場合は、保持対象と変更対象をプロンプト内で明示してください。
+- `FlashAttention`を指定した場合、互換wheelがない環境では生成前に失敗します。通常は`自動`または`PyTorch SDPA`を使ってください。
+- 公式8-step LoRAはテキスト生成専用です。このStudioではまだ読み込みません。
+- Prompt Enhanceは外部モデル呼び出しを伴うため、自動実行しません。
 
 ## 出典とライセンス
 
-- [SenseNova U1.5 Preview model card](https://huggingface.co/sensenova/SenseNova-U1.5-8B-MoT-Preview)
+- [SenseNova U1.5正式版モデル](https://huggingface.co/sensenova/SenseNova-U1.5-8B-MoT)
+- [INT8 ConvRot配布リポジトリ](https://huggingface.co/joyfox/SenseNova-U1.5-8B-MoT-FP8)
+- [ConvRot対応ランタイム](https://github.com/starsFriday/ComfyUI-SenseNova)
 - [OpenSenseNova/SenseNova-U1](https://github.com/OpenSenseNova/SenseNova-U1)
-- [公式ComfyUI実装のGGUF説明](https://github.com/OpenSenseNova/SenseNova-U1/tree/main/apps/comfyui)
-- [Q8_0配布リポジトリ](https://huggingface.co/smthem/SenseNova-U1-8B-MoT-Merger-gguf)
 
-公式コードとモデルカードはApache-2.0です。Q8変換weightを含む各配布物については、取得時点の配布元ライセンスも確認してください。
+ランタイムコードはApache-2.0です。モデルweightは配布元に記載されたライセンスへ従ってください。

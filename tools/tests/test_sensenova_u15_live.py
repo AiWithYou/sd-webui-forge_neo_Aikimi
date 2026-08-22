@@ -6,10 +6,10 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from modules_forge.sensenova_u15_bridge import (
-    DEFAULT_Q8_PATH,
+    DEFAULT_CHECKPOINT_PATH,
     DEFAULT_SOURCE_PATH,
     MODE_EDIT,
-    QUANT_Q8,
+    QUANT_INT8_CONVROT,
     SenseNovaRequest,
     inspect_runtime,
     run_generation,
@@ -20,13 +20,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @unittest.skipUnless(
-    os.getenv("SENSENOVA_U15_LIVE_TEST") == "1", "opt-in real SenseNova Q8 GPU test"
+    os.getenv("SENSENOVA_U15_LIVE_TEST") == "1",
+    "opt-in real SenseNova final INT8 ConvRot GPU test",
 )
 class SenseNovaU15LiveTest(unittest.TestCase):
-    def test_q8_two_image_edit_generates_nonuniform_png(self):
-        status = inspect_runtime(
-            DEFAULT_SOURCE_PATH, quantization=QUANT_Q8, gguf_checkpoint=DEFAULT_Q8_PATH
-        )
+    def test_convrot_two_image_edit_generates_nonuniform_png(self):
+        status = inspect_runtime(DEFAULT_SOURCE_PATH, checkpoint=DEFAULT_CHECKPOINT_PATH)
         self.assertTrue(status.ready, " / ".join(status.messages))
 
         first = Image.new("RGB", (512, 512), (235, 242, 250))
@@ -42,8 +41,8 @@ class SenseNovaU15LiveTest(unittest.TestCase):
                 "Use the centered blue circle from the first image as the main subject. "
                 "Apply the warm red color palette from the second image while preserving a clean simple background."
             ),
-            quantization=QUANT_Q8,
-            gguf_checkpoint=str(DEFAULT_Q8_PATH),
+            quantization=QUANT_INT8_CONVROT,
+            checkpoint=str(DEFAULT_CHECKPOINT_PATH),
             source_path=str(DEFAULT_SOURCE_PATH),
             input_images=(first, second),
             width=512,
@@ -75,7 +74,12 @@ class SenseNovaU15LiveTest(unittest.TestCase):
             values = np.asarray(image.convert("RGB"), dtype=np.float32)
         self.assertGreater(float(values.var()), 1.0)
         self.assertEqual(complete[0]["metadata"]["input_image_count"], 2)
-        self.assertEqual(complete[0]["metadata"]["quantization"], QUANT_Q8)
+        self.assertEqual(
+            complete[0]["metadata"]["quantization"], QUANT_INT8_CONVROT
+        )
+        self.assertEqual(complete[0]["metadata"]["release_variant"], "final")
+        self.assertEqual(complete[0]["metadata"]["loaded_int8_layers"], 588)
+        self.assertEqual(complete[0]["metadata"]["schema_version"], 2)
 
 
 if __name__ == "__main__":

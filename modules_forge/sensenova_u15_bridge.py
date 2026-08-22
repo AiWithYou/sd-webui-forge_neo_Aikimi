@@ -25,17 +25,17 @@ from PIL import Image, ImageOps
 
 MODE_TEXT = "text"
 MODE_EDIT = "edit"
-QUANT_Q8 = "q8_gguf"
-QUANT_BF16 = "bf16"
+QUANT_INT8_CONVROT = "int8_convrot"
 
-DEFAULT_MODEL_ID = "sensenova/SenseNova-U1.5-8B-MoT-Preview"
-SOURCE_REVISION = "12a2bd9cba22a5317164b55db4f7c6209a371f83"
-Q8_REVISION = "e63b0a7e483bffdb1ff0463a39fbfd04ad3c85d9"
-Q8_FILE_NAME = "SenseNova-U1.5-8B-MoT-Preview-Q8.gguf"
-Q8_EXPECTED_BYTES = 19_947_887_936
-Q8_SHA256 = "8b655046f6e22c22258607556cacee3c1d82ae534146fb9c0faba04a0e4b3c8f"
+DEFAULT_MODEL_ID = "sensenova/SenseNova-U1.5-8B-MoT"
+SOURCE_REVISION = "e6dfd45762eb46f805067fe079c14bcb643ccccd"
+CHECKPOINT_REVISION = "57de22ad4e2fc24c77f56dfe45dbb87a60dfebee"
+CONVROT_FILE_NAME = "SenseNova-U1.5-8B-MoT-pruned-int8_convrot.safetensors"
+CONVROT_EXPECTED_BYTES = 17_734_813_848
+CONVROT_SHA256 = "cf6ed9ee3be516612b7fe083edfc7c9dd5d059cc759e300d2cf1f2726c0d250e"
+EXPECTED_CONVROT_LAYERS = 588
 
-MAX_REFERENCE_IMAGES = 8
+MAX_REFERENCE_IMAGES = 64
 MAX_PROMPT_LENGTH = 20_000
 MAX_SOURCE_PIXELS = 100_000_000
 GRID_FACTOR = 32
@@ -44,9 +44,9 @@ MAX_OUTPUT_SIDE = 4096
 MIN_PIXEL_BUDGET = 512 * 512
 MAX_PIXEL_BUDGET = 2048 * 2048
 
-VRAM_MODES = ("low", "balanced", "fast", "full")
+VRAM_MODES = ("low", "full")
 ATTENTION_BACKENDS = ("auto", "sdpa", "flash")
-DTYPES = ("bfloat16", "float16", "float32")
+DTYPES = ("bfloat16",)
 
 RESOLUTIONS: dict[str, tuple[int, int]] = {
     "1024x1024": (1024, 1024),
@@ -64,8 +64,8 @@ RESOLUTIONS: dict[str, tuple[int, int]] = {
 }
 
 _ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SOURCE_PATH = _ROOT / "models" / "SenseNova-U1" / "runtime" / "src"
-DEFAULT_Q8_PATH = _ROOT / "models" / "SenseNova-U1" / Q8_FILE_NAME
+DEFAULT_SOURCE_PATH = _ROOT / "models" / "SenseNova-U1" / "runtime-final"
+DEFAULT_CHECKPOINT_PATH = _ROOT / "models" / "SenseNova-U1" / CONVROT_FILE_NAME
 DEFAULT_WORKER_PATH = _ROOT / "tools" / "sensenova_u15_worker.py"
 
 _PROCESS_LOCK = threading.RLock()
@@ -103,8 +103,8 @@ class SenseNovaRequest:
     mode: str
     prompt: str
     model_path: str = DEFAULT_MODEL_ID
-    quantization: str = QUANT_Q8
-    gguf_checkpoint: str = os.fspath(DEFAULT_Q8_PATH)
+    quantization: str = QUANT_INT8_CONVROT
+    checkpoint: str = os.fspath(DEFAULT_CHECKPOINT_PATH)
     source_path: str = os.fspath(DEFAULT_SOURCE_PATH)
     input_images: tuple[Image.Image, ...] = ()
     width: int | None = 2048
@@ -126,9 +126,9 @@ class RuntimeStatus:
     ready: bool
     source_ready: bool
     dependencies_ready: bool
-    quantization_ready: bool
+    checkpoint_ready: bool
     source_path: Path
-    gguf_path: Path | None
+    checkpoint_path: Path | None
     messages: tuple[str, ...]
     partial_bytes: int = 0
 
@@ -228,19 +228,18 @@ def validate_request(request: SenseNovaRequest) -> None:
         raise SenseNovaBridgeError(
             "モデルIDまたはローカルモデルパスを入力してください。"
         )
-    if request.quantization not in {QUANT_Q8, QUANT_BF16}:
+    if request.quantization != QUANT_INT8_CONVROT:
         raise SenseNovaBridgeError(f"未対応の量子化方式です: {request.quantization!r}")
-    if request.quantization == QUANT_Q8:
-        if request.model_path.strip() != DEFAULT_MODEL_ID:
-            raise SenseNovaBridgeError(
-                f"Q8_0 GGUFのconfigは {DEFAULT_MODEL_ID} に固定されています。"
-            )
-        if not request.gguf_checkpoint.strip():
-            raise SenseNovaBridgeError("Q8_0 GGUFファイルを指定してください。")
-        if Path(request.gguf_checkpoint).suffix.lower() != ".gguf":
-            raise SenseNovaBridgeError(
-                "INT8には拡張子 .gguf のQ8_0ファイルが必要です。"
-            )
+    if request.model_path.strip() != DEFAULT_MODEL_ID:
+        raise SenseNovaBridgeError(
+            f"INT8 ConvRotのconfigは正式版 {DEFAULT_MODEL_ID} に固定されています。"
+        )
+    if not request.checkpoint.strip():
+        raise SenseNovaBridgeError("INT8 ConvRot checkpointを指定してください。")
+    if Path(request.checkpoint).suffix.lower() != ".safetensors":
+        raise SenseNovaBridgeError(
+            "INT8 ConvRotには拡張子 .safetensors のcheckpointが必要です。"
+        )
 
     if request.mode == MODE_EDIT:
         if not request.input_images:
@@ -294,8 +293,8 @@ def validate_request(request: SenseNovaRequest) -> None:
         raise SenseNovaBridgeError("Image CFGは0〜20にしてください。")
     if not 0.1 <= float(request.timestep_shift) <= 20.0:
         raise SenseNovaBridgeError("Timestep Shiftは0.1〜20にしてください。")
-    if not 0 <= int(request.seed) <= 2**63 - 1:
-        raise SenseNovaBridgeError("Seedは0〜9,223,372,036,854,775,807にしてください。")
+    if not 0 <= int(request.seed) <= 2**32 - 1:
+        raise SenseNovaBridgeError("Seedは0〜4,294,967,295にしてください。")
     if request.vram_mode not in VRAM_MODES:
         raise SenseNovaBridgeError(
             f"VRAMモードは {', '.join(VRAM_MODES)} から選択してください。"
@@ -306,14 +305,22 @@ def validate_request(request: SenseNovaRequest) -> None:
         raise SenseNovaBridgeError("計算精度の指定が不正です。")
 
 
-def _gguf_header_is_valid(path: Path) -> bool:
+def _convrot_safetensors_header_is_valid(path: Path) -> bool:
     try:
         with path.open("rb") as stream:
-            header = stream.read(8)
+            length_bytes = stream.read(8)
+            if len(length_bytes) != 8:
+                return False
+            header_length = int.from_bytes(length_bytes, "little")
+            if header_length <= 2 or header_length > 256 * 1024 * 1024:
+                return False
+            header = stream.read(header_length)
         return (
-            len(header) == 8
-            and header[:4] == b"GGUF"
-            and 2 <= int.from_bytes(header[4:], "little") <= 4
+            len(header) == header_length
+            and b".comfy_quant" in header
+            and header.count(b'.comfy_quant"') == EXPECTED_CONVROT_LAYERS
+            and b"fm_modules.vision_model_mot_gen.embeddings.patch_embedding.weight"
+            in header
         )
     except OSError:
         return False
@@ -322,33 +329,39 @@ def _gguf_header_is_valid(path: Path) -> bool:
 def inspect_runtime(
     source_path: str | os.PathLike[str] = DEFAULT_SOURCE_PATH,
     *,
-    quantization: str = QUANT_Q8,
-    gguf_checkpoint: str | os.PathLike[str] = DEFAULT_Q8_PATH,
+    checkpoint: str | os.PathLike[str] = DEFAULT_CHECKPOINT_PATH,
 ) -> RuntimeStatus:
     source = Path(source_path).expanduser().resolve()
-    gguf = (
-        Path(gguf_checkpoint).expanduser().resolve()
-        if str(gguf_checkpoint).strip()
+    checkpoint_path = (
+        Path(checkpoint).expanduser().resolve()
+        if str(checkpoint).strip()
         else None
     )
     messages: list[str] = []
-    package_init = source / "sensenova_u1" / "__init__.py"
-    revision_file = source.parent / ".sensenova_revision"
+    package_init = source / "SenseNova" / "src" / "sensenova_u1" / "__init__.py"
+    inference_file = source / "SenseNova" / "examples" / "editing" / "inference.py"
+    config_file = source / "SenseNova-U1.5-8B-MoT" / "config.json"
+    revision_file = source / ".sensenova_runtime_revision"
     revision = (
         revision_file.read_text(encoding="utf-8").strip()
         if revision_file.is_file()
         else ""
     )
-    source_ready = package_init.is_file() and revision == SOURCE_REVISION
+    source_ready = (
+        package_init.is_file()
+        and inference_file.is_file()
+        and config_file.is_file()
+        and revision == SOURCE_REVISION
+    )
     if source_ready:
-        messages.append("公式推論コードは固定リビジョンで準備済みです。")
+        messages.append("正式版ConvRotランタイムは固定リビジョンで準備済みです。")
     elif package_init.is_file():
         messages.append(
             "推論コードのリビジョンが一致しません。セットアップを再実行してください。"
         )
     else:
         messages.append(
-            "推論コードが未準備です。download_sensenova_u15_int8.bat を実行してください。"
+            "正式版ランタイムが未準備です。download_sensenova_u15_int8.bat を実行してください。"
         )
 
     missing_dependencies = [
@@ -357,9 +370,10 @@ def inspect_runtime(
             "torch",
             "transformers",
             "accelerate",
-            "sentencepiece",
-            "diffusers",
-            "gguf",
+            "safetensors",
+            "tokenizers",
+            "tqdm",
+            "comfy_kitchen",
         )
         if importlib.util.find_spec(name) is None
     ]
@@ -370,58 +384,57 @@ def inspect_runtime(
         messages.append("不足している依存関係: " + ", ".join(missing_dependencies))
 
     partial_bytes = 0
-    if quantization == QUANT_Q8:
-        partial = Path(str(gguf) + ".part") if gguf else None
-        if partial and partial.is_file():
-            partial_bytes = partial.stat().st_size
-        chunk_directory = Path(str(gguf) + ".part.chunks") if gguf else None
-        if chunk_directory and chunk_directory.is_dir():
-            chunk_bytes = sum(
-                path.stat().st_size
-                for path in chunk_directory.glob("chunk-*.bin")
-                if path.is_file()
-            )
-            partial_bytes = max(partial_bytes, chunk_bytes)
-        sidecar = Path(str(gguf) + ".sha256") if gguf else None
-        try:
-            sidecar_sha256 = (
-                sidecar.read_text(encoding="utf-8").strip().split()[0].lower()
-                if sidecar and sidecar.is_file()
-                else ""
-            )
-        except (OSError, IndexError):
-            sidecar_sha256 = ""
-        quantization_ready = bool(
-            gguf
-            and gguf.is_file()
-            and gguf.stat().st_size == Q8_EXPECTED_BYTES
-            and _gguf_header_is_valid(gguf)
-            and sidecar_sha256 == Q8_SHA256
+    partial = Path(str(checkpoint_path) + ".part") if checkpoint_path else None
+    if partial and partial.is_file():
+        partial_bytes = partial.stat().st_size
+    chunk_directory = (
+        Path(str(checkpoint_path) + ".part.chunks") if checkpoint_path else None
+    )
+    if chunk_directory and chunk_directory.is_dir():
+        chunk_bytes = sum(
+            path.stat().st_size
+            for pattern in ("chunk-*.bin", "chunk-*.bin.resume")
+            for path in chunk_directory.glob(pattern)
+            if path.is_file()
         )
-        if quantization_ready:
-            messages.append("Q8_0 GGUF（INT8）を確認しました。")
-        elif partial_bytes:
-            messages.append(
-                f"Q8_0をダウンロード中または中断中です: {partial_bytes / (1024**3):.2f} / "
-                f"{Q8_EXPECTED_BYTES / (1024**3):.2f} GiB"
-            )
-        elif gguf and gguf.is_file():
-            messages.append(
-                "Q8_0の完全性記録が一致しません。セットアップでSHA-256を再検証してください。"
-            )
-        else:
-            messages.append("Q8_0 GGUFが未準備です。セットアップを実行してください。")
+        partial_bytes = max(partial_bytes, chunk_bytes)
+    sidecar = Path(str(checkpoint_path) + ".sha256") if checkpoint_path else None
+    try:
+        sidecar_sha256 = (
+            sidecar.read_text(encoding="utf-8").strip().split()[0].lower()
+            if sidecar and sidecar.is_file()
+            else ""
+        )
+    except (OSError, IndexError):
+        sidecar_sha256 = ""
+    checkpoint_ready = bool(
+        checkpoint_path
+        and checkpoint_path.is_file()
+        and checkpoint_path.stat().st_size == CONVROT_EXPECTED_BYTES
+        and _convrot_safetensors_header_is_valid(checkpoint_path)
+        and sidecar_sha256 == CONVROT_SHA256
+    )
+    if checkpoint_ready:
+        messages.append("正式版INT8 ConvRot checkpointを確認しました。")
+    elif partial_bytes:
+        messages.append(
+            "INT8 ConvRotをダウンロード中または中断中です: "
+            f"{partial_bytes / (1024**3):.2f} / {CONVROT_EXPECTED_BYTES / (1024**3):.2f} GiB"
+        )
+    elif checkpoint_path and checkpoint_path.is_file():
+        messages.append(
+            "INT8 ConvRotの完全性記録が一致しません。セットアップでSHA-256を再検証してください。"
+        )
     else:
-        quantization_ready = True
-        messages.append("BF16は初回生成時にHugging Faceから重みを取得します。")
+        messages.append("正式版INT8 ConvRotが未準備です。セットアップを実行してください。")
 
     return RuntimeStatus(
-        ready=source_ready and dependencies_ready and quantization_ready,
+        ready=source_ready and dependencies_ready and checkpoint_ready,
         source_ready=source_ready,
         dependencies_ready=dependencies_ready,
-        quantization_ready=quantization_ready,
+        checkpoint_ready=checkpoint_ready,
         source_path=source,
-        gguf_path=gguf,
+        checkpoint_path=checkpoint_path,
         messages=tuple(messages),
         partial_bytes=partial_bytes,
     )
@@ -517,17 +530,13 @@ def _request_payload(
     output_path: Path,
     metadata_path: Path,
 ) -> dict[str, Any]:
-    gguf = (
-        os.fspath(Path(request.gguf_checkpoint).expanduser().resolve())
-        if request.quantization == QUANT_Q8
-        else ""
-    )
     return {
         "mode": request.mode,
         "prompt": request.prompt.strip(),
         "model_path": request.model_path.strip(),
         "quantization": request.quantization,
-        "gguf_checkpoint": gguf,
+        "checkpoint": os.fspath(Path(request.checkpoint).expanduser().resolve()),
+        "checkpoint_revision": CHECKPOINT_REVISION,
         "source_path": os.fspath(Path(request.source_path).expanduser().resolve()),
         "input_images": list(input_paths),
         "width": request.width,
@@ -590,8 +599,7 @@ def run_generation(
     validate_request(request)
     runtime = inspect_runtime(
         request.source_path,
-        quantization=request.quantization,
-        gguf_checkpoint=request.gguf_checkpoint,
+        checkpoint=request.checkpoint,
     )
     if not runtime.ready:
         raise SenseNovaBridgeError(" ".join(runtime.messages))
@@ -803,7 +811,7 @@ def cancel_generation(job_id: str | None = None) -> str:
 
 def request_summary_html(request: SenseNovaRequest) -> str:
     mode = "複数画像編集" if request.mode == MODE_EDIT else "テキスト生成"
-    quantization = "Q8_0 GGUF · INT8" if request.quantization == QUANT_Q8 else "BF16"
+    quantization = "正式版 · INT8 ConvRot"
     size = (
         "入力1枚目の比率 · 約4MP"
         if request.width is None

@@ -8,7 +8,6 @@ returns all GPU/CPU model memory to the OS when a job finishes.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
 import json
 import os
@@ -16,7 +15,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Sequence
 
 import numpy as np
 import torch
@@ -30,6 +29,12 @@ IMAGE_GRID_FACTOR = 32
 DEFAULT_TARGET_PIXELS = 2048 * 2048
 MIN_INPUT_PIXELS = 512 * 512
 MAX_INPUT_PIXELS = 2048 * 2048
+TOTAL_INPUT_PIXELS = 4096 * 4096
+MAX_REFERENCE_IMAGES = 64
+EXPECTED_CONVROT_LAYERS = 588
+FINAL_MODEL_ID = "sensenova/SenseNova-U1.5-8B-MoT"
+CHECKPOINT_REVISION = "57de22ad4e2fc24c77f56dfe45dbb87a60dfebee"
+RUNTIME_REVISION = "e6dfd45762eb46f805067fe079c14bcb643ccccd"
 
 
 def emit(stage: str, message: str, progress: float, **extra: Any) -> None:
@@ -68,22 +73,43 @@ def _sha256(path: Path) -> str:
 
 
 def _to_pil(batch: torch.Tensor) -> list[Image.Image]:
-    mean = torch.tensor(NORM_MEAN, device=batch.device, dtype=batch.dtype).view(
-        1, 3, 1, 1
-    )
-    std = torch.tensor(NORM_STD, device=batch.device, dtype=batch.dtype).view(
-        1, 3, 1, 1
-    )
-    values = (batch * std + mean).clamp(0, 1).float().permute(0, 2, 3, 1).cpu().numpy()
+    if batch.ndim != 4:
+        raise RuntimeError(f"Expected a four-dimensional image batch, got {batch.ndim}D.")
+    if batch.shape[-1] in {3, 4}:
+        values = batch[..., :3].clamp(0, 1).float().cpu().numpy()
+    elif batch.shape[1] == 3:
+        mean = torch.tensor(NORM_MEAN, device=batch.device, dtype=batch.dtype).view(
+            1, 3, 1, 1
+        )
+        std = torch.tensor(NORM_STD, device=batch.device, dtype=batch.dtype).view(
+            1, 3, 1, 1
+        )
+        values = (
+            (batch * std + mean)
+            .clamp(0, 1)
+            .float()
+            .permute(0, 2, 3, 1)
+            .cpu()
+            .numpy()
+        )
+    else:
+        raise RuntimeError(f"Unsupported image tensor shape: {tuple(batch.shape)}")
     values = (values * 255.0).round().astype(np.uint8)
     return [Image.fromarray(value, mode="RGB") for value in values]
 
 
 def _auto_input_max_pixels(image_count: int) -> int:
-    if image_count <= 2:
-        return MAX_INPUT_PIXELS
-    total_budget = 2 * MAX_INPUT_PIXELS
-    return max(MIN_INPUT_PIXELS, total_budget // max(1, image_count))
+    return max(
+        MIN_INPUT_PIXELS,
+        min(MAX_INPUT_PIXELS, TOTAL_INPUT_PIXELS // max(1, image_count)),
+    )
+
+
+def _effective_input_max_pixels(image_count: int, requested: int | str) -> int:
+    automatic_limit = _auto_input_max_pixels(image_count)
+    if requested == "auto":
+        return automatic_limit
+    return min(int(requested), automatic_limit)
 
 
 def _flatten_rgb(image: Image.Image) -> Image.Image:
@@ -102,10 +128,7 @@ def _load_images(
     smart_resize,
     input_max_pixels: int | str,
 ) -> list[Image.Image]:
-    if input_max_pixels == "auto":
-        budget = _auto_input_max_pixels(len(paths))
-    else:
-        budget = int(input_max_pixels)
+    budget = _effective_input_max_pixels(len(paths), input_max_pixels)
     images: list[Image.Image] = []
     for raw_path in paths:
         with Image.open(raw_path) as opened:
@@ -146,39 +169,6 @@ def _resolve_output_size(
     return resized_width, resized_height
 
 
-@contextlib.contextmanager
-def _sampling_progress(model: Any, total_steps: int) -> Iterator[None]:
-    if not hasattr(model, "unpatchify"):
-        yield
-        return
-
-    original = model.unpatchify
-    completed = 0
-
-    def wrapped(*args, **kwargs):
-        nonlocal completed
-        result = original(*args, **kwargs)
-        completed += 1
-        ratio = min(1.0, completed / max(1, total_steps))
-        emit(
-            "sampling",
-            f"Sampling {min(completed, total_steps)} / {total_steps}",
-            0.35 + ratio * 0.58,
-            step=min(completed, total_steps),
-            total_steps=total_steps,
-        )
-        return result
-
-    model.unpatchify = wrapped
-    try:
-        yield
-    finally:
-        try:
-            del model.unpatchify
-        except AttributeError:
-            model.unpatchify = original
-
-
 def _validate_payload(payload: dict[str, Any]) -> None:
     mode = payload.get("mode")
     if mode not in {"text", "edit"}:
@@ -190,6 +180,10 @@ def _validate_payload(payload: dict[str, Any]) -> None:
         raise RuntimeError("Image editing requires at least one reference image.")
     if mode == "text" and image_paths:
         raise RuntimeError("Text-to-image does not accept reference images.")
+    if len(image_paths) > MAX_REFERENCE_IMAGES:
+        raise RuntimeError(
+            f"At most {MAX_REFERENCE_IMAGES} ordered reference images are supported."
+        )
     for image_path in image_paths:
         if not Path(image_path).is_file():
             raise RuntimeError(f"Input image does not exist: {image_path}")
@@ -207,88 +201,107 @@ def _validate_payload(payload: dict[str, Any]) -> None:
                 raise RuntimeError(
                     f"{name} must be a multiple of 32 from 512 through 4096."
                 )
+    if payload.get("quantization") != "int8_convrot":
+        raise RuntimeError("This worker only accepts the final INT8 ConvRot checkpoint.")
+    if payload.get("model_path") != FINAL_MODEL_ID:
+        raise RuntimeError(f"This worker is fixed to the final model config: {FINAL_MODEL_ID}")
+    if payload.get("checkpoint_revision") != CHECKPOINT_REVISION:
+        raise RuntimeError("The pinned INT8 ConvRot checkpoint revision does not match.")
+    checkpoint = Path(str(payload.get("checkpoint", "")))
+    if checkpoint.suffix.lower() != ".safetensors" or not checkpoint.is_file():
+        raise RuntimeError(f"INT8 ConvRot checkpoint does not exist: {checkpoint}")
 
 
 def _load_runtime(payload: dict[str, Any]):
     source_path = Path(payload["source_path"]).resolve()
-    if not (source_path / "sensenova_u1" / "__init__.py").is_file():
+    package_path = source_path / "SenseNova" / "src" / "sensenova_u1" / "__init__.py"
+    inference_path = source_path / "SenseNova" / "examples" / "editing" / "inference.py"
+    config_repo = source_path / "SenseNova-U1.5-8B-MoT"
+    if not package_path.is_file() or not inference_path.is_file() or not config_repo.is_dir():
         raise RuntimeError(f"SenseNova runtime source is incomplete: {source_path}")
+    revision_file = source_path / ".sensenova_runtime_revision"
+    revision = (
+        revision_file.read_text(encoding="utf-8").strip()
+        if revision_file.is_file()
+        else ""
+    )
+    if revision != RUNTIME_REVISION:
+        raise RuntimeError("SenseNova runtime revision does not match the pinned loader.")
     sys.path.insert(0, os.fspath(source_path))
 
-    import sensenova_u1
-    from sensenova_u1.models.neo_unify.utils import smart_resize
-    from sensenova_u1.utils import (
-        load_model_and_tokenizer,
-        make_offload_ctx,
-        vram_mode_keeps_generation_resident,
-        vram_mode_to_prefetch_count,
-    )
+    from SenseNova.examples.editing.inference import load_sensenova_model
+    from SenseNova.src import sensenova_u1
+    from SenseNova.src.sensenova_u1.models.neo_unify.utils import smart_resize
 
     attention_backend = str(payload.get("attn_backend", "auto"))
-    sensenova_u1.set_attn_backend(attention_backend)
     dtype_name = str(payload.get("dtype", "bfloat16"))
-    dtype = {
-        "bfloat16": torch.bfloat16,
-        "float16": torch.float16,
-        "float32": torch.float32,
-    }[dtype_name]
+    if dtype_name != "bfloat16":
+        raise RuntimeError("INT8 ConvRot inference is fixed to bfloat16 compute.")
+    dtype = torch.bfloat16
     vram_mode = str(payload.get("vram_mode", "low"))
-    prefetch_count = vram_mode_to_prefetch_count(vram_mode)
-    gguf_checkpoint = payload.get("gguf_checkpoint") or None
+    if vram_mode not in {"low", "full"}:
+        raise RuntimeError(f"Unsupported VRAM mode: {vram_mode}")
+    prefetch_count = 1 if vram_mode == "low" else None
+    checkpoint = Path(payload["checkpoint"]).resolve()
+    device = torch.device(str(payload.get("device", "cuda")))
+    if device.type != "cuda" or not torch.cuda.is_available():
+        raise RuntimeError("SenseNova U1.5 INT8 ConvRot requires an NVIDIA CUDA GPU.")
 
-    emit("loading", "Loading model and tokenizer", 0.08)
+    emit("loading", "Loading final INT8 ConvRot model and tokenizer", 0.08)
     started = time.monotonic()
-    model, tokenizer = load_model_and_tokenizer(
-        str(payload["model_path"]),
-        dtype=dtype,
-        device=str(payload.get("device", "cuda")),
-        gguf_checkpoint=str(gguf_checkpoint) if gguf_checkpoint else None,
-        for_offload=prefetch_count > 0,
-        device_map=None,
-        max_memory=None,
+    engine = load_sensenova_model(
+        os.fspath(checkpoint),
+        device,
+        attention_backend,
+        os.fspath(config_repo),
+        dtype,
     )
+    load_info = engine.quant_load_info
+    loaded_layers = int(load_info.get("int8", 0))
+    missing = list(load_info.get("missing_keys", []))
+    unexpected = list(load_info.get("unexpected_keys", []))
+    leftover = list(load_info.get("meta_materialized", []))
+    if engine.quantization_format != "int8_convrot":
+        raise RuntimeError(
+            f"Expected int8_convrot, loaded {engine.quantization_format or 'unknown'}."
+        )
+    if loaded_layers != EXPECTED_CONVROT_LAYERS:
+        raise RuntimeError(
+            f"Expected {EXPECTED_CONVROT_LAYERS} INT8 ConvRot layers, loaded {loaded_layers}."
+        )
+    if missing or unexpected or leftover:
+        raise RuntimeError(
+            "Checkpoint/config mismatch: "
+            f"{len(missing)} missing, {len(unexpected)} unexpected, "
+            f"{len(leftover)} uninitialized tensors."
+        )
+    if engine.release_variant != "final" or not engine.pruned_lm_head:
+        raise RuntimeError(
+            "The checkpoint is not the pruned final SenseNova U1.5 T2I/edit release."
+        )
     emit(
         "loaded",
-        "Model is ready",
+        "Final INT8 ConvRot model is ready",
         0.28,
         load_seconds=round(time.monotonic() - started, 3),
         effective_attn_backend=sensenova_u1.effective_attn_backend(),
+        loaded_int8_layers=loaded_layers,
+        release_variant=engine.release_variant,
     )
-
-    offload_context = lambda: make_offload_ctx(
-        model,
-        prefetch_count,
-        str(payload.get("device", "cuda")),
-        keep_generation_resident=vram_mode_keeps_generation_resident(vram_mode),
-        fast_vram_fraction=float(payload.get("fast_vram_fraction", 0.90)),
-        fast_vram_headroom_gib=float(payload.get("fast_vram_headroom_gib", 2.0)),
-        fast_activation_reserve_gib=float(
-            payload.get("fast_activation_reserve_gib", 4.0)
-        ),
-        fast_vram_budget_gib=(
-            float(payload["fast_vram_budget_gib"])
-            if float(payload.get("fast_vram_budget_gib", 0.0)) > 0
-            else None
-        ),
-    )
-    return sensenova_u1, smart_resize, model, tokenizer, offload_context
+    return sensenova_u1, smart_resize, engine, prefetch_count, loaded_layers
 
 
 def run_request(payload: dict[str, Any]) -> dict[str, Any]:
     _validate_payload(payload)
     started = time.monotonic()
-    source_revision_file = (
-        Path(payload["source_path"]).resolve().parent / ".sensenova_revision"
-    )
+    source_revision_file = Path(payload["source_path"]).resolve() / ".sensenova_runtime_revision"
     source_revision = (
         source_revision_file.read_text(encoding="utf-8").strip()
         if source_revision_file.is_file()
         else ""
     )
 
-    sensenova_u1, smart_resize, model, tokenizer, offload_context = _load_runtime(
-        payload
-    )
+    sensenova_u1, smart_resize, engine, prefetch_count, loaded_layers = _load_runtime(payload)
     mode = str(payload["mode"])
     image_paths = [str(value) for value in payload.get("input_images", [])]
     images = _load_images(
@@ -296,47 +309,71 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
         smart_resize=smart_resize,
         input_max_pixels=payload.get("input_max_pixels", "auto"),
     )
+    effective_input_max_pixels = (
+        _effective_input_max_pixels(
+            len(image_paths), payload.get("input_max_pixels", "auto")
+        )
+        if image_paths
+        else 0
+    )
     width, height = _resolve_output_size(payload, images, smart_resize)
     steps = int(payload.get("steps", 50))
     prompt = str(payload["prompt"]).strip()
 
     emit("preparing", f"Preparing {width} x {height} generation", 0.31)
     torch.backends.cuda.matmul.allow_tf32 = True
-    with (
-        torch.inference_mode(),
-        offload_context() as offloaded,
-        _sampling_progress(model, steps),
-    ):
-        if mode == "text":
-            tensor = offloaded.t2i_generate(
-                tokenizer,
-                prompt,
-                image_size=(width, height),
-                cfg_scale=float(payload.get("cfg_scale", 4.0)),
-                cfg_norm=str(payload.get("cfg_norm", "none")),
-                timestep_shift=float(payload.get("timestep_shift", 3.0)),
-                cfg_interval=(0.0, 1.0),
-                num_steps=steps,
-                batch_size=1,
-                seed=int(payload.get("seed", 42)),
-                think_mode=False,
-            )
-        else:
-            tensor = offloaded.it2i_generate(
-                tokenizer,
-                prompt,
-                images,
-                image_size=(width, height),
-                cfg_scale=float(payload.get("cfg_scale", 4.0)),
-                img_cfg_scale=float(payload.get("img_cfg_scale", 1.0)),
-                cfg_norm=str(payload.get("cfg_norm", "none")),
-                timestep_shift=float(payload.get("timestep_shift", 3.0)),
-                cfg_interval=(0.0, 1.0),
-                num_steps=steps,
-                batch_size=1,
-                seed=int(payload.get("seed", 42)),
-                think_mode=False,
-            )
+    full_model = prefetch_count is None
+
+    def progress_callback(value: int, total: int) -> None:
+        ratio = min(1.0, value / max(1, total))
+        emit(
+            "sampling",
+            f"Sampling {min(value, total)} / {total}",
+            0.35 + ratio * 0.58,
+            step=min(value, total),
+            total_steps=total,
+        )
+
+    if full_model:
+        engine.model.to(engine.device)
+    try:
+        with torch.inference_mode():
+            if mode == "text":
+                tensor = engine.generate(
+                    prompt,
+                    image_size=(width, height),
+                    cfg_scale=float(payload.get("cfg_scale", 4.0)),
+                    cfg_norm=str(payload.get("cfg_norm", "none")),
+                    timestep_shift=float(payload.get("timestep_shift", 3.0)),
+                    cfg_interval=(0.0, 1.0),
+                    num_steps=steps,
+                    batch_size=1,
+                    seed=int(payload.get("seed", 42)),
+                    think_mode=False,
+                    streaming_prefetch_count=prefetch_count,
+                    progress_callback=progress_callback,
+                )
+            else:
+                tensor = engine.edit(
+                    prompt,
+                    images,
+                    image_size=(width, height),
+                    cfg_scale=float(payload.get("cfg_scale", 4.0)),
+                    img_cfg_scale=float(payload.get("img_cfg_scale", 1.0)),
+                    cfg_norm=str(payload.get("cfg_norm", "none")),
+                    timestep_shift=float(payload.get("timestep_shift", 3.0)),
+                    cfg_interval=(0.0, 1.0),
+                    num_steps=steps,
+                    batch_size=1,
+                    think_mode=False,
+                    seed=int(payload.get("seed", 42)),
+                    streaming_prefetch_count=prefetch_count,
+                    progress_callback=progress_callback,
+                )
+    finally:
+        if full_model:
+            engine.model.to("cpu")
+            torch.cuda.empty_cache()
 
     emit("decoding", "Saving generated image", 0.95)
     output_images = _to_pil(tensor)
@@ -347,13 +384,17 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
     _atomic_png(output_path, output_images[0])
 
     metadata = {
-        "schema_version": 1,
+        "schema_version": 2,
         "model": str(payload["model_path"]),
+        "checkpoint_revision": str(payload["checkpoint_revision"]),
         "mode": mode,
         "prompt": prompt,
         "quantization": str(payload["quantization"]),
-        "gguf_checkpoint": str(payload.get("gguf_checkpoint") or ""),
-        "source_revision": source_revision,
+        "checkpoint": str(payload["checkpoint"]),
+        "runtime_revision": source_revision,
+        "release_variant": engine.release_variant,
+        "pruned_lm_head": engine.pruned_lm_head,
+        "loaded_int8_layers": loaded_layers,
         "sensenova_u1_version": getattr(sensenova_u1, "__version__", "unknown"),
         "torch_version": torch.__version__,
         "width": width,
@@ -368,6 +409,8 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
         "dtype": str(payload.get("dtype", "bfloat16")),
         "input_image_count": len(images),
         "input_image_names": [Path(path).name for path in image_paths],
+        "requested_input_max_pixels": payload.get("input_max_pixels", "auto"),
+        "effective_input_max_pixels": effective_input_max_pixels,
         "output_sha256": _sha256(output_path),
         "elapsed_seconds": round(time.monotonic() - started, 3),
     }
@@ -383,19 +426,26 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
 
 def self_test(source_path: str) -> None:
     source = Path(source_path).resolve()
-    if not (source / "sensenova_u1" / "__init__.py").is_file():
+    package = source / "SenseNova" / "src" / "sensenova_u1" / "__init__.py"
+    inference = source / "SenseNova" / "examples" / "editing" / "inference.py"
+    config = source / "SenseNova-U1.5-8B-MoT" / "config.json"
+    if not package.is_file() or not inference.is_file() or not config.is_file():
         raise RuntimeError(f"SenseNova source was not found: {source}")
     sys.path.insert(0, os.fspath(source))
-    import sentencepiece
-    import sensenova_u1
+    import comfy_kitchen
+    import safetensors
     import transformers
+    from SenseNova.examples.editing.inference import load_sensenova_model
+    from SenseNova.src import sensenova_u1
 
     sys.stdout.write(
         json.dumps(
             {
                 "ok": True,
                 "sensenova_u1": getattr(sensenova_u1, "__version__", "unknown"),
-                "sentencepiece": getattr(sentencepiece, "__version__", "unknown"),
+                "loader": load_sensenova_model.__name__,
+                "comfy_kitchen": getattr(comfy_kitchen, "__version__", "unknown"),
+                "safetensors": getattr(safetensors, "__version__", "unknown"),
                 "torch": torch.__version__,
                 "transformers": transformers.__version__,
             },
@@ -406,6 +456,10 @@ def self_test(source_path: str) -> None:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="Forge Neo SenseNova U1.5 worker")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--request", help="Path to a validated job JSON file.")

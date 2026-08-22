@@ -13,30 +13,41 @@ class SenseNovaDownloadScriptTests(unittest.TestCase):
         cls.script = SCRIPT.read_text(encoding="utf-8")
         cls.batch = BATCH.read_text(encoding="utf-8")
 
-    def test_model_download_is_immutable_and_integrity_checked(self):
+    def test_final_convrot_download_is_immutable_and_integrity_checked(self):
         self.assertIn(
-            'ModelRevision = "e63b0a7e483bffdb1ff0463a39fbfd04ad3c85d9"', self.script
+            'ModelRevision = "57de22ad4e2fc24c77f56dfe45dbb87a60dfebee"',
+            self.script,
         )
-        self.assertIn("ModelBytes = [Int64]19947887936", self.script)
+        self.assertIn("ModelBytes = [Int64]17734813848", self.script)
         self.assertIn(
-            'ModelSha256 = "8b655046f6e22c22258607556cacee3c1d82ae534146fb9c0faba04a0e4b3c8f"',
+            'ModelSha256 = "cf6ed9ee3be516612b7fe083edfc7c9dd5d059cc759e300d2cf1f2726c0d250e"',
             self.script,
         )
         self.assertIn("Get-FileHash -LiteralPath $Path -Algorithm SHA256", self.script)
-        self.assertIn('if ($magic -ne "GGUF"', self.script)
+        self.assertIn("Assert-ConvRotSafetensorsHeader", self.script)
+        self.assertIn('Contains(".comfy_quant")', self.script)
+        self.assertIn("convRotLayerCount -ne 588", self.script)
 
     def test_runtime_source_is_pinned_and_blob_verified(self):
         self.assertIn(
-            'SourceRevision = "12a2bd9cba22a5317164b55db4f7c6209a371f83"', self.script
+            'SourceRevision = "e6dfd45762eb46f805067fe079c14bcb643ccccd"',
+            self.script,
         )
         self.assertIn("Get-GitBlobSha1", self.script)
-        self.assertIn('$_.path -like "src/sensenova_u1/*"', self.script)
-        self.assertIn("sentencepiece==0.2.1", self.script)
+        self.assertIn('$_.path -like "SenseNova/*"', self.script)
+        self.assertIn('$_.path -like "SenseNova-U1.5-8B-MoT/*"', self.script)
+        self.assertIn("comfy_kitchen", self.script)
 
     def test_download_is_resumable_and_batch_calls_the_script(self):
         self.assertIn("--continue-at -", self.script)
         self.assertIn("--retry-all-errors", self.script)
-        self.assertIn("--parallel-max 8", self.script)
+        self.assertIn("ParallelDownloads = 16", self.script)
+        self.assertIn("--parallel-max $ParallelDownloads", self.script)
+        self.assertIn("$chunkBytes = [Int64](32MB)", self.script)
+        self.assertIn("Merge-ChunkResume", self.script)
+        self.assertIn('$resumePath = "$($chunk.Path).resume"', self.script)
+        self.assertIn("$repair.SetLength($originalLength)", self.script)
+        self.assertIn("Move-Item -Force -LiteralPath $ResumePath", self.script)
         self.assertIn('("chunk-{0:D3}.bin" -f $index)', self.script)
         self.assertIn("$input.CopyTo($output)", self.script)
         self.assertIn("download_sensenova_u15_int8.ps1", self.batch)

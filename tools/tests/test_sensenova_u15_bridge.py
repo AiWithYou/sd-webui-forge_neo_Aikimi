@@ -1,9 +1,12 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+import torch
 from PIL import Image
+from safetensors.torch import save_file
 
 from modules_forge import sensenova_u15_bridge as bridge
 
@@ -28,8 +31,11 @@ class SenseNovaRequestTests(unittest.TestCase):
         self.assertGreater(images[0].getpixel((0, 0))[0], images[0].getpixel((0, 0))[1])
         self.assertEqual(images[1].getpixel((0, 0)), (0, 0, 255))
 
-    def test_edit_accepts_eight_ordered_images(self):
-        images = tuple(Image.new("RGB", (32, 32), (index, 0, 0)) for index in range(8))
+    def test_edit_accepts_sixty_four_ordered_images(self):
+        images = tuple(
+            Image.new("RGB", (32, 32), (index, 0, 0))
+            for index in range(bridge.MAX_REFERENCE_IMAGES)
+        )
         request = bridge.SenseNovaRequest(
             mode=bridge.MODE_EDIT,
             prompt="Use every image in order.",
@@ -38,6 +44,15 @@ class SenseNovaRequestTests(unittest.TestCase):
             height=None,
         )
         bridge.validate_request(request)
+
+        with self.assertRaisesRegex(bridge.SenseNovaBridgeError, "最大64枚"):
+            bridge.validate_request(
+                bridge.SenseNovaRequest(
+                    mode=bridge.MODE_EDIT,
+                    prompt="Too many references",
+                    input_images=images + (Image.new("RGB", (32, 32)),),
+                )
+            )
 
     def test_text_mode_rejects_hidden_reference_data(self):
         request = bridge.SenseNovaRequest(
@@ -48,92 +63,121 @@ class SenseNovaRequestTests(unittest.TestCase):
         with self.assertRaisesRegex(bridge.SenseNovaBridgeError, "画像編集"):
             bridge.validate_request(request)
 
-    def test_q8_requires_gguf_extension(self):
+    def test_worker_payload_pins_final_checkpoint_revision(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            request = bridge.SenseNovaRequest(
+                mode=bridge.MODE_TEXT,
+                prompt="A lighthouse",
+                checkpoint=str(root / "model.safetensors"),
+            )
+            payload = bridge._request_payload(
+                request,
+                input_paths=[],
+                output_path=root / "output.png",
+                metadata_path=root / "output.json",
+            )
+        self.assertEqual(payload["model_path"], bridge.DEFAULT_MODEL_ID)
+        self.assertEqual(
+            payload["checkpoint_revision"], bridge.CHECKPOINT_REVISION
+        )
+        self.assertEqual(payload["quantization"], bridge.QUANT_INT8_CONVROT)
+
+    def test_convrot_requires_safetensors_extension(self):
         request = bridge.SenseNovaRequest(
             mode=bridge.MODE_TEXT,
             prompt="A lighthouse",
-            gguf_checkpoint="weights.safetensors",
+            checkpoint="weights.gguf",
         )
-        with self.assertRaisesRegex(bridge.SenseNovaBridgeError, r"\.gguf"):
+        with self.assertRaisesRegex(bridge.SenseNovaBridgeError, r"\.safetensors"):
             bridge.validate_request(request)
 
-    def test_q8_rejects_a_different_model_config(self):
+    def test_convrot_rejects_preview_model_config(self):
         request = bridge.SenseNovaRequest(
             mode=bridge.MODE_TEXT,
             prompt="A lighthouse",
-            model_path="sensenova/SenseNova-U1.5-8B-MoT",
+            model_path="sensenova/SenseNova-U1.5-8B-MoT-Preview",
         )
-        with self.assertRaisesRegex(bridge.SenseNovaBridgeError, "Preview"):
+        with self.assertRaisesRegex(bridge.SenseNovaBridgeError, "正式版"):
             bridge.validate_request(request)
 
 
 class SenseNovaRuntimeTests(unittest.TestCase):
-    def test_runtime_status_checks_revision_size_and_gguf_header(self):
+    @staticmethod
+    def _make_runtime(root: Path) -> Path:
+        source = root / "runtime-final"
+        package = source / "SenseNova" / "src" / "sensenova_u1"
+        inference = source / "SenseNova" / "examples" / "editing"
+        config = source / "SenseNova-U1.5-8B-MoT"
+        package.mkdir(parents=True)
+        inference.mkdir(parents=True)
+        config.mkdir(parents=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (inference / "inference.py").write_text("", encoding="utf-8")
+        (config / "config.json").write_text("{}", encoding="utf-8")
+        (source / ".sensenova_runtime_revision").write_text(
+            bridge.SOURCE_REVISION + "\n", encoding="utf-8"
+        )
+        return source
+
+    def test_runtime_status_checks_revision_size_and_convrot_header(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            source = root / "runtime" / "src"
-            package = source / "sensenova_u1"
-            package.mkdir(parents=True)
-            (package / "__init__.py").write_text("", encoding="utf-8")
-            (source.parent / ".sensenova_revision").write_text(
-                bridge.SOURCE_REVISION + "\n", encoding="utf-8"
+            source = self._make_runtime(root)
+            checkpoint = root / "model.safetensors"
+            marker = torch.tensor(
+                list(json.dumps({"format": "int8_tensorwise"}).encode("utf-8")),
+                dtype=torch.uint8,
             )
-            gguf = root / "model.gguf"
-            gguf.write_bytes(b"GGUF" + (3).to_bytes(4, "little"))
-            Path(str(gguf) + ".sha256").write_text(
-                bridge.Q8_SHA256 + "  model.gguf\n", encoding="utf-8"
+            save_file(
+                {
+                    "layer.comfy_quant": marker,
+                    "fm_modules.vision_model_mot_gen.embeddings.patch_embedding.weight": torch.ones(1),
+                },
+                checkpoint,
+            )
+            Path(str(checkpoint) + ".sha256").write_text(
+                bridge.CONVROT_SHA256 + "  model.safetensors\n", encoding="utf-8"
             )
 
-            with mock.patch.object(bridge, "Q8_EXPECTED_BYTES", 8):
-                status = bridge.inspect_runtime(
-                    source, quantization=bridge.QUANT_Q8, gguf_checkpoint=gguf
-                )
+            with (
+                mock.patch.object(
+                    bridge, "CONVROT_EXPECTED_BYTES", checkpoint.stat().st_size
+                ),
+                mock.patch.object(bridge, "EXPECTED_CONVROT_LAYERS", 1),
+            ):
+                status = bridge.inspect_runtime(source, checkpoint=checkpoint)
 
             self.assertTrue(status.ready)
             self.assertTrue(status.source_ready)
-            self.assertTrue(status.quantization_ready)
+            self.assertTrue(status.checkpoint_ready)
 
-    def test_partial_q8_is_reported_without_being_ready(self):
+    def test_partial_convrot_is_reported_without_being_ready(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            source = root / "runtime" / "src"
-            package = source / "sensenova_u1"
-            package.mkdir(parents=True)
-            (package / "__init__.py").write_text("", encoding="utf-8")
-            (source.parent / ".sensenova_revision").write_text(
-                bridge.SOURCE_REVISION + "\n", encoding="utf-8"
-            )
-            gguf = root / "model.gguf"
-            Path(str(gguf) + ".part").write_bytes(b"partial")
-            status = bridge.inspect_runtime(
-                source, quantization=bridge.QUANT_Q8, gguf_checkpoint=gguf
-            )
+            source = self._make_runtime(root)
+            checkpoint = root / "model.safetensors"
+            Path(str(checkpoint) + ".part").write_bytes(b"partial")
+            status = bridge.inspect_runtime(source, checkpoint=checkpoint)
             self.assertFalse(status.ready)
             self.assertEqual(status.partial_bytes, 7)
             self.assertTrue(
                 any("ダウンロード中" in message for message in status.messages)
             )
 
-    def test_parallel_q8_chunks_are_counted_in_download_progress(self):
+    def test_parallel_convrot_chunks_are_counted_in_download_progress(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            source = root / "runtime" / "src"
-            package = source / "sensenova_u1"
-            package.mkdir(parents=True)
-            (package / "__init__.py").write_text("", encoding="utf-8")
-            (source.parent / ".sensenova_revision").write_text(
-                bridge.SOURCE_REVISION + "\n", encoding="utf-8"
-            )
-            gguf = root / "model.gguf"
-            chunks = Path(str(gguf) + ".part.chunks")
+            source = self._make_runtime(root)
+            checkpoint = root / "model.safetensors"
+            chunks = Path(str(checkpoint) + ".part.chunks")
             chunks.mkdir()
             (chunks / "chunk-001.bin").write_bytes(b"1234")
             (chunks / "chunk-002.bin").write_bytes(b"56789")
-            status = bridge.inspect_runtime(
-                source, quantization=bridge.QUANT_Q8, gguf_checkpoint=gguf
-            )
+            (chunks / "chunk-002.bin.resume").write_bytes(b"abc")
+            status = bridge.inspect_runtime(source, checkpoint=checkpoint)
             self.assertFalse(status.ready)
-            self.assertEqual(status.partial_bytes, 9)
+            self.assertEqual(status.partial_bytes, 12)
 
 
 class SenseNovaWorkerBridgeTests(unittest.TestCase):
@@ -180,8 +224,8 @@ print('SENSENOVA_EVENT ' + json.dumps({"stage": "complete", "message": "fake don
             request = bridge.SenseNovaRequest(
                 mode=bridge.MODE_EDIT,
                 prompt="Combine in order",
-                quantization=bridge.QUANT_BF16,
-                gguf_checkpoint="",
+                quantization=bridge.QUANT_INT8_CONVROT,
+                checkpoint="weights.safetensors",
                 input_images=(
                     Image.new("RGB", (20, 20), (255, 0, 0)),
                     Image.new("RGB", (20, 20), (0, 0, 255)),
@@ -193,9 +237,9 @@ print('SENSENOVA_EVENT ' + json.dumps({"stage": "complete", "message": "fake don
                 ready=True,
                 source_ready=True,
                 dependencies_ready=True,
-                quantization_ready=True,
+                checkpoint_ready=True,
                 source_path=root,
-                gguf_path=None,
+                checkpoint_path=root / "weights.safetensors",
                 messages=(),
             )
             with (
@@ -242,8 +286,8 @@ time.sleep(60)
             request = bridge.SenseNovaRequest(
                 mode=bridge.MODE_TEXT,
                 prompt="A lighthouse",
-                quantization=bridge.QUANT_BF16,
-                gguf_checkpoint="",
+                quantization=bridge.QUANT_INT8_CONVROT,
+                checkpoint="weights.safetensors",
                 width=1024,
                 height=1024,
             )
@@ -251,9 +295,9 @@ time.sleep(60)
                 ready=True,
                 source_ready=True,
                 dependencies_ready=True,
-                quantization_ready=True,
+                checkpoint_ready=True,
                 source_path=root,
-                gguf_path=None,
+                checkpoint_path=root / "weights.safetensors",
                 messages=(),
             )
             with (

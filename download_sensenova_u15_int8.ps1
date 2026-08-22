@@ -18,19 +18,21 @@ chcp 65001 | Out-Null
 
 Set-Location -LiteralPath $PSScriptRoot
 
-$SourceRepository = "OpenSenseNova/SenseNova-U1"
-$SourceRevision = "12a2bd9cba22a5317164b55db4f7c6209a371f83"
+$SourceRepository = "starsFriday/ComfyUI-SenseNova"
+$SourceRevision = "e6dfd45762eb46f805067fe079c14bcb643ccccd"
 $SourceTreeUrl = "https://api.github.com/repos/$SourceRepository/git/trees/$($SourceRevision)?recursive=1"
 $SourceRawRoot = "https://raw.githubusercontent.com/$SourceRepository/$SourceRevision"
-$RuntimeRoot = Join-Path $PSScriptRoot "models\SenseNova-U1\runtime"
-$RuntimeRevisionPath = Join-Path $RuntimeRoot ".sensenova_revision"
+$RuntimeRoot = Join-Path $PSScriptRoot "models\SenseNova-U1\runtime-final"
+$RuntimeRevisionPath = Join-Path $RuntimeRoot ".sensenova_runtime_revision"
 
-$ModelRevision = "e63b0a7e483bffdb1ff0463a39fbfd04ad3c85d9"
-$ModelFileName = "SenseNova-U1.5-8B-MoT-Preview-Q8.gguf"
-$ModelUrl = "https://huggingface.co/smthem/SenseNova-U1-8B-MoT-Merger-gguf/resolve/$ModelRevision/$ModelFileName"
+$ModelRepository = "joyfox/SenseNova-U1.5-8B-MoT-FP8"
+$ModelRevision = "57de22ad4e2fc24c77f56dfe45dbb87a60dfebee"
+$ModelFileName = "SenseNova-U1.5-8B-MoT-pruned-int8_convrot.safetensors"
+$ModelUrl = "https://huggingface.co/$ModelRepository/resolve/$ModelRevision/$ModelFileName"
 $ModelPath = Join-Path $PSScriptRoot "models\SenseNova-U1\$ModelFileName"
-$ModelBytes = [Int64]19947887936
-$ModelSha256 = "8b655046f6e22c22258607556cacee3c1d82ae534146fb9c0faba04a0e4b3c8f"
+$ModelBytes = [Int64]17734813848
+$ModelSha256 = "cf6ed9ee3be516612b7fe083edfc7c9dd5d059cc759e300d2cf1f2726c0d250e"
+$ParallelDownloads = 16
 
 function Format-Bytes {
     param([Int64]$Bytes)
@@ -77,14 +79,18 @@ function Get-GitBlobSha1 {
 
 function Install-SenseNovaRuntimeSource {
     $headers = @{ "User-Agent" = "Forge-Neo-SenseNova-Installer" }
-    Write-Host "Downloading pinned SenseNova-U1 runtime source: $SourceRevision"
+    Write-Host "Downloading pinned final SenseNova ConvRot runtime: $SourceRevision"
     $tree = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri $SourceTreeUrl
     $entries = @(
         $tree.tree | Where-Object {
-            $_.type -eq "blob" -and ($_.path -like "src/sensenova_u1/*" -or $_.path -eq "LICENSE")
+            $_.type -eq "blob" -and (
+                $_.path -like "SenseNova/*" -or
+                $_.path -like "SenseNova-U1.5-8B-MoT/*" -or
+                $_.path -eq "LICENSE"
+            )
         }
     )
-    if ($entries.Count -lt 30) {
+    if ($entries.Count -lt 25) {
         throw "Pinned SenseNova source tree is incomplete: only $($entries.Count) files were listed."
     }
 
@@ -113,46 +119,56 @@ function Install-SenseNovaRuntimeSource {
     Write-Host "SenseNova runtime source is ready: $RuntimeRoot"
 }
 
-function Install-SentencePiece {
+function Assert-SenseNovaDependencies {
     $pythonPath = Join-Path $PSScriptRoot "venv\Scripts\python.exe"
     if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
         throw "Forge Python was not found: $pythonPath"
     }
 
-    & $pythonPath -m pip show sentencepiece *> $null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "sentencepiece is already installed."
-        return
-    }
-
-    Write-Host "Installing the pinned tokenizer dependency: sentencepiece==0.2.1"
-    & $pythonPath -m pip install "sentencepiece==0.2.1"
+    & $pythonPath -c "import accelerate, comfy_kitchen, safetensors, tokenizers, torch, torchvision, tqdm, transformers"
     if ($LASTEXITCODE -ne 0) {
-        throw "sentencepiece installation failed."
+        throw "SenseNova Python dependencies are incomplete. Install Forge requirements before retrying."
     }
+    Write-Host "SenseNova Python dependencies are ready."
 }
 
-function Assert-GgufHeader {
+function Assert-ConvRotSafetensorsHeader {
     param([string]$Path)
 
     $stream = [System.IO.File]::OpenRead($Path)
     try {
-        if ($stream.Length -lt 24) {
-            throw "File is too small to be GGUF: $Path"
+        if ($stream.Length -lt 16) {
+            throw "File is too small to be safetensors: $Path"
         }
         $header = New-Object byte[] 8
         if ($stream.Read($header, 0, $header.Length) -ne $header.Length) {
-            throw "Cannot read GGUF header: $Path"
+            throw "Cannot read safetensors header length: $Path"
+        }
+        $headerLength = [BitConverter]::ToUInt64($header, 0)
+        if ($headerLength -lt 3 -or $headerLength -gt 256MB) {
+            throw "Invalid safetensors header length: $headerLength"
+        }
+        $metadata = New-Object byte[] ([Int32]$headerLength)
+        $offset = 0
+        while ($offset -lt $metadata.Length) {
+            $read = $stream.Read($metadata, $offset, $metadata.Length - $offset)
+            if ($read -le 0) {
+                throw "Cannot read complete safetensors header: $Path"
+            }
+            $offset += $read
         }
     }
     finally {
         $stream.Dispose()
     }
 
-    $magic = [System.Text.Encoding]::ASCII.GetString($header, 0, 4)
-    $version = [BitConverter]::ToUInt32($header, 4)
-    if ($magic -ne "GGUF" -or $version -lt 2 -or $version -gt 4) {
-        throw "Invalid GGUF header: magic=$magic version=$version path=$Path"
+    $metadataText = [System.Text.Encoding]::UTF8.GetString($metadata)
+    if (-not $metadataText.Contains(".comfy_quant") -or -not $metadataText.Contains("fm_modules.vision_model_mot_gen.embeddings.patch_embedding.weight")) {
+        throw "Checkpoint does not contain the SenseNova INT8 ConvRot signature: $Path"
+    }
+    $convRotLayerCount = [regex]::Matches($metadataText, '\.comfy_quant"').Count
+    if ($convRotLayerCount -ne 588) {
+        throw "Expected 588 INT8 ConvRot layers, found $convRotLayerCount in $Path"
     }
 }
 
@@ -163,16 +179,16 @@ function Assert-ModelFile {
     if ($actualBytes -ne $ModelBytes) {
         throw "File size mismatch for $Path. Expected $ModelBytes bytes, got $actualBytes bytes."
     }
-    Assert-GgufHeader -Path $Path
+    Assert-ConvRotSafetensorsHeader -Path $Path
 
-    Write-Host "Verifying SHA-256 (this reads the complete 18.58 GiB file once)..."
+    Write-Host "Verifying SHA-256 (this reads the complete 16.52 GiB file once)..."
     $actualSha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualSha256 -ne $ModelSha256) {
         throw "SHA-256 mismatch for $Path. Expected $ModelSha256, got $actualSha256."
     }
 }
 
-function Download-Q8Chunks {
+function Download-ConvRotChunks {
     param(
         [string]$CurlPath,
         [string]$Url,
@@ -189,7 +205,68 @@ function Download-Q8Chunks {
         throw "Chunk directory escaped the SenseNova model directory: $chunkRoot"
     }
 
-    $chunkBytes = [Int64](256MB)
+    function Merge-ChunkResume {
+        param(
+            [string]$ChunkPath,
+            [string]$ResumePath,
+            [Int64]$ExpectedChunkBytes
+        )
+
+        if (-not (Test-Path -LiteralPath $ResumePath -PathType Leaf)) {
+            return
+        }
+        $chunkLength = if (Test-Path -LiteralPath $ChunkPath -PathType Leaf) {
+            (Get-Item -LiteralPath $ChunkPath).Length
+        }
+        else {
+            [Int64]0
+        }
+        $resumeLength = (Get-Item -LiteralPath $ResumePath).Length
+        if ($chunkLength + $resumeLength -gt $ExpectedChunkBytes) {
+            $originalLength = $ExpectedChunkBytes - $resumeLength
+            if ($originalLength -lt 0 -or $originalLength -gt $chunkLength) {
+                throw "Resumed chunk would exceed its expected size: $ChunkPath"
+            }
+            $repair = [System.IO.File]::Open(
+                $ChunkPath,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::Write
+            )
+            try {
+                $repair.SetLength($originalLength)
+            }
+            finally {
+                $repair.Dispose()
+            }
+            $chunkLength = $originalLength
+        }
+        if ($chunkLength -eq 0) {
+            Move-Item -Force -LiteralPath $ResumePath -Destination $ChunkPath
+            return
+        }
+
+        $output = [System.IO.File]::Open(
+            $ChunkPath,
+            [System.IO.FileMode]::OpenOrCreate,
+            [System.IO.FileAccess]::Write
+        )
+        try {
+            [void]$output.Seek(0, [System.IO.SeekOrigin]::End)
+            $input = [System.IO.File]::OpenRead($ResumePath)
+            try {
+                $input.CopyTo($output)
+            }
+            finally {
+                $input.Dispose()
+            }
+        }
+        finally {
+            $output.Dispose()
+        }
+        Remove-Item -LiteralPath $ResumePath
+    }
+
+    $chunkBytes = [Int64](32MB)
     $chunks = New-Object System.Collections.Generic.List[object]
     for ($start = [Int64]0; $start -lt $ExpectedBytes; $start += $chunkBytes) {
         $end = [Math]::Min($ExpectedBytes - 1, $start + $chunkBytes - 1)
@@ -206,12 +283,28 @@ function Download-Q8Chunks {
 
     $pending = New-Object System.Collections.Generic.List[object]
     foreach ($chunk in $chunks) {
-        if (Test-Path -LiteralPath $chunk.Path -PathType Leaf) {
-            if ((Get-Item -LiteralPath $chunk.Path).Length -eq $chunk.Bytes) {
-                continue
-            }
+        $resumePath = "$($chunk.Path).resume"
+        Merge-ChunkResume -ChunkPath $chunk.Path -ResumePath $resumePath -ExpectedChunkBytes $chunk.Bytes
+        $existingBytes = if (Test-Path -LiteralPath $chunk.Path -PathType Leaf) {
+            (Get-Item -LiteralPath $chunk.Path).Length
         }
-        $pending.Add($chunk)
+        else {
+            [Int64]0
+        }
+        if ($existingBytes -eq $chunk.Bytes) {
+            continue
+        }
+        if ($existingBytes -gt $chunk.Bytes) {
+            throw "Partial chunk is larger than expected: $($chunk.Path)"
+        }
+        $pending.Add([pscustomobject]@{
+            Index = $chunk.Index
+            Start = $chunk.Start + $existingBytes
+            End = $chunk.End
+            RemainingBytes = $chunk.Bytes - $existingBytes
+            Path = $chunk.Path
+            ResumePath = $resumePath
+        })
     }
 
     if ($pending.Count -gt 0) {
@@ -219,7 +312,7 @@ function Download-Q8Chunks {
         $configLines = New-Object System.Collections.Generic.List[string]
         for ($i = 0; $i -lt $pending.Count; $i++) {
             $chunk = $pending[$i]
-            $outputPath = ([string]$chunk.Path).Replace("\", "/")
+            $outputPath = ([string]$chunk.ResumePath).Replace("\", "/")
             $configLines.Add("location")
             $configLines.Add("fail")
             $configLines.Add("retry = 5")
@@ -234,10 +327,14 @@ function Download-Q8Chunks {
         }
         [System.IO.File]::WriteAllLines($configPath, $configLines, $Utf8NoBom)
 
-        Write-Host ("Downloading {0} remaining 256 MiB chunk(s), up to 8 in parallel." -f $pending.Count)
-        & $CurlPath --parallel --parallel-immediate --parallel-max 8 --progress-bar --show-error --config $configPath
+        Write-Host ("Downloading {0} remaining 32 MiB chunk(s), up to {1} in parallel." -f $pending.Count, $ParallelDownloads)
+        & $CurlPath --parallel --parallel-immediate --parallel-max $ParallelDownloads --progress-bar --show-error --config $configPath
         if ($LASTEXITCODE -ne 0) {
-            throw "Parallel Q8 download failed. Run this script again to reuse completed chunks."
+            throw "Parallel INT8 ConvRot download failed. Run this script again to reuse completed chunks."
+        }
+        foreach ($chunk in $pending) {
+            $expectedChunkBytes = ($chunks[$chunk.Index - 1]).Bytes
+            Merge-ChunkResume -ChunkPath $chunk.Path -ResumePath $chunk.ResumePath -ExpectedChunkBytes $expectedChunkBytes
         }
     }
 
@@ -269,25 +366,26 @@ function Download-Q8Chunks {
     }
 
     if ((Get-Item -LiteralPath $assemblingPath).Length -ne $ExpectedBytes) {
-        throw "Assembled Q8 file has an unexpected size: $assemblingPath"
+        throw "Assembled INT8 ConvRot file has an unexpected size: $assemblingPath"
     }
     Move-Item -Force -LiteralPath $assemblingPath -Destination $partialPath
 
 }
 
-function Install-Q8Model {
+function Install-ConvRotModel {
     $targetDirectory = Split-Path -Parent $ModelPath
     New-RequiredDirectory $targetDirectory
 
-    Write-Host "Downloading SenseNova U1.5 Preview Q8_0 GGUF."
+    Write-Host "Downloading final SenseNova U1.5 INT8 ConvRot checkpoint."
     Write-Host "Target: $ModelPath"
     Write-Host ("Size: {0}" -f (Format-Bytes $ModelBytes))
-    Write-Host "Source: https://huggingface.co/smthem/SenseNova-U1-8B-MoT-Merger-gguf"
-    Write-Host "Note: this Q8 conversion is community-maintained, not an official SenseNova weight release."
+    Write-Host "Source: https://huggingface.co/$ModelRepository"
+    Write-Host "Note: the base is the formal SenseNova U1.5 release; this INT8 ConvRot conversion and loader are community-maintained."
 
     if (Test-Path -LiteralPath $ModelPath -PathType Leaf) {
         Assert-ModelFile -Path $ModelPath
-        Write-Host "Existing Q8 model is valid. Skipping download."
+        [System.IO.File]::WriteAllText("$ModelPath.sha256", "$ModelSha256  $ModelFileName`n", $Utf8NoBom)
+        Write-Host "Existing INT8 ConvRot model is valid. Skipping download."
         return
     }
 
@@ -305,12 +403,12 @@ function Install-Q8Model {
             Write-Host ("Resuming legacy single-file download from {0}." -f (Format-Bytes $partialBytes))
             & $curlPath --location --fail --continue-at - --retry 5 --retry-delay 5 --retry-all-errors --output $partialPath $ModelUrl
             if ($LASTEXITCODE -ne 0) {
-                throw "Q8 model download failed. Run this script again to resume the .part file."
+                throw "INT8 ConvRot download failed. Run this script again to resume the .part file."
             }
         }
     }
     else {
-        Download-Q8Chunks -CurlPath $curlPath -Url $ModelUrl -TargetPath $ModelPath -ExpectedBytes $ModelBytes
+        Download-ConvRotChunks -CurlPath $curlPath -Url $ModelUrl -TargetPath $ModelPath -ExpectedBytes $ModelBytes
     }
 
     Assert-ModelFile -Path $partialPath
@@ -331,19 +429,19 @@ function Install-Q8Model {
         }
         Remove-Item -LiteralPath $chunkRoot
     }
-    Write-Host "SenseNova Q8 model is ready."
+    Write-Host "SenseNova final INT8 ConvRot model is ready."
 }
 
 Write-Host "Forge Neo SenseNova U1.5 setup"
 Write-Host "Pinned runtime source: $SourceRevision"
-Write-Host "Pinned Q8 model revision: $ModelRevision"
+Write-Host "Pinned INT8 ConvRot model revision: $ModelRevision"
 
 if (-not $ModelOnly) {
     Install-SenseNovaRuntimeSource
-    Install-SentencePiece
+    Assert-SenseNovaDependencies
 }
 if (-not $RuntimeOnly) {
-    Install-Q8Model
+    Install-ConvRotModel
 }
 
 Write-Host ""

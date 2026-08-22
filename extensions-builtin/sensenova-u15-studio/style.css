@@ -302,6 +302,15 @@
     font-size: 9px;
 }
 
+#sensenova-u15-studio .sn-bulk-row {
+    align-items: flex-end;
+}
+
+#sensenova-u15-studio #sn-bulk-add {
+    min-height: 44px !important;
+    align-self: flex-end;
+}
+
 #sensenova-u15-studio .sn-reference-empty,
 #sensenova-u15-studio .sn-quant-note {
     margin: 0;

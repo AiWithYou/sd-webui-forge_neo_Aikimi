@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import html
 import os
 from pathlib import Path
@@ -11,13 +9,13 @@ from PIL import Image
 from modules import script_callbacks
 from modules.paths import data_path
 from modules_forge.sensenova_u15_bridge import (
+    DEFAULT_CHECKPOINT_PATH,
     DEFAULT_MODEL_ID,
-    DEFAULT_Q8_PATH,
     DEFAULT_SOURCE_PATH,
+    MAX_REFERENCE_IMAGES,
     MODE_EDIT,
     MODE_TEXT,
-    QUANT_BF16,
-    QUANT_Q8,
+    QUANT_INT8_CONVROT,
     SenseNovaBridgeError,
     SenseNovaGenerationCancelled,
     SenseNovaRequest,
@@ -49,15 +47,51 @@ def _append_reference(gallery: Any, upload: Image.Image | None):
     if upload is None:
         return gr.update(), gr.update(), reference_order_html(values), -1
     values.append((upload.copy(), None))
-    if len(values) > 8:
-        values = values[:8]
+    if len(values) > MAX_REFERENCE_IMAGES:
+        values = values[:MAX_REFERENCE_IMAGES]
         message = (
-            '<p class="sn-inline-error" role="alert">参照画像は最大8枚です。</p>'
+            f'<p class="sn-inline-error" role="alert">参照画像は最大{MAX_REFERENCE_IMAGES}枚です。</p>'
             + reference_order_html(values)
         )
     else:
         message = reference_order_html(values)
     return gr.update(value=values), gr.update(value=None), message, len(values) - 1
+
+
+def _append_reference_files(gallery: Any, uploads: Any):
+    values = _gallery_list(gallery)
+    paths = list(uploads or [])
+    if not paths:
+        return gr.update(), gr.update(), reference_order_html(values), -1
+    images = normalize_gallery_images(paths)
+    values.extend((image, None) for image in images)
+    truncated = len(values) > MAX_REFERENCE_IMAGES
+    values = values[:MAX_REFERENCE_IMAGES]
+    message = reference_order_html(values)
+    if truncated:
+        message = (
+            f'<p class="sn-inline-error" role="alert">先頭{MAX_REFERENCE_IMAGES}枚を追加しました。参照画像は最大{MAX_REFERENCE_IMAGES}枚です。</p>'
+            + message
+        )
+    return (
+        gr.update(value=values),
+        gr.update(value=None),
+        message,
+        len(values) - 1,
+    )
+
+
+def _limit_reference_gallery(gallery: Any):
+    values = _gallery_list(gallery)
+    truncated = len(values) > MAX_REFERENCE_IMAGES
+    values = values[:MAX_REFERENCE_IMAGES]
+    message = reference_order_html(values)
+    if truncated:
+        message = (
+            f'<p class="sn-inline-error" role="alert">先頭{MAX_REFERENCE_IMAGES}枚を残しました。参照画像は最大{MAX_REFERENCE_IMAGES}枚です。</p>'
+            + message
+        )
+    return gr.update(value=values), message, len(values) - 1 if values else -1
 
 
 def _replace_reference(index: int, gallery: Any, upload: Image.Image | None):
@@ -94,8 +128,8 @@ def _clear_references():
     return gr.update(value=[]), reference_order_html([]), -1
 
 
-def _select_reference(evt: gr.SelectData) -> int:
-    return int(evt.index)
+def _select_reference(evt: gr.SelectData = None) -> int:
+    return int(evt.index) if evt is not None else -1
 
 
 def _mode_updates(mode: str, current_resolution: str):
@@ -116,7 +150,7 @@ def _mode_updates(mode: str, current_resolution: str):
         gr.update(visible=mode == MODE_EDIT),
         gr.update(
             value=(
-                '<div class="sn-mode-note"><b>MULTI-IMAGE EDIT</b><span>入力順を保ったまま最大8枚を1本の画像トークン列へ渡します。</span></div>'
+                f'<div class="sn-mode-note"><b>MULTI-IMAGE EDIT</b><span>入力順を保ったまま最大{MAX_REFERENCE_IMAGES}枚を渡します。プロンプトでは Image-1、Image-2 のように指定できます。</span></div>'
                 if mode == MODE_EDIT
                 else '<div class="sn-mode-note"><b>TEXT TO IMAGE</b><span>参照画像を使わず、公式解像度バケットから生成します。</span></div>'
             )
@@ -124,11 +158,9 @@ def _mode_updates(mode: str, current_resolution: str):
     )
 
 
-def _refresh_runtime(source_path: str, quantization: str, gguf_path: str):
+def _refresh_runtime(source_path: str, checkpoint_path: str):
     try:
-        status = inspect_runtime(
-            source_path, quantization=quantization, gguf_checkpoint=gguf_path
-        )
+        status = inspect_runtime(source_path, checkpoint=checkpoint_path)
         return runtime_status_html(status)
     except (OSError, ValueError, SenseNovaBridgeError) as exc:
         return (
@@ -137,28 +169,13 @@ def _refresh_runtime(source_path: str, quantization: str, gguf_path: str):
         )
 
 
-def _quantization_updates(quantization: str, source_path: str, gguf_path: str):
-    q8 = quantization == QUANT_Q8
-    note = (
-        "Q8_0 GGUFは約18.58 GiB。重みはINT8のまま保持し、Linear演算時に公式diffusers経路で復号します。"
-        if q8
-        else "BF16は約36 GiB級です。初回にHugging Faceから公式重みを取得し、十分なRAM/VRAMが必要です。"
-    )
-    return (
-        gr.update(visible=q8),
-        f'<p class="sn-quant-note">{html.escape(note)}</p>',
-        gr.update(value=DEFAULT_MODEL_ID, interactive=not q8),
-        _refresh_runtime(source_path, quantization, gguf_path),
-    )
-
-
 def _request_from_ui(
     mode: str,
     prompt: str,
     gallery: Any,
     model_path: str,
     quantization: str,
-    gguf_path: str,
+    checkpoint_path: str,
     source_path: str,
     resolution: str,
     input_max_pixels: str,
@@ -180,7 +197,7 @@ def _request_from_ui(
         prompt=str(prompt or ""),
         model_path=str(model_path or ""),
         quantization=quantization,
-        gguf_checkpoint=str(gguf_path or ""),
+        checkpoint=str(checkpoint_path or ""),
         source_path=str(source_path or ""),
         input_images=images,
         width=width,
@@ -207,7 +224,7 @@ def _summary_from_ui(
     gallery,
     model_path,
     quantization,
-    gguf_path,
+    checkpoint_path,
     source_path,
     resolution,
     input_max_pixels,
@@ -227,7 +244,7 @@ def _summary_from_ui(
             gallery,
             model_path,
             quantization,
-            gguf_path,
+            checkpoint_path,
             source_path,
             resolution,
             input_max_pixels,
@@ -262,7 +279,7 @@ def _generate(
     gallery,
     model_path,
     quantization,
-    gguf_path,
+    checkpoint_path,
     source_path,
     resolution,
     input_max_pixels,
@@ -293,7 +310,7 @@ def _generate(
             gallery,
             model_path,
             quantization,
-            gguf_path,
+            checkpoint_path,
             source_path,
             resolution,
             input_max_pixels,
@@ -364,9 +381,7 @@ def _cancel(job_id: str):
 
 
 def _build_ui():
-    initial_status = inspect_runtime(
-        DEFAULT_SOURCE_PATH, quantization=QUANT_Q8, gguf_checkpoint=DEFAULT_Q8_PATH
-    )
+    initial_status = inspect_runtime(DEFAULT_SOURCE_PATH, checkpoint=DEFAULT_CHECKPOINT_PATH)
     initial_request = SenseNovaRequest(mode=MODE_TEXT, prompt="")
 
     with gr.Blocks(analytics_enabled=False) as interface:
@@ -377,7 +392,7 @@ def _build_ui():
                   <div>
                     <span class="sn-eyebrow">FORGE NEO · NATIVE MULTIMODAL</span>
                     <h2>SenseNova U1.5 Studio</h2>
-                    <p>テキスト生成と、最大8枚を順番どおり使う複数画像編集。Q8_0 INT8をRTX 3090向け低VRAM経路で実行します。</p>
+                    <p>正式版モデルによるテキスト生成と、最大64枚を順番どおり使う複数参照画像編集。INT8 ConvRotをRTX 3090向け低VRAM経路で実行します。</p>
                   </div>
                   <div class="sn-hero-mark" aria-hidden="true"><b>U1.5</b><small>MoT</small></div>
                 </section>
@@ -432,17 +447,17 @@ def _build_ui():
                         elem_id="sn-references",
                     ) as reference_group:
                         gr.Markdown(
-                            "### 参照画像\n画像を追加した順番が `<image>` の順番です。選択後に左右へ移動できます。"
+                            "### 参照画像\n追加順がモデルへの入力順です。プロンプトでは `Image-1`、`Image-2` のように指定し、選択画像は左右へ移動できます。"
                         )
                         reference_gallery = gr.Gallery(
                             value=[],
                             type="pil",
                             interactive=True,
-                            label="参照画像（最大8枚）",
+                            label=f"参照画像（最大{MAX_REFERENCE_IMAGES}枚）",
                             show_label=False,
                             columns=4,
-                            rows=2,
-                            height=330,
+                            rows=3,
+                            height=390,
                             allow_preview=True,
                             object_fit="contain",
                             elem_id="sn-reference-gallery",
@@ -451,6 +466,21 @@ def _build_ui():
                         reference_order = gr.HTML(
                             value=reference_order_html([]), elem_id="sn-reference-order"
                         )
+                        with gr.Row(equal_height=False, elem_classes=["sn-bulk-row"]):
+                            bulk_upload = gr.File(
+                                file_count="multiple",
+                                file_types=["image"],
+                                type="filepath",
+                                label="複数画像を一括選択",
+                                height=92,
+                                elem_id="sn-reference-bulk-upload",
+                            )
+                            bulk_append_button = gr.Button(
+                                "選択ファイルを一括追加",
+                                variant="secondary",
+                                min_width=190,
+                                elem_id="sn-bulk-add",
+                            )
                         with gr.Row():
                             upload = gr.Image(
                                 type="pil",
@@ -487,7 +517,11 @@ def _build_ui():
                         with gr.Row():
                             steps = gr.Slider(1, 100, value=50, step=1, label="Steps")
                             seed = gr.Number(
-                                value=42, precision=0, label="Seed", minimum=0
+                                value=42,
+                                precision=0,
+                                label="Seed",
+                                minimum=0,
+                                maximum=2**32 - 1,
                             )
                         with gr.Row():
                             cfg_scale = gr.Slider(
@@ -521,8 +555,6 @@ def _build_ui():
                                 vram_mode = gr.Dropdown(
                                     choices=[
                                         ("Low · RTX 3090推奨", "low"),
-                                        ("Balanced · 転送を並列化", "balanced"),
-                                        ("Fast · 余裕のあるGPU", "fast"),
                                         ("Full · 全重みをGPUへ", "full"),
                                     ],
                                     value="low",
@@ -537,15 +569,7 @@ def _build_ui():
                                     value="auto",
                                     label="Attention",
                                 )
-                                dtype = gr.Dropdown(
-                                    choices=[
-                                        ("BF16計算", "bfloat16"),
-                                        ("FP16計算", "float16"),
-                                        ("FP32計算", "float32"),
-                                    ],
-                                    value="bfloat16",
-                                    label="計算精度",
-                                )
+                                dtype = gr.State("bfloat16")
 
                 with gr.Column(
                     scale=5, min_width=390, elem_classes=["sn-result-column"]
@@ -554,31 +578,23 @@ def _build_ui():
                         '<div class="sn-section-title"><span>03</span><h3>モデルと結果</h3></div>'
                     )
                     with gr.Group(elem_classes=["sn-model-card"]):
-                        quantization = gr.Radio(
-                            choices=[
-                                ("INT8 · Q8_0 GGUF", QUANT_Q8),
-                                ("公式 BF16", QUANT_BF16),
-                            ],
-                            value=QUANT_Q8,
-                            label="重み形式",
-                            elem_id="sn-quantization",
-                        )
-                        quant_note = gr.HTML(
-                            '<p class="sn-quant-note">Q8_0 GGUFは約18.58 GiB。重みはINT8のまま保持し、Linear演算時に公式diffusers経路で復号します。</p>'
+                        quantization = gr.State(QUANT_INT8_CONVROT)
+                        gr.HTML(
+                            '<p class="sn-quant-note"><strong>正式版 · INT8 ConvRot</strong><br>約16.52 GiB。588個のLinear層をINT8のまま保持し、実行時に層単位で復号します。変換weightと専用ローダーはコミュニティ配布です。</p>'
                         )
                         model_path = gr.Textbox(
                             value=DEFAULT_MODEL_ID,
-                            label="モデルID / ローカルモデル",
+                            label="正式版モデルID",
                             interactive=False,
                         )
-                        with gr.Group(visible=True) as q8_group:
-                            gguf_path = gr.Textbox(
-                                value=os.fspath(DEFAULT_Q8_PATH), label="Q8_0 GGUF"
-                            )
+                        checkpoint_path = gr.Textbox(
+                            value=os.fspath(DEFAULT_CHECKPOINT_PATH),
+                            label="INT8 ConvRot checkpoint",
+                        )
                         with gr.Accordion("ランタイム場所", open=False):
                             source_path = gr.Textbox(
                                 value=os.fspath(DEFAULT_SOURCE_PATH),
-                                label="公式推論コードの src",
+                                label="固定済みConvRotランタイム",
                             )
                             gr.Markdown(
                                 "未準備の場合は Forge Neo 直下の `download_sensenova_u15_int8.bat` を実行します。"
@@ -634,9 +650,20 @@ def _build_ui():
             trigger_mode="always_last",
         )
         gallery_upload_event = reference_gallery.upload(
-            reference_order_html,
+            _limit_reference_gallery,
             inputs=[reference_gallery],
-            outputs=[reference_order],
+            outputs=[reference_gallery, reference_order, selected_reference],
+            queue=False,
+        )
+        bulk_append_event = bulk_append_button.click(
+            _append_reference_files,
+            inputs=[reference_gallery, bulk_upload],
+            outputs=[
+                reference_gallery,
+                bulk_upload,
+                reference_order,
+                selected_reference,
+            ],
             queue=False,
         )
         append_event = append_button.click(
@@ -687,15 +714,9 @@ def _build_ui():
             ],
             queue=False,
         )
-        quantization.change(
-            _quantization_updates,
-            inputs=[quantization, source_path, gguf_path],
-            outputs=[q8_group, quant_note, model_path, runtime_status],
-            queue=False,
-        )
         refresh_button.click(
             _refresh_runtime,
-            inputs=[source_path, quantization, gguf_path],
+            inputs=[source_path, checkpoint_path],
             outputs=[runtime_status],
             queue=False,
         )
@@ -706,7 +727,7 @@ def _build_ui():
             reference_gallery,
             model_path,
             quantization,
-            gguf_path,
+            checkpoint_path,
             source_path,
             resolution,
             input_max_pixels,
@@ -722,9 +743,7 @@ def _build_ui():
         for component in [
             mode,
             reference_gallery,
-            model_path,
-            quantization,
-            gguf_path,
+            checkpoint_path,
             source_path,
             resolution,
             input_max_pixels,
@@ -735,7 +754,6 @@ def _build_ui():
             seed,
             vram_mode,
             attn_backend,
-            dtype,
         ]:
             component.change(
                 _summary_from_ui,
@@ -746,6 +764,7 @@ def _build_ui():
             )
         for reference_event in [
             gallery_upload_event,
+            bulk_append_event,
             append_event,
             replace_event,
             remove_event,
@@ -787,7 +806,7 @@ def _build_ui():
         )
         interface.load(
             _refresh_runtime,
-            inputs=[source_path, quantization, gguf_path],
+            inputs=[source_path, checkpoint_path],
             outputs=[runtime_status],
             queue=False,
         )
