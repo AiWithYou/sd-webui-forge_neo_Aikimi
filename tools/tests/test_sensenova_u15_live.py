@@ -35,11 +35,16 @@ class SenseNovaU15LiveTest(unittest.TestCase):
         return first, second
 
     def _run_two_image_edit(
-        self, output_size: int, *, vram_mode: str = "low"
+        self,
+        output_size: int | None,
+        *,
+        vram_mode: str = "low",
+        reference_images: tuple[Image.Image, Image.Image] | None = None,
+        expected_size: tuple[int, int] | None = None,
     ) -> dict:
         status = inspect_runtime(DEFAULT_SOURCE_PATH, checkpoint=DEFAULT_CHECKPOINT_PATH)
         self.assertTrue(status.ready, " / ".join(status.messages))
-        first, second = self._reference_images()
+        first, second = reference_images or self._reference_images()
 
         request = SenseNovaRequest(
             mode=MODE_EDIT,
@@ -76,7 +81,10 @@ class SenseNovaU15LiveTest(unittest.TestCase):
         output_path = Path(complete[0]["path"])
         self.assertTrue(output_path.is_file())
         with Image.open(output_path) as image:
-            self.assertEqual(image.size, (output_size, output_size))
+            self.assertEqual(
+                image.size,
+                expected_size or (output_size, output_size),
+            )
             values = np.asarray(image.convert("RGB"), dtype=np.float32)
         self.assertGreater(float(values.var()), 1.0)
         self.assertEqual(complete[0]["metadata"]["input_image_count"], 2)
@@ -98,6 +106,37 @@ class SenseNovaU15LiveTest(unittest.TestCase):
     def test_low_vram_2048_profile_with_downscaled_references(self):
         completed = self._run_two_image_edit(2048)
         self.assertEqual(completed["metadata"]["effective_input_max_pixels"], 512 * 512)
+
+    def test_low_vram_auto_output_uses_original_reference_ratio(self):
+        first = Image.new("RGB", (1600, 1200), (235, 242, 250))
+        first_draw = ImageDraw.Draw(first)
+        first_draw.ellipse((400, 200, 1200, 1000), fill=(30, 90, 190))
+        second = Image.new("RGB", (1200, 1600), (250, 235, 220))
+        second_draw = ImageDraw.Draw(second)
+        second_draw.rectangle((200, 400, 1000, 1200), fill=(220, 70, 55))
+
+        completed = self._run_two_image_edit(
+            None,
+            reference_images=(first, second),
+            expected_size=(2368, 1792),
+        )
+        metadata = completed["metadata"]
+        self.assertEqual(metadata["output_aspect_source"], "original_input_1")
+        self.assertEqual(
+            metadata["input_original_sizes"],
+            [
+                {"width": 1600, "height": 1200},
+                {"width": 1200, "height": 1600},
+            ],
+        )
+        self.assertEqual(
+            metadata["input_prepared_sizes"],
+            [
+                {"width": 576, "height": 416},
+                {"width": 416, "height": 576},
+            ],
+        )
+        self.assertEqual(metadata["input_preprocessing"], "aspect_fit_edge_pad_32")
 
 
 if __name__ == "__main__":

@@ -37,6 +37,59 @@ class SenseNovaWorkerTests(unittest.TestCase):
         )
         self.assertEqual(size, (1024, 1536))
 
+    def test_automatic_output_size_uses_original_first_reference_ratio(self):
+        calls = []
+
+        def smart_resize(**kwargs):
+            calls.append(kwargs)
+            return 1536, 2752
+
+        size = worker._resolve_output_size(
+            {"target_pixels": 2048 * 2048},
+            [(1920, 1080)],
+            smart_resize,
+        )
+
+        self.assertEqual(size, (2752, 1536))
+        self.assertEqual(calls[0]["width"], 1920)
+        self.assertEqual(calls[0]["height"], 1080)
+
+    def test_aspect_fit_keeps_subject_geometry_inside_model_canvas(self):
+        content_size = worker._aspect_fit_size(1600, 1200, 576, 416)
+        self.assertEqual(content_size, (555, 416))
+        self.assertAlmostEqual(
+            content_size[0] / content_size[1], 4 / 3, delta=0.001
+        )
+
+        source = Image.new("RGB", (4, 2))
+        for y in range(source.height):
+            for x in range(source.width):
+                source.putpixel((x, y), (x * 60, y * 120, 20))
+        prepared = worker._resize_with_edge_padding(source, 4, 4)
+
+        self.assertEqual(prepared.size, (4, 4))
+        self.assertEqual(
+            [prepared.getpixel((x, 0)) for x in range(prepared.width)],
+            [prepared.getpixel((x, 1)) for x in range(prepared.width)],
+        )
+        self.assertEqual(
+            [prepared.getpixel((x, 3)) for x in range(prepared.width)],
+            [prepared.getpixel((x, 2)) for x in range(prepared.width)],
+        )
+
+    def test_load_images_returns_original_sizes_before_padding(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "reference.png"
+            Image.new("RGB", (160, 120), (20, 40, 60)).save(path)
+            images, original_sizes = worker._load_images(
+                [str(path)],
+                smart_resize=lambda **_: (416, 576),
+                input_max_pixels=512 * 512,
+            )
+
+        self.assertEqual(original_sizes, [(160, 120)])
+        self.assertEqual([image.size for image in images], [(576, 416)])
+
     def test_edit_payload_accepts_multiple_existing_inputs(self):
         with tempfile.TemporaryDirectory() as temp:
             first = Path(temp) / "first.png"

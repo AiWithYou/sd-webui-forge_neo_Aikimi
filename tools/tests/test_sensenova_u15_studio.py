@@ -101,6 +101,8 @@ class SenseNovaStudioSourceTests(unittest.TestCase):
     def test_measured_24gb_safe_defaults_are_visible(self):
         self.assertIn('value="2048x2048"', self.script)
         self.assertIn("24GB Safe · 2K出力優先", self.script)
+        self.assertIn("各約0.26MP · 比率保護", self.script)
+        self.assertIn("元の入力1枚目を基準", self.bridge)
         self.assertIn("Uncapped streaming", self.script)
         updates = self.studio._mode_updates(self.studio.MODE_EDIT, "2048x2048")
         self.assertEqual(updates[1]["value"], "auto")

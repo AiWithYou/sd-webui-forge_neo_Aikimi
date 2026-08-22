@@ -151,7 +151,7 @@ def parse_resolution(value: str, mode: str) -> tuple[int | None, int | None]:
 def resolution_choices(mode: str) -> list[tuple[str, str]]:
     choices: list[tuple[str, str]] = []
     if mode == MODE_EDIT:
-        choices.append(("入力1枚目の比率を維持 · 約4MP · 2K出力優先", "auto"))
+        choices.append(("元の入力1枚目を基準 · 約4MP · 2K出力優先", "auto"))
     choices.extend(
         [
             ("512 × 512 · 最小VRAM動作確認", "512x512"),
@@ -330,7 +330,7 @@ def validate_request(request: SenseNovaRequest) -> None:
             details = "、".join(low_vram_errors)
             raise SenseNovaBridgeError(
                 "Low（RTX 3090・24GB安全）では、出力を2048²以下、参照画像を2枚以下、"
-                "参照画像縮小モードを512²/画像にしてください。"
+                "参照画像の予算を1枚あたり約0.26MPにしてください。"
                 f"現在の超過条件: {details}。大きい条件はUncapped streamingを選択してください。"
             )
     if request.attn_backend not in ATTENTION_BACKENDS:
@@ -847,7 +847,7 @@ def request_summary_html(request: SenseNovaRequest) -> str:
     mode = "複数画像編集" if request.mode == MODE_EDIT else "テキスト生成"
     quantization = "正式版 · INT8 ConvRot"
     size = (
-        f"入力1枚目の比率 · 約{request.target_pixels / 1_000_000:.1f}MP"
+        f"元の入力1枚目を基準 · 約{request.target_pixels / 1_000_000:.1f}MP"
         if request.width is None
         else f"{request.width} × {request.height}"
     )

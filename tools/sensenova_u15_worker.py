@@ -125,17 +125,63 @@ def _flatten_rgb(image: Image.Image) -> Image.Image:
     return image.convert("RGB")
 
 
+def _aspect_fit_size(
+    source_width: int,
+    source_height: int,
+    canvas_width: int,
+    canvas_height: int,
+) -> tuple[int, int]:
+    if min(source_width, source_height, canvas_width, canvas_height) <= 0:
+        raise RuntimeError("Image and canvas dimensions must be positive.")
+    scale = min(canvas_width / source_width, canvas_height / source_height)
+    content_width = max(1, min(canvas_width, round(source_width * scale)))
+    content_height = max(1, min(canvas_height, round(source_height * scale)))
+    return content_width, content_height
+
+
+def _resize_with_edge_padding(
+    image: Image.Image, canvas_width: int, canvas_height: int
+) -> Image.Image:
+    content_width, content_height = _aspect_fit_size(
+        image.width,
+        image.height,
+        canvas_width,
+        canvas_height,
+    )
+    if image.size != (content_width, content_height):
+        image = image.resize(
+            (content_width, content_height), Image.Resampling.LANCZOS
+        )
+
+    pad_left = (canvas_width - content_width) // 2
+    pad_right = canvas_width - content_width - pad_left
+    pad_top = (canvas_height - content_height) // 2
+    pad_bottom = canvas_height - content_height - pad_top
+    if not any((pad_left, pad_right, pad_top, pad_bottom)):
+        return image
+
+    values = np.asarray(image)
+    padded = np.pad(
+        values,
+        ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+        mode="edge",
+    )
+    return Image.fromarray(padded, mode="RGB")
+
+
 def _load_images(
     paths: Sequence[str],
     *,
     smart_resize,
     input_max_pixels: int | str,
-) -> list[Image.Image]:
+) -> tuple[list[Image.Image], list[tuple[int, int]]]:
     budget = _effective_input_max_pixels(len(paths), input_max_pixels)
     images: list[Image.Image] = []
+    original_sizes: list[tuple[int, int]] = []
     for raw_path in paths:
         with Image.open(raw_path) as opened:
             image = _flatten_rgb(opened)
+        original_sizes.append(image.size)
         resized_height, resized_width = smart_resize(
             height=image.height,
             width=image.width,
@@ -143,25 +189,23 @@ def _load_images(
             min_pixels=budget,
             max_pixels=budget,
         )
-        if image.size != (resized_width, resized_height):
-            image = image.resize(
-                (resized_width, resized_height), Image.Resampling.LANCZOS
-            )
-        images.append(image)
-    return images
+        images.append(
+            _resize_with_edge_padding(image, resized_width, resized_height)
+        )
+    return images, original_sizes
 
 
 def _resolve_output_size(
-    payload: dict[str, Any], images: Sequence[Image.Image], smart_resize
+    payload: dict[str, Any], source_sizes: Sequence[tuple[int, int]], smart_resize
 ) -> tuple[int, int]:
     width = payload.get("width")
     height = payload.get("height")
     if width is not None and height is not None:
         return int(width), int(height)
-    if not images:
+    if not source_sizes:
         raise RuntimeError("Automatic output size requires at least one input image.")
     target_pixels = int(payload.get("target_pixels", DEFAULT_TARGET_PIXELS))
-    source_width, source_height = images[0].size
+    source_width, source_height = source_sizes[0]
     resized_height, resized_width = smart_resize(
         height=source_height,
         width=source_width,
@@ -336,7 +380,7 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
     sensenova_u1, smart_resize, engine, prefetch_count, loaded_layers = _load_runtime(payload)
     mode = str(payload["mode"])
     image_paths = [str(value) for value in payload.get("input_images", [])]
-    images = _load_images(
+    images, original_sizes = _load_images(
         image_paths,
         smart_resize=smart_resize,
         input_max_pixels=payload.get("input_max_pixels", "auto"),
@@ -348,7 +392,7 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
         if image_paths
         else 0
     )
-    width, height = _resolve_output_size(payload, images, smart_resize)
+    width, height = _resolve_output_size(payload, original_sizes, smart_resize)
     steps = int(payload.get("steps", 50))
     prompt = str(payload["prompt"]).strip()
 
@@ -441,6 +485,18 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
         "dtype": str(payload.get("dtype", "bfloat16")),
         "input_image_count": len(images),
         "input_image_names": [Path(path).name for path in image_paths],
+        "input_preprocessing": "aspect_fit_edge_pad_32",
+        "input_original_sizes": [
+            {"width": size[0], "height": size[1]} for size in original_sizes
+        ],
+        "input_prepared_sizes": [
+            {"width": image.width, "height": image.height} for image in images
+        ],
+        "output_aspect_source": (
+            "original_input_1"
+            if payload.get("width") is None and payload.get("height") is None
+            else "explicit"
+        ),
         "requested_input_max_pixels": payload.get("input_max_pixels", "auto"),
         "effective_input_max_pixels": effective_input_max_pixels,
         "output_sha256": _sha256(output_path),

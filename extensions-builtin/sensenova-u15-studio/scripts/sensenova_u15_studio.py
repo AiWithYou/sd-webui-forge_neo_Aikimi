@@ -154,7 +154,7 @@ def _mode_updates(mode: str, current_resolution: str):
         ),
         gr.update(
             value=(
-                f'<div class="sn-mode-note"><b>MULTI-IMAGE EDIT</b><span>モデル上限は{MAX_REFERENCE_IMAGES}枚。RTX 3090では2K出力を維持し、参照2枚を各512²へ縮小して渡します。</span></div>'
+                f'<div class="sn-mode-note"><b>MULTI-IMAGE EDIT</b><span>モデル上限は{MAX_REFERENCE_IMAGES}枚。RTX 3090では2K出力を維持し、参照2枚を各約0.26MPに抑えながら被写体の縦横比を保ちます。</span></div>'
                 if mode == MODE_EDIT
                 else '<div class="sn-mode-note"><b>TEXT TO IMAGE</b><span>参照画像を使わず、公式解像度バケットから生成します。</span></div>'
             )
@@ -544,13 +544,13 @@ def _build_ui():
                             )
                         input_max_pixels = gr.Dropdown(
                             choices=[
-                                ("2K出力優先 · 各512²へ縮小 · RTX 3090推奨", str(512 * 512)),
-                                ("中間 · 各1024²へ縮小 · 大容量GPU向け", str(1024 * 1024)),
-                                ("高忠実度 · 各2048²へ縮小", str(2048 * 2048)),
+                                ("2K出力優先 · 各約0.26MP · 比率保護 · RTX 3090推奨", str(512 * 512)),
+                                ("中間 · 各約1.05MP · 比率保護 · 大容量GPU向け", str(1024 * 1024)),
+                                ("高忠実度 · 各約4.19MP · 比率保護", str(2048 * 2048)),
                                 ("自動 · モデル上限まで配分 · 実験用", "auto"),
                             ],
                             value=str(512 * 512),
-                            label="参照画像縮小モード",
+                            label="参照画像の情報量",
                             visible=False,
                         )
                         with gr.Accordion("詳細設定", open=False):
@@ -584,7 +584,7 @@ def _build_ui():
                     with gr.Group(elem_classes=["sn-model-card"]):
                         quantization = gr.State(QUANT_INT8_CONVROT)
                         gr.HTML(
-                            '<p class="sn-quant-note"><strong>正式版 · INT8 ConvRot</strong><br>24GB Safeでは2K出力を維持し、参照2枚だけを各512²へ縮小します。入力原寸を優先する場合のみUncapped streamingへ切り替えます。</p>'
+                            '<p class="sn-quant-note"><strong>正式版 · INT8 ConvRot</strong><br>24GB Safeでは2K出力を維持し、参照2枚を各約0.26MPに抑えます。被写体の比率は保ち、32pxグリッドの余白は端の画素で補います。入力の情報量を優先する場合のみUncapped streamingへ切り替えます。</p>'
                         )
                         model_path = gr.Textbox(
                             value=DEFAULT_MODEL_ID,
