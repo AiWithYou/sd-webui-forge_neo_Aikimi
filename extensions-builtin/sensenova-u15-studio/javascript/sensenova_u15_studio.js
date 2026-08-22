@@ -49,20 +49,12 @@
         }, 300);
     }
 
-    function restoreDraft() {
+    function syncDraftStatus() {
         const prompt = promptElement();
         const status = gradioApp().querySelector("#sn-draft-status");
-        if (!prompt || prompt.value) return;
-        try {
-            const draft = window.localStorage.getItem(DRAFT_KEY);
-            if (!draft) return;
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
-            if (!setter) return;
-            setter.call(prompt, draft);
-            prompt.dispatchEvent(new window.Event("input", { bubbles: true }));
-            if (status) status.textContent = "前回の下書きを復元しました";
-        } catch (_error) {
-            if (status) status.textContent = "下書き保存は利用できません";
+        if (!prompt || !status || !prompt.value) return;
+        if (status.textContent === "下書きをこの端末に自動保存") {
+            status.textContent = "前回の下書きを復元しました";
         }
     }
 
@@ -82,14 +74,15 @@
             syncPromptCount();
             scheduleDraftSave();
         });
-        restoreDraft();
         syncPromptCount();
+        syncDraftStatus();
         syncBusyState();
     }
 
     onUiLoaded(setupStudio);
     onAfterUiUpdate(function () {
         syncPromptCount();
+        syncDraftStatus();
         syncBusyState();
     });
 

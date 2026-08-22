@@ -36,6 +36,7 @@ from modules_forge.sensenova_u15_bridge import (
 OUTPUT_DIRECTORY = Path(data_path) / "outputs" / "sensenova_u15"
 CACHE_DIRECTORY = Path(data_path) / "cache" / "sensenova_u15"
 LOG_DIRECTORY = Path(data_path) / "logs" / "sensenova_u15"
+PROMPT_DRAFT_KEY = "forge-neo:sensenova-u15:prompt-draft:v1"
 
 
 def _gallery_list(value: Any) -> list[Any]:
@@ -442,7 +443,6 @@ def _build_ui():
                             '<span id="sn-draft-status">下書きをこの端末に自動保存</span>'
                             '<span id="sn-prompt-count">0 / 20,000</span></div>'
                         )
-                        validation = gr.HTML(value="", elem_id="sn-validation")
 
                     with gr.Group(
                         visible=False,
@@ -629,6 +629,7 @@ def _build_ui():
                         metadata_file = gr.File(label="設定JSON", interactive=False)
                     metadata = gr.JSON(label="生成メタデータ", visible=True)
                     job_id = gr.State("")
+                    validation = gr.HTML(value="", elem_id="sn-validation")
                     with gr.Row(elem_classes=["sn-actions"]):
                         cancel_button = gr.Button(
                             "キャンセル",
@@ -807,6 +808,20 @@ def _build_ui():
             inputs=[job_id],
             outputs=[progress, cancel_button],
             queue=False,
+        )
+        interface.load(
+            None,
+            outputs=[prompt],
+            js=f'''() => {{
+                try {{
+                    return window.localStorage.getItem("{PROMPT_DRAFT_KEY}") || "";
+                }} catch (_error) {{
+                    return "";
+                }}
+            }}''',
+            queue=False,
+            show_progress="hidden",
+            api_name=False,
         )
         interface.load(
             _refresh_runtime,

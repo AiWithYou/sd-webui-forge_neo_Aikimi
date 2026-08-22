@@ -114,6 +114,7 @@ class SenseNovaStudioSourceTests(unittest.TestCase):
         self.assertIn("Ctrl / ⌘ + Enter", self.script)
         self.assertIn("onUiLoaded(setupStudio)", self.javascript)
         self.assertIn("window.localStorage", self.javascript)
+        self.assertNotIn("function restoreDraft", self.javascript)
 
     def test_real_gradio_ui_builds_with_unique_controls(self):
         status = RuntimeStatus(
@@ -137,6 +138,25 @@ class SenseNovaStudioSourceTests(unittest.TestCase):
         self.assertIn("sn-reference-gallery", element_ids)
         self.assertIn("sn-reference-bulk-upload", element_ids)
         self.assertIn("sn-generate", element_ids)
+
+        prompt_id = next(
+            component["id"]
+            for component in config["components"]
+            if component.get("props", {}).get("elem_id") == "sn-prompt"
+        )
+        draft_loads = [
+            dependency
+            for dependency in config["dependencies"]
+            if dependency.get("js")
+            and dependency.get("outputs") == [prompt_id]
+            and "localStorage.getItem" in dependency["js"]
+        ]
+        self.assertEqual(len(draft_loads), 1)
+        self.assertFalse(draft_loads[0]["backend_fn"])
+        self.assertLess(
+            self.script.index('elem_id="sn-progress"'),
+            self.script.index('elem_id="sn-validation"'),
+        )
 
     def test_bulk_reference_files_keep_selection_order(self):
         with tempfile.TemporaryDirectory() as temp:
