@@ -2366,12 +2366,6 @@ button.neo-workflow-action:focus-visible {
     transform-origin: center bottom;
 }
 
-#aikimi-status[data-state="loading_model"] .aikimi-status__portrait,
-#aikimi-status[data-state="generating"] .aikimi-status__portrait,
-#aikimi-status[data-state="updating"] .aikimi-status__portrait {
-    animation: aikimi-working 2.4s ease-in-out infinite;
-}
-
 .aikimi-status__summary-body {
     display: flex;
     min-width: 0;
@@ -2499,18 +2493,6 @@ button.neo-workflow-action:focus-visible {
     font-size: 0.66rem;
     font-weight: 620;
     line-height: 1.45;
-}
-
-@keyframes aikimi-working {
-    0%,
-    100% {
-        transform: translateY(0);
-        filter: drop-shadow(0 0.35rem 0.4rem color-mix(in srgb, #000 17%, transparent));
-    }
-    50% {
-        transform: translateY(-0.2rem);
-        filter: drop-shadow(0 0.45rem 0.65rem color-mix(in srgb, var(--aikimi-accent) 28%, transparent));
-    }
 }
 
 @media (max-width: 720px) {

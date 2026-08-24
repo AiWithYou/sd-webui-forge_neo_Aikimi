@@ -26,6 +26,7 @@
     const VALID_STATES = new Set(Object.keys(STATE_PRIORITY));
     const SAFE_ASSET_NAME = /^[a-z0-9][a-z0-9._-]*$/i;
     const ERROR_SELECTORS = ["#html_log_txt2img .error", "#html_log_img2img .error", "#html_log_extras .error"];
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
     let panel = null;
     let details = null;
@@ -39,11 +40,13 @@
     let pollingTimer = null;
     let pollingController = null;
     let pollingFailures = 0;
-    let enabled = true;
+    let enabled = false;
     let lastRenderedState = null;
     let completedUntil = 0;
     let currentIssue = null;
     let assetIssue = null;
+    let portraitLoadIssue = null;
+    let portraitRequestUrl = null;
     let snapshot = null;
 
     const tasks = new Map();
@@ -52,6 +55,8 @@
     const published = new Map();
     const publishedTimers = new Map();
     const observedErrors = new WeakSet();
+    const preloadedImages = new Map();
+    const failedAssetUrls = new Set();
 
     function appUrl(relativePath) {
         return new URL(relativePath, window.location.href).href;
@@ -127,6 +132,7 @@
             message = panel.querySelector(".aikimi-status__message");
             compactMetrics = panel.querySelector(".aikimi-status__compact-metrics");
             progressValue = panel.querySelector(".aikimi-status__progress-value");
+            bindPortraitEvents();
             return panel;
         }
 
@@ -138,6 +144,8 @@
         panel.id = "aikimi-status";
         panel.dataset.state = "idle";
         panel.setAttribute("aria-label", "Aikimi Status");
+        panel.setAttribute("aria-hidden", "true");
+        panel.hidden = true;
 
         details = document.createElement("details");
         details.className = "aikimi-status__disclosure";
@@ -152,6 +160,7 @@
         portrait.className = "aikimi-status__portrait";
         portrait.alt = "";
         portrait.decoding = "async";
+        bindPortraitEvents();
         portraitWrap.appendChild(portrait);
 
         const summaryBody = document.createElement("span");
@@ -220,7 +229,25 @@
 
     function validManifest(value) {
         if (!value || typeof value !== "object" || !value.assets || !value.states) return false;
-        return Object.values(value.assets).every((filename) => typeof filename === "string" && SAFE_ASSET_NAME.test(filename));
+        if (!Number.isInteger(value.version) || value.version <= 0) return false;
+        if (!VALID_STATES.has(value.default_state)) return false;
+        if (!Array.isArray(value.preload) || !value.preload.every((state) => VALID_STATES.has(state))) return false;
+
+        const assetKeys = new Set();
+        for (const state of VALID_STATES) {
+            const stateConfig = value.states[state];
+            if (!stateConfig || typeof stateConfig.asset !== "string") return false;
+            const asset = value.assets[stateConfig.asset];
+            if (!asset || typeof asset !== "object") return false;
+            if (typeof asset.animated !== "string" || typeof asset.still !== "string") return false;
+            if (!SAFE_ASSET_NAME.test(asset.animated) || !SAFE_ASSET_NAME.test(asset.still)) return false;
+            if (!Number.isInteger(asset.frames) || asset.frames < 2) return false;
+            if (!Array.isArray(asset.durations_ms) || asset.durations_ms.length !== asset.frames) return false;
+            if (!asset.durations_ms.every((duration) => Number.isInteger(duration) && duration >= 20)) return false;
+            if (!new Set(["ping-pong", "once"]).has(asset.loop)) return false;
+            assetKeys.add(stateConfig.asset);
+        }
+        return assetKeys.size === VALID_STATES.size;
     }
 
     async function loadManifest() {
@@ -239,6 +266,7 @@
                 if (!validManifest(value)) throw new Error("Aikimi manifest is invalid");
                 manifest = value;
                 assetIssue = null;
+                preloadConfiguredAssets();
                 return value;
             })
             .catch((error) => {
@@ -353,11 +381,89 @@
         return panel?.querySelector(`[data-field="${name}"]`);
     }
 
+    function versionedAssetUrl(filename) {
+        const url = new URL(`./aikimi-assets/${filename}`, window.location.href);
+        url.searchParams.set("v", String(manifest.version));
+        return url.href;
+    }
+
     function resolvePortrait(state) {
         const config = manifest?.states?.[state] || manifest?.states?.[manifest?.default_state];
-        const filename = config ? manifest?.assets?.[config.asset] : null;
-        if (!filename || !SAFE_ASSET_NAME.test(filename)) return null;
-        return appUrl(`./aikimi-assets/${filename}`);
+        const asset = config ? manifest?.assets?.[config.asset] : null;
+        if (!asset) return null;
+
+        const animatedUrl = versionedAssetUrl(asset.animated);
+        const stillUrl = versionedAssetUrl(asset.still);
+        if (reducedMotion.matches) {
+            return failedAssetUrls.has(stillUrl) ? null : { selected: stillUrl };
+        }
+        if (!failedAssetUrls.has(animatedUrl)) {
+            return { selected: animatedUrl };
+        }
+        return failedAssetUrls.has(stillUrl) ? null : { selected: stillUrl };
+    }
+
+    function clearPreloadedImages() {
+        for (const image of preloadedImages.values()) image.removeAttribute("src");
+        preloadedImages.clear();
+    }
+
+    function preloadStateAsset(state) {
+        const descriptor = resolvePortrait(state);
+        const url = descriptor?.selected;
+        if (!url || preloadedImages.has(url)) return;
+        const image = new Image();
+        image.decoding = "async";
+        image.addEventListener("load", () => preloadedImages.set(url, image), { once: true });
+        image.addEventListener(
+            "error",
+            () => {
+                preloadedImages.delete(url);
+                failedAssetUrls.add(url);
+                preloadStateAsset(state);
+                render();
+            },
+            { once: true },
+        );
+        preloadedImages.set(url, image);
+        image.src = url;
+    }
+
+    function preloadConfiguredAssets() {
+        if (!enabled || !manifest) return;
+        for (const state of manifest.preload) preloadStateAsset(state);
+    }
+
+    function bindPortraitEvents() {
+        if (!portrait || portrait.dataset.aikimiEventsBound === "true") return;
+        portrait.dataset.aikimiEventsBound = "true";
+        portrait.addEventListener("load", function () {
+            if ((portrait.currentSrc || portrait.src) !== portraitRequestUrl) return;
+            portraitLoadIssue = null;
+            portrait.hidden = false;
+        });
+        portrait.addEventListener("error", function () {
+            const failedUrl = portrait.currentSrc || portrait.src;
+            if (!failedUrl || failedUrl !== portraitRequestUrl) return;
+            failedAssetUrls.add(failedUrl);
+            portraitLoadIssue = "Aikimi portrait asset could not be loaded.";
+            portraitRequestUrl = null;
+            render();
+        });
+    }
+
+    function syncPortrait(descriptor) {
+        const selectedUrl = descriptor?.selected || null;
+        if (!selectedUrl) {
+            portraitRequestUrl = null;
+            portrait.removeAttribute("src");
+            portrait.hidden = true;
+            return;
+        }
+        if (portraitRequestUrl === selectedUrl) return;
+        portraitRequestUrl = selectedUrl;
+        portrait.hidden = false;
+        portrait.src = selectedUrl;
     }
 
     function render() {
@@ -376,7 +482,7 @@
         const queueSize = Math.max(snapshotQueueSize, state === "queued" ? 1 : 0);
         const progressPercent = Number.isFinite(progress) ? Math.round(Math.min(Math.max(progress, 0), 1) * 100) : null;
         const stateMessage = candidate.message || stateConfig.message || STATUS_LABELS[state] || state;
-        const portraitUrl = resolvePortrait(state);
+        const portraitDescriptor = resolvePortrait(state);
         const modelName = model.loaded_name || "Not loaded";
         const modelLabel =
             model.reload_pending && model.selected_name
@@ -395,12 +501,7 @@
             setText(message, stateMessage);
         }
 
-        if (portraitUrl && portrait.src !== portraitUrl) {
-            portrait.hidden = false;
-            portrait.src = portraitUrl;
-        } else if (!portraitUrl && !portrait.hidden) {
-            portrait.hidden = true;
-        }
+        syncPortrait(portraitDescriptor);
 
         const compact = [];
         if (progressPercent != null && ["loading_model", "generating", "updating"].includes(state)) compact.push(`Progress ${progressPercent}%`);
@@ -429,7 +530,7 @@
         );
         setText(field("queue"), `${queueSize} waiting${candidate.state === "queued" && candidate.text ? ` · ${candidate.text}` : ""}`);
         setText(field("backend"), backend.ready ? `Online · uptime ${formatSeconds(backend.uptime_seconds)}` : "Unavailable");
-        setText(field("error"), candidate.errorDetails || "None");
+        setText(field("error"), candidate.errorDetails || portraitLoadIssue || "None");
 
     }
 
@@ -592,10 +693,17 @@
         setAttribute(panel, "aria-hidden", enabled ? "false" : "true");
 
         if (enabled) {
-            loadManifest().then(render);
+            loadManifest().then(function () {
+                preloadConfiguredAssets();
+                render();
+            });
             schedulePoll();
         } else {
             stopPolling();
+            portraitRequestUrl = null;
+            portrait.removeAttribute("src");
+            portrait.hidden = true;
+            clearPreloadedImages();
             tasks.clear();
             published.clear();
             for (const timer of completionTimers.values()) window.clearTimeout(timer);
@@ -606,6 +714,7 @@
     }
 
     function handleDocumentClick(event) {
+        if (!enabled) return;
         const button = event.target.closest?.("button");
         if (!button) return;
 
@@ -628,6 +737,14 @@
         else if (enabled) schedulePoll();
     }
 
+    function handleReducedMotionChange() {
+        if (!enabled) return;
+        portraitRequestUrl = null;
+        clearPreloadedImages();
+        preloadConfiguredAssets();
+        render();
+    }
+
     function handleDetailsEscape(event) {
         if (event.key !== "Escape" || !details?.open) return;
         if (event.target.closest?.("[role='dialog'], #lightboxModal")) return;
@@ -644,7 +761,6 @@
     function initialize() {
         createBrandHeader();
         createPanel();
-        syncVisibility();
 
         window.addEventListener("webui:task-start", handleTaskStart);
         window.addEventListener("webui:task-progress", handleTaskProgress);
@@ -654,6 +770,7 @@
         document.addEventListener("click", handleDocumentClick, true);
         document.addEventListener("keydown", handleDetailsEscape, true);
         document.addEventListener("visibilitychange", handleVisibilityChange);
+        reducedMotion.addEventListener("change", handleReducedMotionChange);
 
         window.AikimiStatus = {
             publish(source, value) {

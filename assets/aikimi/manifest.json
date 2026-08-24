@@ -1,11 +1,75 @@
 {
-  "version": 1,
+  "version": 2,
   "default_state": "idle",
+  "preload": [
+    "idle",
+    "loading_model",
+    "generating"
+  ],
   "assets": {
-    "idle": "idle.webp",
-    "working": "working.webp",
-    "happy": "happy.webp",
-    "troubled": "troubled.webp"
+    "idle": {
+      "animated": "idle.png",
+      "still": "idle-still.webp",
+      "frames": 6,
+      "loop": "ping-pong",
+      "durations_ms": [220, 220, 220, 220, 220, 220]
+    },
+    "loading_model": {
+      "animated": "loading_model.png",
+      "still": "loading_model-still.webp",
+      "frames": 6,
+      "loop": "ping-pong",
+      "durations_ms": [140, 140, 140, 140, 140, 140]
+    },
+    "generating": {
+      "animated": "generating.png",
+      "still": "generating-still.webp",
+      "frames": 6,
+      "loop": "ping-pong",
+      "durations_ms": [120, 120, 120, 120, 120, 120]
+    },
+    "completed": {
+      "animated": "completed.png",
+      "still": "completed-still.webp",
+      "frames": 5,
+      "loop": "once",
+      "durations_ms": [180, 120, 100, 180, 600]
+    },
+    "queued": {
+      "animated": "queued.png",
+      "still": "queued-still.webp",
+      "frames": 6,
+      "loop": "ping-pong",
+      "durations_ms": [180, 180, 180, 180, 180, 180]
+    },
+    "warning": {
+      "animated": "warning.png",
+      "still": "warning-still.webp",
+      "frames": 4,
+      "loop": "once",
+      "durations_ms": [180, 100, 160, 700]
+    },
+    "error": {
+      "animated": "error.png",
+      "still": "error-still.webp",
+      "frames": 4,
+      "loop": "once",
+      "durations_ms": [180, 180, 240, 800]
+    },
+    "out_of_memory": {
+      "animated": "out_of_memory.png",
+      "still": "out_of_memory-still.webp",
+      "frames": 5,
+      "loop": "once",
+      "durations_ms": [160, 130, 150, 240, 850]
+    },
+    "updating": {
+      "animated": "updating.png",
+      "still": "updating-still.webp",
+      "frames": 6,
+      "loop": "ping-pong",
+      "durations_ms": [130, 130, 130, 130, 130, 130]
+    }
   },
   "states": {
     "idle": {
@@ -14,42 +78,42 @@
       "tone": "calm"
     },
     "loading_model": {
-      "asset": "working",
+      "asset": "loading_model",
       "message": "モデルを読み込んでる……",
       "tone": "working"
     },
     "generating": {
-      "asset": "working",
+      "asset": "generating",
       "message": "生成中……",
       "tone": "working"
     },
     "completed": {
-      "asset": "happy",
+      "asset": "completed",
       "message": "できたよ",
       "tone": "success"
     },
     "queued": {
-      "asset": "troubled",
+      "asset": "queued",
       "message": "まだいっぱいある……",
       "tone": "waiting"
     },
     "warning": {
-      "asset": "troubled",
+      "asset": "warning",
       "message": "少し確認してね……",
       "tone": "warning"
     },
     "error": {
-      "asset": "troubled",
+      "asset": "error",
       "message": "何か失敗したみたい……",
       "tone": "error"
     },
     "out_of_memory": {
-      "asset": "troubled",
+      "asset": "out_of_memory",
       "message": "入りきらない……",
       "tone": "error"
     },
     "updating": {
-      "asset": "working",
+      "asset": "updating",
       "message": "更新してる……",
       "tone": "working"
     }
