@@ -8,8 +8,11 @@ from modules_forge.anima_lora import (
     ANIMA_38B_TO_29B,
     ANIMA_BASE_TO_29B,
     anima_lora_block_indices,
+    anima_lora_block_indices_from_keys,
     convert_anima_lora_layout,
     detect_anima_lora_block_count,
+    detect_anima_lora_block_count_from_keys,
+    has_anima_lora_signature,
 )
 
 
@@ -51,6 +54,39 @@ class AnimaLoraLayoutTests(unittest.TestCase):
         self.assertEqual(detect_anima_lora_block_count(expanded), 40)
         self.assertEqual(detect_anima_lora_block_count(pro52), 52)
         self.assertIsNone(detect_anima_lora_block_count(sparse))
+
+    def test_detects_layout_from_safetensors_header_keys(self):
+        lora, _ = kohya_lora(28)
+
+        self.assertEqual(
+            anima_lora_block_indices_from_keys(lora.keys()),
+            tuple(range(28)),
+        )
+        self.assertEqual(
+            detect_anima_lora_block_count_from_keys(lora.keys()),
+            28,
+        )
+
+    def test_anima_signature_rejects_unrelated_block_models(self):
+        anima_keys = {
+            "diffusion_model.blocks.0.adaln_modulation_mlp.1.lora_A.weight",
+            "diffusion_model.blocks.0.cross_attn.q_proj.lora_A.weight",
+            "diffusion_model.blocks.0.self_attn.q_proj.lora_A.weight",
+            "diffusion_model.blocks.0.mlp.layer1.lora_A.weight",
+        }
+        wan_keys = {
+            "diffusion_model.blocks.0.cross_attn.q.lora_down.weight",
+            "diffusion_model.blocks.0.ffn.0.lora_down.weight",
+        }
+
+        self.assertTrue(has_anima_lora_signature(anima_keys))
+        self.assertFalse(has_anima_lora_signature(wan_keys))
+        self.assertTrue(
+            has_anima_lora_signature(
+                wan_keys,
+                {"ss_network_module": "networks.lora_anima"},
+            )
+        )
 
     def test_expands_28_block_kohya_lora_without_copying_tensors(self):
         lora, source_values = kohya_lora(28)

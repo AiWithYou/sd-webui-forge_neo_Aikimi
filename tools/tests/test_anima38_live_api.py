@@ -137,6 +137,10 @@ class Anima38LiveApiTests(unittest.TestCase):
             os.environ.get("ANIMA_38B_LIVE_OFFLOAD_ENCODERS", "0") == "1"
         )
         enable_adapter = os.environ.get("ANIMA_38B_LIVE_ENABLE_ADAPTER", "1") == "1"
+        standard_lora = os.environ.get("ANIMA_38B_LIVE_STANDARD_LORA", "").strip()
+        standard_lora_strength = float(
+            os.environ.get("ANIMA_38B_LIVE_STANDARD_LORA_STRENGTH", "1.0")
+        )
         distilled_cfg = float(
             os.environ.get("ANIMA_38B_LIVE_DISTILLED_CFG", "3.0")
         )
@@ -175,6 +179,8 @@ class Anima38LiveApiTests(unittest.TestCase):
                             False,
                             1.0,
                             offload_encoders,
+                            standard_lora or "None",
+                            standard_lora_strength,
                         ]
                     }
                 },
@@ -194,6 +200,10 @@ class Anima38LiveApiTests(unittest.TestCase):
             self.assertIn("Anima 3.8B adapter", info)
         else:
             self.assertNotIn("Anima 3.8B adapter", info)
+        if standard_lora:
+            self.assertIn("Lora hashes", info)
+            self.assertIn("Anima 3.8B standard LoRA", info)
+            self.assertIn(standard_lora, info)
         self.assertIn(f"Sampler: {sampler_name}", info)
         self.assertIn(f"Schedule type: {scheduler}", info)
         self.assertIn(f"Shift: {distilled_cfg}", info)

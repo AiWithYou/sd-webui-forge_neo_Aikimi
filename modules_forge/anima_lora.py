@@ -8,6 +8,7 @@ storage by exposing the same tensor under each corresponding target key.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 import re
 from typing import TypeVar
@@ -134,21 +135,27 @@ def _parse_anima_block_key(key: str) -> tuple[int, str, str] | None:
     return None
 
 
-def anima_lora_block_indices(lora: dict[str, _Value]) -> tuple[int, ...]:
-    """Return sorted transformer-block indices recognized in a LoRA state dict."""
+def anima_lora_block_indices_from_keys(keys: Iterable[str]) -> tuple[int, ...]:
+    """Return sorted transformer-block indices recognized in LoRA keys."""
 
     indices = set()
-    for key in lora:
+    for key in keys:
         parsed = _parse_anima_block_key(key)
         if parsed is not None:
             indices.add(parsed[0])
     return tuple(sorted(indices))
 
 
-def detect_anima_lora_block_count(lora: dict[str, _Value]) -> int | None:
-    """Detect only complete supported layouts to avoid unsafe guessing."""
+def anima_lora_block_indices(lora: dict[str, _Value]) -> tuple[int, ...]:
+    """Return sorted transformer-block indices recognized in a LoRA state dict."""
 
-    indices = anima_lora_block_indices(lora)
+    return anima_lora_block_indices_from_keys(lora.keys())
+
+
+def detect_anima_lora_block_count_from_keys(keys: Iterable[str]) -> int | None:
+    """Detect a complete supported layout without loading LoRA tensor data."""
+
+    indices = anima_lora_block_indices_from_keys(keys)
     if indices == tuple(range(ANIMA_BASE_BLOCKS)):
         return ANIMA_BASE_BLOCKS
     if indices == tuple(range(ANIMA_29B_BLOCKS)):
@@ -156,6 +163,49 @@ def detect_anima_lora_block_count(lora: dict[str, _Value]) -> int | None:
     if indices == tuple(range(ANIMA_38B_BLOCKS)):
         return ANIMA_38B_BLOCKS
     return None
+
+
+def detect_anima_lora_block_count(lora: dict[str, _Value]) -> int | None:
+    """Detect only complete supported layouts to avoid unsafe guessing."""
+
+    return detect_anima_lora_block_count_from_keys(lora.keys())
+
+
+def has_anima_lora_signature(
+    keys: Iterable[str],
+    metadata: dict[str, str] | None = None,
+) -> bool:
+    """Reject unrelated architectures that happen to use 28/40/52 blocks."""
+
+    metadata = metadata or {}
+    metadata_fields = (
+        "modelspec.architecture",
+        "modelspec.tags",
+        "ss_base_model_version",
+        "ss_leco_model_type",
+        "ss_network_module",
+    )
+    if any(
+        "anima" in metadata.get(field, "").lower()
+        for field in metadata_fields
+    ):
+        return True
+
+    key_list = tuple(keys)
+    has_adaln = any("adaln_modulation_" in key for key in key_list)
+    has_cross_attention = any(
+        re.search(r"cross_attn[._](?:q|k|v|output)_proj", key)
+        for key in key_list
+    )
+    has_self_attention = any(
+        re.search(r"self_attn[._](?:q|k|v|output)_proj", key)
+        for key in key_list
+    )
+    has_anima_mlp = any(
+        re.search(r"mlp[._]layer[12]", key)
+        for key in key_list
+    )
+    return has_adaln and has_cross_attention and has_self_attention and has_anima_mlp
 
 
 def convert_anima_lora_layout(

@@ -138,8 +138,12 @@ Diffusion in Low Bits: Automatic
 Anima 3.8B (Qwen3.5): enabled
 Adapter strength: 1.0
 Use adapter on negative prompt: off
+Standard Anima LoRA: None、または使用するLoRA
+Standard LoRA strength: 1.0
 Low VRAM encoder offload: off
 ```
+
+`Standard Anima LoRA`には、`models/Lora`で検出した完全な28層・40層・52層のsafetensors LoRAだけを表示します。28層版と40層版は52層へ自動展開してから適用します。起動後にLoRAを追加した場合は`Refresh standard Anima LoRAs`を押してください。複数の通常LoRAを組み合わせる場合は、従来どおりLoRAタブまたは`<lora:name:weight>`タグを使えます。
 
 最初は`832x1216`前後の約1MP、`res_multistep + Beta`、28〜50 Steps、CFG 7〜8を基準にしてください。Qwen3.5のembedding tableはCPUへ保持し、必要tokenだけをGPUへ送ります。同じpromptでSeedだけを変える場合はconditioning cacheを再利用します。VRAMを優先する場合に限り、Low VRAM encoder offloadを有効にしてください。
 

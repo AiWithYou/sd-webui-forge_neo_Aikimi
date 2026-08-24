@@ -15,10 +15,17 @@ EXTENSION = ROOT / "extensions-builtin" / "anima-3-8b"
 if str(EXTENSION) not in sys.path:
     sys.path.insert(0, str(EXTENSION))
 
-from anima3b.files import ARCHITECTURE, adapters, qwen35_models, tokenizer_dir
+from anima3b.files import (
+    ARCHITECTURE,
+    adapters,
+    qwen35_models,
+    standard_anima_loras,
+    tokenizer_dir,
+)
 from anima3b.adapter import ProgressiveCrossAdapter
 from anima3b.qwen35 import CPUEmbedding, Qwen35HybridModel
 from anima3b.runtime import ANIMA38_BLOCK_COUNT, Anima3BRuntime
+from anima3b.standard_lora import apply_standard_lora_selection
 
 
 def fake_anima(block_count: int):
@@ -181,6 +188,132 @@ class Anima38ExtensionTests(unittest.TestCase):
                 found = qwen35_models()
 
         self.assertEqual(found, {"qwen35_4b.safetensors": str(paired)})
+
+    def test_standard_lora_discovery_accepts_complete_anima_layouts_only(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for block_count in (28, 40, 52):
+                save_file(
+                    {
+                        f"diffusion_model.blocks.{block}.{module}.lora_A.weight": torch.ones(1)
+                        for block in range(block_count)
+                        for module in (
+                            "adaln_modulation_mlp.1",
+                            "cross_attn.q_proj",
+                            "self_attn.q_proj",
+                            "mlp.layer1",
+                        )
+                    },
+                    root / f"anima-{block_count}.safetensors",
+                )
+            save_file(
+                {
+                    "diffusion_model.blocks.0.self_attn.q_proj.lora_A.weight": torch.ones(1),
+                    "diffusion_model.blocks.27.self_attn.q_proj.lora_A.weight": torch.ones(1),
+                },
+                root / "sparse.safetensors",
+            )
+            save_file(
+                {"unrelated.weight": torch.ones(1)},
+                root / "unrelated.safetensors",
+            )
+            save_file(
+                {
+                    f"diffusion_model.blocks.{block}.cross_attn.q.lora_down.weight": torch.ones(1)
+                    for block in range(40)
+                },
+                root / "wan-40.safetensors",
+            )
+
+            duplicate_root = root / "later-root"
+            duplicate_root.mkdir()
+            save_file(
+                {
+                    f"diffusion_model.blocks.{block}.cross_attn.q.lora_down.weight": torch.ones(1)
+                    for block in range(28)
+                },
+                duplicate_root / "anima-28.safetensors",
+            )
+
+            with patch(
+                "anima3b.files.lora_roots",
+                return_value=[root, duplicate_root],
+            ):
+                found = standard_anima_loras()
+
+        self.assertEqual(
+            found,
+            {
+                "anima-40": str(root / "anima-40.safetensors"),
+                "anima-52": str(root / "anima-52.safetensors"),
+            },
+        )
+
+    def test_standard_lora_selection_uses_forge_prompt_pipeline_once(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "regular-anima.safetensors"
+            path.touch()
+            processing = SimpleNamespace(
+                prompt="portrait",
+                all_prompts=["styled portrait", "already <lora:regular-anima:0.5>"],
+                extra_generation_params={},
+            )
+
+            applied = apply_standard_lora_selection(
+                processing,
+                "regular-anima",
+                1.25,
+                {"regular-anima": str(path)},
+            )
+            applied_again = apply_standard_lora_selection(
+                processing,
+                "regular-anima",
+                1.25,
+                {"regular-anima": str(path)},
+            )
+
+        self.assertTrue(applied)
+        self.assertTrue(applied_again)
+        self.assertEqual(
+            processing.prompt,
+            "portrait <lora:regular-anima:1.25>",
+        )
+        self.assertEqual(
+            processing.all_prompts,
+            [
+                "styled portrait <lora:regular-anima:1.25>",
+                "already <lora:regular-anima:0.5>",
+            ],
+        )
+        self.assertEqual(
+            processing.extra_generation_params["Anima 3.8B standard LoRA"],
+            "regular-anima:1.25",
+        )
+
+    def test_standard_lora_selection_rejects_stale_or_nonfinite_values(self):
+        processing = SimpleNamespace(
+            prompt="portrait",
+            all_prompts=["portrait"],
+            extra_generation_params={},
+        )
+        with self.assertRaises(FileNotFoundError):
+            apply_standard_lora_selection(
+                processing,
+                "missing",
+                1.0,
+                {},
+            )
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "regular-anima.safetensors"
+            path.touch()
+            with self.assertRaisesRegex(ValueError, "finite"):
+                apply_standard_lora_selection(
+                    processing,
+                    "regular-anima",
+                    float("nan"),
+                    {"regular-anima": str(path)},
+                )
 
     def test_runtime_requires_the_paired_52_block_checkpoint(self):
         engine, clip = Anima3BRuntime._require_anima(
