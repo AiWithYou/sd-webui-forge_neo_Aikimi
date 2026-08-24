@@ -2,6 +2,7 @@ let settingsExcludeTabsFromShowAll = {
     settings_tab_defaults: 1,
     settings_tab_sysinfo: 1,
     settings_tab_actions: 1,
+    settings_tab_about: 1,
     settings_tab_licenses: 1,
 };
 

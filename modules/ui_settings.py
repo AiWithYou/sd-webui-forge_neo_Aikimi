@@ -217,6 +217,9 @@ class UiSettings:
                         calculate_all_checkpoint_hash = gr.Button(value="Calculate hash for all checkpoint", elem_id="calculate_all_checkpoint_hash")
                         calculate_all_checkpoint_hash_threads = gr.Number(value=1, label="Number of parallel calculations", elem_id="calculate_all_checkpoint_hash_threads", precision=0, minimum=1)
 
+                with gr.TabItem("About", id="about", elem_id="settings_tab_about"):
+                    gr.HTML(shared.html("about.html"), elem_id="aikimi_about")
+
                 with gr.TabItem("Licenses", id="licenses", elem_id="settings_tab_licenses") as license_tab:
                     gr.HTML(shared.html("licenses.html"), elem_id="licenses")
 

@@ -115,6 +115,7 @@ def webui_worker():
             auth=gradio_auth_creds,
             inbrowser=auto_launch_browser,
             prevent_thread_lock=True,
+            favicon_path=os.path.join(os.path.dirname(__file__), "assets", "aikimi", "favicon.png"),
             allowed_paths=cmd_opts.gradio_allowed_path + [canvas_js_root_path],
             app_kwargs={
                 "docs_url": "/docs",

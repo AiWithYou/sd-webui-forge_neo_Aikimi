@@ -1,8 +1,8 @@
-# Forge NeoW
+# Aikimi Neo
 
-`Forge NeoW`は、[Stable Diffusion WebUI Forge - Neo](https://github.com/Haoming02/sd-webui-forge-classic)を基盤に、Krea2の導入と高解像度ワークフロー、SenseNova U1.5 Studio、MiniMax H3 Studio、画像品質処理、Anima 3.8Bの軽量構成とLoRA互換性を追加したWindows向けforkです。
+`Aikimi Neo`は、[Stable Diffusion WebUI Forge - Neo](https://github.com/Haoming02/sd-webui-forge-classic)を生成基盤として、画像・動画・モデルの各ワークフローを統合するWindows向けAI生成workspaceです。Krea2の導入と高解像度ワークフロー、SenseNova U1.5 Studio、MiniMax H3 Studio、画像品質処理、Anima 3.8Bの軽量構成とLoRA互換性に加え、独自のブランドUIとキャラクターアシスタントを備えています。
 
-通常のForge Neo機能はupstreamから継承しています。このREADMEでは、NeoW固有の追加と、初めて使うときの入口を中心に説明します。
+Forge Neo由来の生成機能とExtension互換性はupstreamから継承しています。このREADMEでは、Aikimi Neo独自の機能と、初めて使うときの入口を中心に説明します。
 
 | 項目 | 内容 |
 |---|---|
@@ -17,6 +17,7 @@
 | やりたいこと | 最初の入口 |
 |---|---|
 | 通常のForge画像生成を使う | `webui-user.bat` |
+| ちびあいきみの状態表示を切り替える | `Settings` → `Aikimi Assistant` → `Show Aikimi` |
 | Krea2 INT8モデルをまとめて導入する | `download_krea2_int8_convrot_models.bat` |
 | Anima 3.8Bを軽量構成で導入する | `download_anima38_int8_convrot_models.bat` → 通常の`txt2img` |
 | SenseNova U1.5正式版をINT8 ConvRotで使う | `download_sensenova_u15_int8.bat` → `SenseNova U1.5`タブ |
@@ -101,7 +102,7 @@ Krea2のmodel shiftはcheckpoint設定の`1.15`を使います。Qwen3-VL text e
 
 ### Anima 3.8Bを軽量構成で使う場合
 
-Anima 3.8Bは、52層へ拡張したDiT、Qwen3.5 4B、専用のprogressive cross-attention adapterを組み合わせるモデルです。Qwen3.5の配布weightは、約34.98億parameterがFP8、約6.40億parameterがBF16の混合精度です。NeoWではQwen3.5を再量子化せず、全BF16のDiTだけをINT8 ConvRotへ変換します。変換後のDiTは7,504,189,974 bytesから4,238,326,342 bytesになり、約43.5%小さくなります。
+Anima 3.8Bは、52層へ拡張したDiT、Qwen3.5 4B、専用のprogressive cross-attention adapterを組み合わせるモデルです。Qwen3.5の配布weightは、約34.98億parameterがFP8、約6.40億parameterがBF16の混合精度です。Aikimi NeoはQwen3.5を再量子化せず、全BF16のDiTだけをINT8 ConvRotへ変換します。変換後のDiTは7,504,189,974 bytesから4,238,326,342 bytesになり、約43.5%小さくなります。
 
 次をダブルクリックしてください。
 
@@ -169,7 +170,13 @@ download_sensenova_u15_int8.bat
 
 このINT8 ConvRotは正式版SenseNova U1.5を基にしています。ただし、変換weightと専用loaderはコミュニティ管理であり、SenseNova公式配布のweightではありません。Studioは固定したcheckpointだけを受け付け、Preview、GGUF、BF16へ暗黙に切り替えません。
 
-## NeoW固有の追加
+## Aikimi Neo独自の追加
+
+### Aikimi Status
+
+公式マスコットの「ちびあいきみ」が画面右下に常駐し、アプリ全体の状態を短い台詞と主要指標で知らせます。通常表示では生成進捗、待機Queue、VRAM使用量を確認でき、キャラクターを選ぶとモデル名、モデル読込時間、ETA、backend状態、エラー詳細が開きます。
+
+状態表示は既存の生成progress、Queue、モデルloader、VRAM情報を読み取り、従来の技術ログを置き換えません。表示が不要な場合は、`Settings`の`Aikimi Assistant`で`Show Aikimi`を無効にすると、状態取得を停止して完全に非表示にできます。
 
 ### SenseNova U1.5 Studio
 
@@ -190,7 +197,7 @@ download_sensenova_u15_int8.bat
 
 ### MiniMax H3 Studio
 
-`H3 Studio`は、Forge NeoWからローカルのComfyUI MiniMax H3 runtimeを操作する専用GUIです。
+`H3 Studio`は、Aikimi NeoからローカルのComfyUI MiniMax H3 runtimeを操作する専用GUIです。
 
 - テキスト、キーフレーム、参照素材の3モード
 - 映像と32 kHzステレオ音声を同時生成
@@ -203,7 +210,7 @@ MiniMax H3モデルと対応するローカルComfyUIは別途必要です。外
 
 ### Krea2の導入と低ビット互換性
 
-NeoWは、Krea2向けに次を追加しています。
+Aikimi Neoは、Krea2向けに次の機能を追加しています。
 
 - 固定revisionとhash検証を使う一括downloader
 - BF16 merged checkpointからINT8 ConvRotを作るstreaming変換tool
@@ -211,7 +218,7 @@ NeoWは、Krea2向けに次を追加しています。
 - Qwen3-VL入力と、checkpoint・VAE・text encoderのruntime preflight
 - Krea2 presetと高解像度処理向けの安全側の既定値
 
-現在の推奨入口はpre-quantized INT8 ConvRotと`Automatic`です。一方、既存モデルとの互換性を維持するため、upstream同期で削除対象となったBnB/NF4経路とGGUF対応をNeoWでは意図的に残しています。NF4またはGGUFを使う場合は、対象モデルの形式に合わせて選択してください。
+現在の推奨入口はpre-quantized INT8 ConvRotと`Automatic`です。一方、Aikimi Neoは既存モデルとの互換性を守るため、upstream同期で削除対象となったBnB/NF4経路とGGUF対応を意図的に維持しています。NF4またはGGUFを使う場合は、対象モデルの形式に合わせて選択してください。
 
 ### Krea2高解像度ワークフロー
 
@@ -261,9 +268,9 @@ Krea2のSmart FinishはLab a/b中心のchroma-only解析を行い、指標が改
 
 ### Anima 3.8BとLoRAの厳密な28層・40層・52層変換
 
-AnimaおよびAnima-2.9Bの基本モデル対応、40層checkpoint検出、基本的な28→40 LoRA remapはupstream由来です。NeoWは52層checkpointの検出、Qwen3.5 adapter、INT8 ConvRot変換を追加しています。
+AnimaおよびAnima-2.9Bの基本モデル対応、40層checkpoint検出、基本的な28→40 LoRA remapはupstream由来です。Aikimi Neoは52層checkpointの検出、Qwen3.5 adapter、INT8 ConvRot変換を追加しています。
 
-NeoWはLoRA変換を次のように強化しています。
+Aikimi NeoはLoRA変換を次の方針で強化しています。
 
 - 完全な`0..27`、`0..39`、`0..51`のblock coverageだけを自動変換
 - Kohya、Forge generic、PEFT、Comfy形式のblock keyに対応
@@ -353,7 +360,7 @@ loaded modelのarchitecture、transformer、VAE、text encoder、quantizationを
 
 同期基準`6009ffff`から取り込んだ主な改善には、Comfy Kitchen attention、CFG++ sampler修正、Krea 2 Identity Edit、Qwen3-VL vision入力、reference latent管理、VAE encode/decode共通化、Anima-2.9Bの基本対応などがあります。
 
-NeoWでは、その同期で削除対象となったBnB/NF4/GGUF互換経路を意図的に維持し、fork固有のKrea2、MiniMax H3、HyperWeave、高解像度、Anima LoRA処理と共存させています。
+Aikimi Neoは、その同期で削除対象となったBnB/NF4/GGUF互換経路を意図的に維持し、独自のKrea2、MiniMax H3、HyperWeave、高解像度、Anima LoRA処理と共存させています。
 
 ## 制限と安全上の注意
 
@@ -401,7 +408,7 @@ Anima、Krea2、HyperWeaveには実checkpointまたは起動中のForge APIを�
 
 ## Creditsとライセンス
 
-Forge NeoWは、次のプロジェクトと関連コントリビューターの成果を基盤にしています。
+Aikimi Neoは、次のプロジェクトと関連コントリビューターの成果を生成基盤として利用しています。
 
 - [AUTOMATIC1111 Stable Diffusion WebUI](https://github.com/AUTOMATIC1111/stable-diffusion-webui)
 - [Stable Diffusion WebUI Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge)

@@ -257,6 +257,9 @@ class SdModelData:
         self.sd_model = FakeInitialModel()
         self.forge_loading_parameters = {}
         self.forge_hash = ""
+        self.forge_loading = False
+        self.last_load_seconds = None
+        self.last_load_error = None
 
     def get_sd_model(self):
         return self.sd_model
@@ -325,6 +328,19 @@ def forge_model_reload():
     if model_data.forge_hash == current_hash:
         return model_data.sd_model, False
 
+    model_data.forge_loading = True
+    model_data.last_load_seconds = None
+    model_data.last_load_error = None
+    try:
+        return _forge_model_reload(current_hash)
+    except Exception as exc:
+        model_data.last_load_error = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        model_data.forge_loading = False
+
+
+def _forge_model_reload(current_hash):
     print("Loading Model: " + str(model_data.forge_loading_parameters))
 
     timer = Timer()
@@ -388,5 +404,5 @@ def forge_model_reload():
     print(f"Model loaded in {timer.summary()}.")
 
     model_data.forge_hash = current_hash
-
+    model_data.last_load_seconds = timer.total
     return sd_model, True

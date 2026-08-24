@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "default_state": "idle",
+  "assets": {
+    "idle": "idle.webp",
+    "working": "working.webp",
+    "happy": "happy.webp",
+    "troubled": "troubled.webp"
+  },
+  "states": {
+    "idle": {
+      "asset": "idle",
+      "message": "いつでもどうぞ……",
+      "tone": "calm"
+    },
+    "loading_model": {
+      "asset": "working",
+      "message": "モデルを読み込んでる……",
+      "tone": "working"
+    },
+    "generating": {
+      "asset": "working",
+      "message": "生成中……",
+      "tone": "working"
+    },
+    "completed": {
+      "asset": "happy",
+      "message": "できたよ",
+      "tone": "success"
+    },
+    "queued": {
+      "asset": "troubled",
+      "message": "まだいっぱいある……",
+      "tone": "waiting"
+    },
+    "warning": {
+      "asset": "troubled",
+      "message": "少し確認してね……",
+      "tone": "warning"
+    },
+    "error": {
+      "asset": "troubled",
+      "message": "何か失敗したみたい……",
+      "tone": "error"
+    },
+    "out_of_memory": {
+      "asset": "troubled",
+      "message": "入りきらない……",
+      "tone": "error"
+    },
+    "updating": {
+      "asset": "working",
+      "message": "更新してる……",
+      "tone": "working"
+    }
+  }
+}

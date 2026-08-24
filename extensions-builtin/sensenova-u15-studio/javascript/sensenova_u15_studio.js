@@ -101,6 +101,29 @@
         const busy = !["idle", "complete", "error", "cancelled", "cancel"].includes(stage);
         if (studio) studio.dataset.snBusy = String(busy);
         generate.setAttribute("aria-busy", String(busy));
+
+        if (!window.AikimiStatus) return;
+        if (["idle", "cancelled", "cancel"].includes(stage)) {
+            window.AikimiStatus.clear("sensenova-u15");
+            return;
+        }
+        const state = {
+            prepare: "generating",
+            queued: "queued",
+            running: "generating",
+            complete: "completed",
+            error: "error",
+        }[stage] || (busy ? "generating" : null);
+        if (!state) return;
+        const message = progress.querySelector("strong")?.textContent?.trim() || "";
+        const exactError = gradioApp().querySelector("#sn-validation .sn-inline-error")?.textContent?.trim() || "";
+        const progressText = progress.querySelector(".sn-progress-head span")?.textContent || "";
+        const progressMatch = progressText.match(/(\d+)%/);
+        window.AikimiStatus.publish("sensenova-u15", {
+            state,
+            progress: progressMatch ? Number(progressMatch[1]) / 100 : null,
+            errorDetails: stage === "error" ? exactError || message : null,
+        });
     }
 
     function setupStudio() {

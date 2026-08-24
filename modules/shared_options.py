@@ -468,6 +468,17 @@ options_templates.update(
 
 options_templates.update(
     options_section(
+        ("aikimi-assistant", "Aikimi Assistant", "ui"),
+        {
+            "aikimi_assistant_enabled": OptionInfo(True, "Show Aikimi").info(
+                "Show the compact Aikimi Status assistant. Technical logs remain available in the existing output panels."
+            ),
+        },
+    )
+)
+
+options_templates.update(
+    options_section(
         ("infotext", "Infotext", "ui"),
         {
             "infotext_explanation": OptionHTML("Infotext is what the webui calls the text that contains generation parameters, and can be used to generate the same image again."),

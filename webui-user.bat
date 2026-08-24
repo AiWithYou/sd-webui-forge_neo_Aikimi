@@ -9,7 +9,7 @@ set "COMMANDLINE_ARGS=--uv --bnb --api --port 7861 --theme dark --tiled-conv2d 1
 if exist "%~dp0forge_neo_model_paths.yaml" (
   set "COMMANDLINE_ARGS=%COMMANDLINE_ARGS% --forge-ref-comfy-yaml forge_neo_model_paths.yaml"
 ) else (
-  echo [Forge NeoW] forge_neo_model_paths.yaml was not found; using the standard model folders.
+  echo [Aikimi Neo] forge_neo_model_paths.yaml was not found; using the standard model folders.
 )
 
 :: --xformers --sage --uv

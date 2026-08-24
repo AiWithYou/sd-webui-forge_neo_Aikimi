@@ -1,8 +1,8 @@
-# Anima 3.8B for Forge NeoW
+# Anima 3.8B for Aikimi Neo
 
-Anima 3.8Bの52層DiTとQwen3.5 4B progressive cross-attention adapterを、Forge NeoWの通常の`txt2img`と`img2img`で使うためのbuilt-in extensionです。配布元のComfyUI workflowと同じく、Anima標準のQwen3-0.6B conditioningへQwen3.5の意味特徴を加えます。
+このbuilt-in Extensionは、Anima 3.8Bの52層DiTとQwen3.5 4B progressive cross-attention adapterを、Aikimi Neoの通常の`txt2img`と`img2img`で利用できるようにします。配布元のComfyUI workflowと同じく、Anima標準のQwen3-0.6B conditioningへQwen3.5の意味特徴を加えます。
 
-実装は[GumGum10/forge-anima-3.8B](https://github.com/GumGum10/forge-anima-3.8B)のcommit `8af9bb4d391787030cb84205c47cf3ea1213795a`を基にしています。NeoWへの同梱時に、52層checkpointの必須検査、offline tokenizerの優先読込、INT8 ConvRotセットアップ、28↔40↔52 LoRA変換を追加しました。
+実装は[GumGum10/forge-anima-3.8B](https://github.com/GumGum10/forge-anima-3.8B)のcommit `8af9bb4d391787030cb84205c47cf3ea1213795a`を基にしています。Aikimi Neoへの同梱にあたり、52層checkpointの必須検査、offline tokenizerの優先読込、INT8 ConvRotセットアップ、28↔40↔52 LoRA変換を追加しました。
 
 ## セットアップ
 

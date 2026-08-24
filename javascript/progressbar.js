@@ -27,6 +27,18 @@ function request(url, data, handler, errorHandler) {
     xhr.send(js);
 }
 
+function dispatchWebUiTaskEvent(type, idTask, sourceElementId, response = null) {
+    window.dispatchEvent(
+        new CustomEvent(type, {
+            detail: {
+                taskId: idTask,
+                sourceElementId: sourceElementId || null,
+                response: response ? { ...response } : null,
+            },
+        }),
+    );
+}
+
 function pad2(x) {
     return x < 10 ? "0" + x : x;
 }
@@ -78,7 +90,10 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
     let dateStart = new Date();
     let wasEverActive = false;
     let parentProgressbar = progressbarContainer.parentNode;
+    let sourceElementId = progressbarContainer.id || null;
     let wakeLock = null;
+
+    dispatchWebUiTaskEvent("webui:task-start", id_task, sourceElementId);
 
     if (gallery && gallery.classList.contains("hidden")) gallery = gallery.parentElement.querySelector(".gradio-video");
 
@@ -112,10 +127,11 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
 
     let livePreview = null;
 
-    let removeProgressBar = function () {
+    let removeProgressBar = function (reason = "ended") {
         releaseWakeLock();
         if (!divProgress) return;
 
+        dispatchWebUiTaskEvent("webui:task-end", id_task, sourceElementId, { reason: reason });
         setTitle("");
         parentProgressbar.removeChild(divProgress);
         if (gallery && livePreview) gallery.removeChild(livePreview);
@@ -130,8 +146,10 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
             "./internal/progress",
             { id_task: id_task, live_preview: false },
             function (res) {
+                dispatchWebUiTaskEvent("webui:task-progress", id_task, sourceElementId, res);
+
                 if (res.completed) {
-                    removeProgressBar();
+                    removeProgressBar("completed");
                     return;
                 }
 
@@ -161,12 +179,12 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
                 if (res.active) wasEverActive = true;
 
                 if (!res.active && wasEverActive) {
-                    removeProgressBar();
+                    removeProgressBar("inactive");
                     return;
                 }
 
                 if (elapsedFromStart > inactivityTimeout && !res.queued && !res.active) {
-                    removeProgressBar();
+                    removeProgressBar("timeout");
                     return;
                 }
 
@@ -179,7 +197,8 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
                 }, opts.live_preview_refresh_period || 500);
             },
             function () {
-                removeProgressBar();
+                dispatchWebUiTaskEvent("webui:task-error", id_task, sourceElementId);
+                removeProgressBar("error");
             },
         );
     };
@@ -215,7 +234,7 @@ function requestProgress(id_task, progressbarContainer, gallery, atEnd, onProgre
                 }, opts.live_preview_refresh_period || 500);
             },
             function () {
-                removeProgressBar();
+                removeProgressBar("preview-error");
             },
         );
     };

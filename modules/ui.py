@@ -884,7 +884,7 @@ def create_ui():
     for _interface, label, _ifid in interfaces:
         shared.tab_names.append(label)
 
-    with gr.Blocks(theme=shared.gradio_theme, analytics_enabled=False, title="Stable Diffusion", head=canvas_head) as demo:
+    with gr.Blocks(theme=shared.gradio_theme, analytics_enabled=False, title="Aikimi Neo", head=canvas_head) as demo:
         settings.add_quicksettings()
 
         parameters_copypaste.connect_paste_params_buttons()
@@ -936,6 +936,7 @@ def versions_html():
     import torch
 
     from backend.memory_management import flash_enabled, sage_enabled, xformers_enabled
+    from modules_forge import forge_version
 
     python_version = ".".join([str(x) for x in sys.version_info[0:3]])
     _versions = [f"torch: {getattr(torch, '__long_version__', torch.__version__)}"]
@@ -948,7 +949,9 @@ def versions_html():
         _versions.append(f"xformers: {importlib.metadata.version('xformers')}")
 
     return f"""
-version: <a href="https://github.com/Haoming02/sd-webui-forge-classic/tree/neo">neo</a>
+Aikimi Neo
+&#x2000;•&#x2000;
+engine: <a href="https://github.com/Haoming02/sd-webui-forge-classic/tree/neo">Forge Neo {forge_version.release}</a>
 &#x2000;•&#x2000;
 python: <span title="{sys.version}">{python_version}</span>
 &#x2000;•&#x2000;
@@ -961,6 +964,7 @@ checkpoint: <a id="sd_checkpoint_hash">N/A</a>
 
 
 def setup_ui_api(app):
+    from fastapi import Depends, HTTPException, Request, status
     from pydantic import BaseModel, Field
 
     class QuicksettingsHint(BaseModel):
@@ -973,6 +977,22 @@ def setup_ui_api(app):
     app.add_api_route("/internal/quicksettings-hint", quicksettings_hint, methods=["GET"], response_model=list[QuicksettingsHint])
 
     app.add_api_route("/internal/ping", lambda: {}, methods=["GET"])
+
+    from modules import aikimi_status
+
+    def require_aikimi_status_auth(request: Request):
+        if not aikimi_status.request_is_authorized(app, request):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+            )
+
+    app.add_api_route(
+        "/internal/aikimi-status",
+        aikimi_status.snapshot,
+        methods=["GET"],
+        dependencies=[Depends(require_aikimi_status_auth)],
+    )
 
     app.add_api_route("/internal/profile-startup", lambda: timer.startup_record, methods=["GET"])
 
@@ -990,3 +1010,8 @@ def setup_ui_api(app):
     import fastapi.staticfiles
 
     app.mount("/webui-assets", fastapi.staticfiles.StaticFiles(directory=os.path.join(paths_internal.modules_path, "web")), name="webui-assets")
+    app.mount(
+        "/aikimi-assets",
+        fastapi.staticfiles.StaticFiles(directory=os.path.join(script_path, "assets", "aikimi")),
+        name="aikimi-assets",
+    )

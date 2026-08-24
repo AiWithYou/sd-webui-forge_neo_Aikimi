@@ -229,6 +229,32 @@
         setH3Attribute(announcer, "role", stage === "error" ? "alert" : "status");
         setH3Attribute(announcer, "aria-live", stage === "error" ? "assertive" : "polite");
         setH3Text(announcer, `${label}: ${message}`);
+
+        if (!window.AikimiStatus) return;
+        if (["idle", "cancelled"].includes(stage)) {
+            window.AikimiStatus.clear("minimax-h3");
+            return;
+        }
+        const state = {
+            validation: "warning",
+            runtime: "updating",
+            prepare: "generating",
+            queued: "queued",
+            running: "generating",
+            reconnecting: "updating",
+            complete: "completed",
+            error: "error",
+            active: "generating",
+        }[stage];
+        if (!state) return;
+        const progressbar = progress.querySelector("[role='progressbar']");
+        const progressAttribute = progressbar?.getAttribute("aria-valuenow");
+        const progressNow = progressAttribute === null ? Number.NaN : Number(progressAttribute);
+        window.AikimiStatus.publish("minimax-h3", {
+            state,
+            progress: Number.isFinite(progressNow) ? progressNow / 100 : null,
+            errorDetails: ["validation", "error"].includes(stage) ? message : null,
+        });
     }
 
     function requestH3Initialization() {
@@ -371,12 +397,12 @@
 
     function syncH3DynamicState() {
         syncH3StudioChrome();
+        syncH3ProgressAnnouncement();
         if (!isH3StudioActive()) return;
         syncH3Mode();
         syncH3Aspect();
         syncH3PresetState();
         syncH3PromptCount();
-        syncH3ProgressAnnouncement();
         syncH3ControlLabels();
         syncH3Validation();
         requestH3Initialization();

@@ -1201,7 +1201,7 @@ def _build_ui():
 
                     with gr.Accordion("実行環境とモデル", open=False, elem_id="h3-runtime-setup"):
                         gr.Markdown(
-                            "Forge NeoはローカルのComfyUI H3 runtimeを使用し、外部URLに素材を送信しません。"
+                            "Aikimi NeoはローカルのComfyUI H3 runtimeを使用し、外部URLに素材を送信しません。"
                             "H3だけにComfy Kitchen INT8 attentionを適用します。"
                         )
                         runtime_profile = gr.Radio(

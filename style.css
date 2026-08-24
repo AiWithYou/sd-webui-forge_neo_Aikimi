@@ -2174,3 +2174,406 @@ button.neo-workflow-action:focus-visible {
         transform: none;
     }
 }
+
+/* ==== AIKIMI NEO BRAND AND STATUS ==== */
+
+#aikimi-brand-header {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    margin: 0.5rem 0.75rem 0.2rem;
+    padding: 0.55rem 0.8rem;
+    border: 1px solid color-mix(in srgb, var(--block-border-color) 76%, var(--primary-500) 24%);
+    border-radius: var(--block-radius);
+    background: color-mix(in srgb, var(--background-fill-primary, var(--body-background-fill)) 92%, var(--primary-500) 8%);
+    color: var(--body-text-color);
+}
+
+.aikimi-brand-header__mark {
+    display: grid;
+    width: 2rem;
+    height: 2rem;
+    place-items: center;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--primary-500) 16%, var(--background-fill-primary, var(--body-background-fill)));
+    color: var(--primary-500);
+    font-size: 1rem;
+}
+
+.aikimi-brand-header__copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.02rem;
+}
+
+.aikimi-brand-header__copy strong {
+    font-size: 0.96rem;
+    letter-spacing: 0.015em;
+}
+
+.aikimi-brand-header__copy span {
+    color: var(--body-text-color-subdued);
+    font-size: 0.68rem;
+}
+
+.aikimi-about {
+    max-width: 52rem;
+    padding: 1.1rem;
+    border: 1px solid var(--block-border-color);
+    border-radius: var(--block-radius);
+    background: color-mix(in srgb, var(--background-fill-primary, var(--body-background-fill)) 94%, var(--primary-500) 6%);
+    color: var(--body-text-color);
+}
+
+.aikimi-about__eyebrow {
+    margin: 0;
+    color: var(--primary-500);
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+}
+
+.aikimi-about h2 {
+    margin: 0.2rem 0 0;
+    font-size: 1.65rem;
+}
+
+.aikimi-about__lead {
+    margin: 0.1rem 0 1rem;
+    color: var(--body-text-color-subdued);
+    font-size: 0.9rem;
+}
+
+.aikimi-about dl {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin: 1rem 0 0;
+}
+
+.aikimi-about dl > div {
+    padding: 0.75rem;
+    border: 1px solid var(--block-border-color);
+    border-radius: calc(var(--block-radius) * 0.8);
+    background: var(--background-fill-primary, var(--body-background-fill));
+}
+
+.aikimi-about dt {
+    color: var(--primary-500);
+    font-size: 0.72rem;
+    font-weight: 750;
+}
+
+.aikimi-about dd {
+    margin: 0.25rem 0 0;
+    color: var(--body-text-color-subdued);
+    font-size: 0.72rem;
+    line-height: 1.5;
+}
+
+#aikimi-status {
+    --aikimi-accent: var(--primary-500);
+    --aikimi-character-size: clamp(120px, 11vw, 164px);
+    --aikimi-surface: color-mix(in srgb, var(--background-fill-primary, var(--body-background-fill)) 91%, var(--primary-500) 9%);
+    --aikimi-border: color-mix(in srgb, var(--block-border-color) 68%, var(--primary-500) 32%);
+    position: fixed;
+    z-index: 800;
+    right: max(0.8rem, env(safe-area-inset-right));
+    bottom: max(0.8rem, env(safe-area-inset-bottom));
+    width: min(22rem, calc(100vw - 1.6rem));
+    color: var(--body-text-color);
+    pointer-events: none;
+}
+
+#aikimi-status[hidden] {
+    display: none !important;
+}
+
+#aikimi-status[data-state="warning"] {
+    --aikimi-accent: #d99b2b;
+}
+
+#aikimi-status[data-state="error"],
+#aikimi-status[data-state="out_of_memory"] {
+    --aikimi-accent: #d35f6f;
+}
+
+#aikimi-status[data-state="completed"] {
+    --aikimi-accent: #65a98f;
+}
+
+.aikimi-status__disclosure {
+    position: relative;
+    pointer-events: none;
+}
+
+.aikimi-status__summary {
+    display: flex;
+    min-height: calc(var(--aikimi-character-size) + 0.2rem);
+    align-items: flex-end;
+    gap: 0.25rem;
+    margin-left: auto;
+    padding: 0.35rem 0.55rem 0.45rem 0.15rem;
+    overflow: hidden;
+    border: 1px solid var(--aikimi-border);
+    border-radius: calc(var(--block-radius) * 1.35);
+    background: var(--aikimi-surface);
+    box-shadow: 0 0.65rem 1.8rem color-mix(in srgb, #000 18%, transparent);
+    cursor: pointer;
+    list-style: none;
+    pointer-events: auto;
+    transition:
+        border-color 140ms ease,
+        box-shadow 140ms ease,
+        transform 100ms ease-out;
+}
+
+.aikimi-status__summary::-webkit-details-marker {
+    display: none;
+}
+
+.aikimi-status__summary:hover {
+    border-color: color-mix(in srgb, var(--aikimi-accent) 72%, var(--block-border-color));
+    box-shadow: 0 0.8rem 2rem color-mix(in srgb, #000 22%, transparent);
+}
+
+.aikimi-status__summary:active {
+    transform: translateY(1px);
+}
+
+.aikimi-status__summary:focus-visible {
+    outline: 2px solid var(--aikimi-accent);
+    outline-offset: 3px;
+}
+
+.aikimi-status__portrait-wrap {
+    display: grid;
+    width: var(--aikimi-character-size);
+    min-width: var(--aikimi-character-size);
+    height: var(--aikimi-character-size);
+    align-items: end;
+    justify-items: center;
+}
+
+.aikimi-status__portrait {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    object-position: center bottom;
+    filter: drop-shadow(0 0.35rem 0.4rem color-mix(in srgb, #000 17%, transparent));
+    transform-origin: center bottom;
+}
+
+#aikimi-status[data-state="loading_model"] .aikimi-status__portrait,
+#aikimi-status[data-state="generating"] .aikimi-status__portrait,
+#aikimi-status[data-state="updating"] .aikimi-status__portrait {
+    animation: aikimi-working 2.4s ease-in-out infinite;
+}
+
+.aikimi-status__summary-body {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    align-self: center;
+    gap: 0.25rem;
+    padding: 0.45rem 0.15rem 0.2rem 0;
+}
+
+.aikimi-status__eyebrow {
+    color: var(--aikimi-accent);
+    font-size: 0.61rem;
+    font-weight: 850;
+    letter-spacing: 0.12em;
+}
+
+.aikimi-status__message {
+    overflow-wrap: anywhere;
+    color: var(--body-text-color);
+    font-size: 0.82rem;
+    font-weight: 720;
+    line-height: 1.35;
+}
+
+.aikimi-status__compact-metrics {
+    overflow-wrap: anywhere;
+    color: var(--body-text-color-subdued);
+    font-size: 0.62rem;
+    line-height: 1.4;
+}
+
+.aikimi-status__progress {
+    display: block;
+    width: 100%;
+    height: 0.24rem;
+    overflow: hidden;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--block-border-color) 72%, transparent);
+}
+
+.aikimi-status__progress-value {
+    display: block;
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--aikimi-accent);
+    transition: width 180ms ease-out;
+}
+
+.aikimi-status__disclosure-hint {
+    align-self: flex-end;
+    color: var(--body-text-color-subdued);
+    font-size: 0.58rem;
+}
+
+.aikimi-status__disclosure-hint::after {
+    content: " ︿";
+}
+
+.aikimi-status__disclosure[open] .aikimi-status__disclosure-hint::after {
+    content: " ﹀";
+}
+
+.aikimi-status__details {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 0.55rem);
+    width: min(21rem, calc(100vw - 1.6rem));
+    max-height: min(68vh, 34rem);
+    padding: 0.85rem;
+    overflow: auto;
+    border: 1px solid var(--aikimi-border);
+    border-radius: var(--block-radius);
+    background: color-mix(in srgb, var(--background-fill-primary, var(--body-background-fill)) 96%, var(--primary-500) 4%);
+    box-shadow: 0 0.8rem 2.2rem color-mix(in srgb, #000 24%, transparent);
+    pointer-events: auto;
+}
+
+.aikimi-status__details-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--block-border-color);
+}
+
+.aikimi-status__details-heading strong {
+    font-size: 0.82rem;
+}
+
+.aikimi-status__details-heading span {
+    color: var(--body-text-color-subdued);
+    font-size: 0.62rem;
+}
+
+.aikimi-status__metrics {
+    display: grid;
+    gap: 0;
+    margin: 0.45rem 0 0;
+}
+
+.aikimi-status__metrics > div {
+    display: grid;
+    grid-template-columns: 5.3rem minmax(0, 1fr);
+    gap: 0.55rem;
+    padding: 0.38rem 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--block-border-color) 58%, transparent);
+}
+
+.aikimi-status__metrics > div:last-child {
+    border-bottom: 0;
+}
+
+.aikimi-status__metrics dt {
+    color: var(--body-text-color-subdued);
+    font-size: 0.64rem;
+}
+
+.aikimi-status__metrics dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: var(--body-text-color);
+    font-size: 0.66rem;
+    font-weight: 620;
+    line-height: 1.45;
+}
+
+@keyframes aikimi-working {
+    0%,
+    100% {
+        transform: translateY(0);
+        filter: drop-shadow(0 0.35rem 0.4rem color-mix(in srgb, #000 17%, transparent));
+    }
+    50% {
+        transform: translateY(-0.2rem);
+        filter: drop-shadow(0 0.45rem 0.65rem color-mix(in srgb, var(--aikimi-accent) 28%, transparent));
+    }
+}
+
+@media (max-width: 720px) {
+    .aikimi-about dl {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 640px) {
+    #aikimi-brand-header {
+        margin-inline: 0.4rem;
+    }
+
+    #aikimi-status {
+        --aikimi-character-size: 76px;
+        right: max(0.45rem, env(safe-area-inset-right));
+        bottom: calc(5.4rem + env(safe-area-inset-bottom));
+        width: min(15.5rem, calc(100vw - 0.9rem));
+    }
+
+    .aikimi-status__summary {
+        min-height: calc(var(--aikimi-character-size) + 0.1rem);
+        padding-block: 0.2rem;
+    }
+
+    .aikimi-status__summary-body {
+        gap: 0.15rem;
+        padding-block: 0.2rem;
+    }
+
+    .aikimi-status__message {
+        font-size: 0.72rem;
+    }
+
+    .aikimi-status__compact-metrics {
+        font-size: 0.55rem;
+    }
+
+    .aikimi-status__details {
+        width: min(20rem, calc(100vw - 0.9rem));
+        max-height: 58vh;
+    }
+}
+
+@media (max-height: 520px) {
+    #aikimi-status {
+        --aikimi-character-size: 68px;
+    }
+
+    .aikimi-status__details {
+        max-height: 52vh;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .aikimi-status__summary,
+    .aikimi-status__progress-value,
+    .aikimi-status__portrait {
+        animation: none !important;
+        transition: none !important;
+    }
+
+    .aikimi-status__summary:active {
+        transform: none;
+    }
+}
