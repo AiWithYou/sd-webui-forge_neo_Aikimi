@@ -25,6 +25,20 @@ from backend.operations import (
 from backend.quant_ops import ck
 from backend.utils import pad_to_patch_size
 
+
+def _fn(
+    x: torch.Tensor,
+    _norm: nn.Module,
+    y: torch.Tensor,
+    z: torch.Tensor,
+    *,
+    optimized: bool,
+) -> torch.Tensor:
+    if optimized:
+        return torch.addcmul(z, _norm(x), 1 + y)
+    return _norm(x) * (1 + y) + z
+
+
 # region DiT
 
 
@@ -228,36 +242,40 @@ class PatchEmbed(nn.Module):
 
 
 class FinalLayer(nn.Module):
-    def __init__(self, hidden_size: int, spatial_patch_size: int, temporal_patch_size: int, out_channels: int, adaln_lora_dim: int = 256):
+    def __init__(self, hidden_size: int, spatial_patch_size: int, temporal_patch_size: int, out_channels: int, adaln_lora_dim: int = 256, optimized: bool = False):
         super().__init__()
         self.layer_norm = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = nn.Linear(hidden_size, spatial_patch_size * spatial_patch_size * temporal_patch_size * out_channels, bias=False)
         self.hidden_size = hidden_size
         self.n_adaln_chunks = 2
         self.adaln_lora_dim = adaln_lora_dim
+        self.optimized = optimized
         self.adaln_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, adaln_lora_dim, bias=False),
             nn.Linear(adaln_lora_dim, self.n_adaln_chunks * hidden_size, bias=False),
         )
 
-    @staticmethod
-    def _fn(x: torch.Tensor, _norm: nn.Module, y: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
-        return _norm(x) * (1 + y) + z
-
     def forward(self, x_B_T_H_W_D: torch.Tensor, emb_B_T_D: torch.Tensor, adaln_lora_B_T_3D: Optional[torch.Tensor] = None):
         shift_B_T_D, scale_B_T_D = (self.adaln_modulation(emb_B_T_D) + adaln_lora_B_T_3D[:, :, : 2 * self.hidden_size]).chunk(2, dim=-1)
         shift_B_T_1_1_D, scale_B_T_1_1_D = rearrange(shift_B_T_D, "b t d -> b t 1 1 d"), rearrange(scale_B_T_D, "b t d -> b t 1 1 d")
 
-        x_B_T_H_W_D = self._fn(x_B_T_H_W_D, self.layer_norm, scale_B_T_1_1_D, shift_B_T_1_1_D)
+        x_B_T_H_W_D = _fn(
+            x_B_T_H_W_D,
+            self.layer_norm,
+            scale_B_T_1_1_D,
+            shift_B_T_1_1_D,
+            optimized=self.optimized,
+        )
         x_B_T_H_W_O = self.linear(x_B_T_H_W_D)
         return x_B_T_H_W_O
 
 
 class Block(nn.Module):
-    def __init__(self, x_dim: int, context_dim: int, num_heads: int, mlp_ratio: float = 4.0, adaln_lora_dim: int = 256):
+    def __init__(self, x_dim: int, context_dim: int, num_heads: int, mlp_ratio: float = 4.0, adaln_lora_dim: int = 256, optimized: bool = False):
         super().__init__()
         self.x_dim = x_dim
+        self.optimized = optimized
         self.layer_norm_self_attn = nn.LayerNorm(x_dim, elementwise_affine=False, eps=1e-6)
         self.self_attn = SelfCrossAttention(x_dim, None, num_heads, x_dim // num_heads)
 
@@ -282,10 +300,6 @@ class Block(nn.Module):
             nn.Linear(x_dim, adaln_lora_dim, bias=False),
             nn.Linear(adaln_lora_dim, 3 * x_dim, bias=False),
         )
-
-    @staticmethod
-    def _fn(x, _norm, y, z):
-        return _norm(x) * (1 + y) + z
 
     def forward(
         self,
@@ -320,11 +334,12 @@ class Block(nn.Module):
 
         B, T, H, W, D = x_B_T_H_W_D.shape
 
-        normalized_x_B_T_H_W_D = self._fn(
+        normalized_x_B_T_H_W_D = _fn(
             x_B_T_H_W_D,
             self.layer_norm_self_attn,
             scale_self_attn_B_T_1_1_D,
             shift_self_attn_B_T_1_1_D,
+            optimized=self.optimized,
         )
         result_B_T_H_W_D = rearrange(
             self.self_attn(
@@ -341,7 +356,13 @@ class Block(nn.Module):
         x_B_T_H_W_D = torch.addcmul(x_B_T_H_W_D, gate_self_attn_B_T_1_1_D.to(residual_dtype), result_B_T_H_W_D.to(residual_dtype))
 
         def _x_fn(_x_B_T_H_W_D: torch.Tensor, layer_norm_cross_attn: Callable, _scale_cross_attn_B_T_1_1_D: torch.Tensor, _shift_cross_attn_B_T_1_1_D: torch.Tensor, transformer_options: Optional[dict] = {}) -> torch.Tensor:
-            _normalized_x_B_T_H_W_D = self._fn(_x_B_T_H_W_D, layer_norm_cross_attn, _scale_cross_attn_B_T_1_1_D, _shift_cross_attn_B_T_1_1_D)
+            _normalized_x_B_T_H_W_D = _fn(
+                _x_B_T_H_W_D,
+                layer_norm_cross_attn,
+                _scale_cross_attn_B_T_1_1_D,
+                _shift_cross_attn_B_T_1_1_D,
+                optimized=self.optimized,
+            )
             _result_B_T_H_W_D = rearrange(
                 self.cross_attn(
                     rearrange(_normalized_x_B_T_H_W_D.to(compute_dtype), "b t h w d -> b (t h w) d"),
@@ -365,11 +386,12 @@ class Block(nn.Module):
         )
         x_B_T_H_W_D = torch.addcmul(x_B_T_H_W_D, gate_cross_attn_B_T_1_1_D.to(residual_dtype), result_B_T_H_W_D.to(residual_dtype))
 
-        normalized_x_B_T_H_W_D = self._fn(
+        normalized_x_B_T_H_W_D = _fn(
             x_B_T_H_W_D,
             self.layer_norm_mlp,
             scale_mlp_B_T_1_1_D,
             shift_mlp_B_T_1_1_D,
+            optimized=self.optimized,
         )
         result_B_T_H_W_D = self.mlp(normalized_x_B_T_H_W_D.to(compute_dtype))
         x_B_T_H_W_D = torch.addcmul(x_B_T_H_W_D, gate_mlp_B_T_1_1_D.to(residual_dtype), result_B_T_H_W_D.to(residual_dtype))
@@ -401,6 +423,7 @@ class Anima(nn.Module):
         self.out_channels = out_channels
         self.patch_spatial = patch_spatial
         self.patch_temporal = patch_temporal
+        self.optimize_anima38 = num_blocks == 52
 
         self.pos_embedder = VideoRopePosition3DEmb(
             head_dim=model_channels // num_heads,
@@ -430,6 +453,7 @@ class Anima(nn.Module):
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     adaln_lora_dim=adaln_lora_dim,
+                    optimized=self.optimize_anima38,
                 )
                 for _ in range(num_blocks)
             ]
@@ -441,6 +465,7 @@ class Anima(nn.Module):
             temporal_patch_size=self.patch_temporal,
             out_channels=self.out_channels,
             adaln_lora_dim=adaln_lora_dim,
+            optimized=self.optimize_anima38,
         )
 
         self.t_embedding_norm = nn.RMSNorm(model_channels, eps=1e-6)
@@ -450,7 +475,12 @@ class Anima(nn.Module):
             padding_mask = torch.zeros(x_B_C_T_H_W.shape[0], 1, x_B_C_T_H_W.shape[3], x_B_C_T_H_W.shape[4], dtype=x_B_C_T_H_W.dtype, device=x_B_C_T_H_W.device)
         else:
             padding_mask = functional.resize(padding_mask, list(x_B_C_T_H_W.shape[-2:]), interpolation=InterpolationMode.NEAREST)
-        x_B_C_T_H_W = torch.cat([x_B_C_T_H_W, padding_mask.unsqueeze(1).repeat(1, 1, x_B_C_T_H_W.shape[2], 1, 1)], dim=1)
+        padding_mask = padding_mask.unsqueeze(1)
+        if self.optimize_anima38:
+            padding_mask = padding_mask.expand(-1, -1, x_B_C_T_H_W.shape[2], -1, -1)
+        else:
+            padding_mask = padding_mask.repeat(1, 1, x_B_C_T_H_W.shape[2], 1, 1)
+        x_B_C_T_H_W = torch.cat([x_B_C_T_H_W, padding_mask], dim=1)
         x_B_T_H_W_D = self.x_embedder(x_B_C_T_H_W)
 
         return x_B_T_H_W_D, self.pos_embedder(x_B_T_H_W_D, device=x_B_C_T_H_W.device), None
@@ -624,13 +654,23 @@ class TransformerBlock(nn.Module):
         if self.use_self_attn:
             normed = self.norm_self_attn(x)
             attn_out = self.self_attn(normed, mask=target_attention_mask, position_embeddings=position_embeddings, position_embeddings_context=position_embeddings)
-            x = x + attn_out
+            if getattr(self, "_anima38_inplace", False):
+                x.add_(attn_out)
+            else:
+                x = x + attn_out
 
         normed = self.norm_cross_attn(x)
         attn_out = self.cross_attn(normed, mask=source_attention_mask, context=context, position_embeddings=position_embeddings, position_embeddings_context=position_embeddings_context)
-        x = x + attn_out
+        if getattr(self, "_anima38_inplace", False):
+            x.add_(attn_out)
+        else:
+            x = x + attn_out
 
-        x = x + self.mlp(self.norm_mlp(x))
+        mlp = self.mlp(self.norm_mlp(x))
+        if getattr(self, "_anima38_inplace", False):
+            x.add_(mlp)
+        else:
+            x = x + mlp
         return x
 
     def init_weights(self):

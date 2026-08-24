@@ -296,6 +296,11 @@ class Script:
 
         pass
 
+    def on_process_cleanup(self, p, *args):
+        """Called from ``process_images`` finally, including error paths."""
+
+        pass
+
     def before_component(self, component, **kwargs):
         """
         Called before a component is created.
@@ -901,6 +906,17 @@ class ScriptRunner:
                 script.postprocess(p, processed, *script_args)
             except Exception:
                 errors.report(f"Error running postprocess: {script.filename}", exc_info=True)
+
+    def on_process_cleanup(self, p):
+        for script in self.ordered_scripts("on_process_cleanup"):
+            try:
+                script_args = p.script_args[script.args_from : script.args_to]
+                script.on_process_cleanup(p, *script_args)
+            except Exception:
+                errors.report(
+                    f"Error running on_process_cleanup: {script.filename}",
+                    exc_info=True,
+                )
 
     def postprocess_batch(self, p, images, **kwargs):
         for script in self.ordered_scripts("postprocess_batch"):

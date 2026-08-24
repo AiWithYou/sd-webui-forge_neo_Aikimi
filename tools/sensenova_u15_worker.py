@@ -8,6 +8,8 @@ returns all GPU/CPU model memory to the OS when a job finishes.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import gc
 import hashlib
 import json
 import os
@@ -20,6 +22,14 @@ from typing import Any, Sequence
 import numpy as np
 import torch
 from PIL import Image, ImageOps
+
+_FORGE_ROOT = Path(__file__).resolve().parents[1]
+if str(_FORGE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_FORGE_ROOT))
+
+from modules_forge.sensenova_u15_streaming import (
+    BranchAwareSynchronousStreamingWrapper,
+)
 
 
 EVENT_PREFIX = "SENSENOVA_EVENT "
@@ -38,6 +48,14 @@ LOW_VRAM_MAX_REFERENCE_IMAGES = 2
 FINAL_MODEL_ID = "sensenova/SenseNova-U1.5-8B-MoT"
 CHECKPOINT_REVISION = "57de22ad4e2fc24c77f56dfe45dbb87a60dfebee"
 RUNTIME_REVISION = "e6dfd45762eb46f805067fe079c14bcb643ccccd"
+PROFILE_QUALITY = "quality"
+PROFILE_OFFICIAL_8STEP = "official_8step"
+OFFICIAL_LORA_REVISION = "e909f4636d119d65fe4cba8770c19daff2ac102e"
+OFFICIAL_LORA_EXPECTED_BYTES = 814_867_236
+OFFICIAL_LORA_SHA256 = (
+    "3ef32180cdf1e30a870a83f4f136e897ea50b7ee467f863d75633464ebb25708"
+)
+EXPECTED_LORA_TARGETS = 294
 
 
 def emit(stage: str, message: str, progress: float, **extra: Any) -> None:
@@ -257,6 +275,42 @@ def _validate_payload(payload: dict[str, Any]) -> None:
     checkpoint = Path(str(payload.get("checkpoint", "")))
     if checkpoint.suffix.lower() != ".safetensors" or not checkpoint.is_file():
         raise RuntimeError(f"INT8 ConvRot checkpoint does not exist: {checkpoint}")
+    if "generation_profile" not in payload:
+        raise RuntimeError("generation_profile is required.")
+    profile = str(payload["generation_profile"])
+    if profile not in {PROFILE_QUALITY, PROFILE_OFFICIAL_8STEP}:
+        raise RuntimeError(f"Unsupported generation profile: {profile}")
+    if profile == PROFILE_OFFICIAL_8STEP:
+        if mode != "text":
+            raise RuntimeError("The official 8-step LoRA only supports text-to-image.")
+        if int(payload.get("steps", 0)) != 8:
+            raise RuntimeError("The official 8-step profile requires exactly 8 steps.")
+        if float(payload.get("cfg_scale", -1)) != 1.0:
+            raise RuntimeError("The official 8-step profile requires CFG 1.0.")
+        if float(payload.get("timestep_shift", -1)) != 3.0:
+            raise RuntimeError("The official 8-step profile requires timestep shift 3.0.")
+        if payload.get("cfg_norm") != "none":
+            raise RuntimeError("The official 8-step profile requires cfg_norm none.")
+        if payload.get("lora_revision") != OFFICIAL_LORA_REVISION:
+            raise RuntimeError("The pinned official 8-step LoRA revision does not match.")
+        if payload.get("lora_sha256") != OFFICIAL_LORA_SHA256:
+            raise RuntimeError("The pinned official 8-step LoRA SHA-256 does not match.")
+        lora_path = Path(str(payload.get("lora_path", ""))).resolve()
+        if (
+            lora_path.suffix.lower() != ".safetensors"
+            or not lora_path.is_file()
+            or lora_path.stat().st_size != OFFICIAL_LORA_EXPECTED_BYTES
+        ):
+            raise RuntimeError(f"The official 8-step LoRA is missing or incomplete: {lora_path}")
+        if _sha256(lora_path) != OFFICIAL_LORA_SHA256:
+            raise RuntimeError("The official 8-step LoRA failed SHA-256 verification.")
+    elif any(
+        str(payload.get(field, "")).strip()
+        for field in ("lora_path", "lora_revision", "lora_sha256")
+    ):
+        raise RuntimeError(
+            "The quality profile must not receive hidden LoRA provenance fields."
+        )
     vram_mode = str(payload.get("vram_mode", "low"))
     if vram_mode not in {"low", "unrestricted", "full"}:
         raise RuntimeError(f"Unsupported VRAM mode: {vram_mode}")
@@ -305,9 +359,48 @@ def _load_runtime(payload: dict[str, Any]):
         raise RuntimeError("SenseNova runtime revision does not match the pinned loader.")
     sys.path.insert(0, os.fspath(source_path))
 
-    from SenseNova.examples.editing.inference import load_sensenova_model
+    from SenseNova.examples.editing import inference as inference_module
     from SenseNova.src import sensenova_u1
     from SenseNova.src.sensenova_u1.models.neo_unify.utils import smart_resize
+
+    streaming_stats: dict[str, Any] = {}
+
+    @contextmanager
+    def branch_aware_streaming_model(
+        model,
+        layers_attr: str,
+        target_device: torch.device,
+        prefetch_count: int,
+    ):
+        del prefetch_count
+        wrapper = BranchAwareSynchronousStreamingWrapper(
+            model,
+            layers_attr=layers_attr,
+            target_device=target_device,
+        )
+        try:
+            yield wrapper
+        finally:
+            telemetry = wrapper.telemetry
+            streaming_stats.update(
+                {
+                    "mode": "branch_aware_sync",
+                    "total_transfer_bytes": telemetry.total_transfer_bytes,
+                    "non_layer_transfer_bytes": telemetry.non_layer_transfer_bytes,
+                    "layer_transfer_bytes_by_group": telemetry.layer_transfer_bytes_by_group,
+                    "total_layer_forwards": telemetry.total_layer_forwards,
+                    "layer_forward_counts_by_group": telemetry.layer_forward_counts_by_group,
+                }
+            )
+            wrapper.teardown()
+            gc.collect()
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize(device=target_device)
+            if hasattr(torch._C, "_host_emptyCache"):
+                torch._C._host_emptyCache()
+
+    inference_module._streaming_model = branch_aware_streaming_model
+    load_sensenova_model = inference_module.load_sensenova_model
 
     attention_backend = str(payload.get("attn_backend", "auto"))
     dtype_name = str(payload.get("dtype", "bfloat16"))
@@ -323,6 +416,7 @@ def _load_runtime(payload: dict[str, Any]):
     if device.type != "cuda" or not torch.cuda.is_available():
         raise RuntimeError("SenseNova U1.5 INT8 ConvRot requires an NVIDIA CUDA GPU.")
 
+    profile = str(payload["generation_profile"])
     emit("loading", "Loading final INT8 ConvRot model and tokenizer", 0.08)
     started = time.monotonic()
     engine = load_sensenova_model(
@@ -355,6 +449,27 @@ def _load_runtime(payload: dict[str, Any]):
         raise RuntimeError(
             "The checkpoint is not the pruned final SenseNova U1.5 T2I/edit release."
         )
+    lora_info: dict[str, Any] | None = None
+    if profile == PROFILE_OFFICIAL_8STEP:
+        engine = engine.with_lora(str(Path(payload["lora_path"]).resolve()), 1.0)
+        lora = engine.lora
+        if (
+            lora is None
+            or lora.task != "t2i"
+            or lora.steps != 8
+            or lora.cfg != 1.0
+            or lora.cfg_norm != "none"
+            or lora.timestep_shift != 3.0
+            or len(lora.targets) != EXPECTED_LORA_TARGETS
+        ):
+            raise RuntimeError("The official 8-step LoRA metadata or target coverage is invalid.")
+        lora_info = {
+            "path": str(Path(lora.path).resolve()),
+            "revision": OFFICIAL_LORA_REVISION,
+            "sha256": OFFICIAL_LORA_SHA256,
+            "targets": len(lora.targets),
+            "strength": lora.strength,
+        }
     emit(
         "loaded",
         "Final INT8 ConvRot model is ready",
@@ -363,13 +478,27 @@ def _load_runtime(payload: dict[str, Any]):
         effective_attn_backend=sensenova_u1.effective_attn_backend(),
         loaded_int8_layers=loaded_layers,
         release_variant=engine.release_variant,
+        generation_profile=profile,
+        lora_targets=0 if lora_info is None else lora_info["targets"],
     )
-    return sensenova_u1, smart_resize, engine, prefetch_count, loaded_layers
+    return (
+        sensenova_u1,
+        smart_resize,
+        engine,
+        prefetch_count,
+        loaded_layers,
+        lora_info,
+        round(time.monotonic() - started, 3),
+        streaming_stats,
+    )
 
 
 def run_request(payload: dict[str, Any]) -> dict[str, Any]:
     _validate_payload(payload)
     started = time.monotonic()
+    device = torch.device(str(payload.get("device", "cuda")))
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
     source_revision_file = Path(payload["source_path"]).resolve() / ".sensenova_runtime_revision"
     source_revision = (
         source_revision_file.read_text(encoding="utf-8").strip()
@@ -377,7 +506,17 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
         else ""
     )
 
-    sensenova_u1, smart_resize, engine, prefetch_count, loaded_layers = _load_runtime(payload)
+    (
+        sensenova_u1,
+        smart_resize,
+        engine,
+        prefetch_count,
+        loaded_layers,
+        lora_info,
+        load_seconds,
+        streaming_stats,
+    ) = _load_runtime(payload)
+    preparation_started = time.monotonic()
     mode = str(payload["mode"])
     image_paths = [str(value) for value in payload.get("input_images", [])]
     images, original_sizes = _load_images(
@@ -395,6 +534,7 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
     width, height = _resolve_output_size(payload, original_sizes, smart_resize)
     steps = int(payload.get("steps", 50))
     prompt = str(payload["prompt"]).strip()
+    preparation_seconds = time.monotonic() - preparation_started
 
     emit("preparing", f"Preparing {width} x {height} generation", 0.31)
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -412,6 +552,7 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
 
     if full_model:
         engine.model.to(engine.device)
+    sampling_started = time.monotonic()
     try:
         with torch.inference_mode():
             if mode == "text":
@@ -450,17 +591,23 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
         if full_model:
             engine.model.to("cpu")
             torch.cuda.empty_cache()
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    sampling_seconds = time.monotonic() - sampling_started
 
     emit("decoding", "Saving generated image", 0.95)
+    output_started = time.monotonic()
     output_images = _to_pil(tensor)
     if len(output_images) != 1:
         raise RuntimeError(f"Expected one output image, received {len(output_images)}.")
     output_path = Path(payload["output_path"]).resolve()
     metadata_path = Path(payload["metadata_path"]).resolve()
     _atomic_png(output_path, output_images[0])
+    output_seconds = time.monotonic() - output_started
+    cuda_stats = torch.cuda.memory_stats(device) if device.type == "cuda" else {}
 
     metadata = {
-        "schema_version": 2,
+        "schema_version": 3,
         "model": str(payload["model_path"]),
         "checkpoint_revision": str(payload["checkpoint_revision"]),
         "mode": mode,
@@ -471,6 +618,8 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
         "release_variant": engine.release_variant,
         "pruned_lm_head": engine.pruned_lm_head,
         "loaded_int8_layers": loaded_layers,
+        "generation_profile": str(payload["generation_profile"]),
+        "official_8step_lora": lora_info,
         "sensenova_u1_version": getattr(sensenova_u1, "__version__", "unknown"),
         "torch_version": torch.__version__,
         "width": width,
@@ -499,6 +648,28 @@ def run_request(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "requested_input_max_pixels": payload.get("input_max_pixels", "auto"),
         "effective_input_max_pixels": effective_input_max_pixels,
+        "timings": {
+            "load_seconds": load_seconds,
+            "input_preparation_seconds": round(preparation_seconds, 3),
+            "sampling_seconds": round(sampling_seconds, 3),
+            "decode_save_seconds": round(output_seconds, 3),
+        },
+        "cuda_peak": {
+            "allocated_bytes": (
+                int(torch.cuda.max_memory_allocated(device))
+                if device.type == "cuda"
+                else 0
+            ),
+            "reserved_bytes": (
+                int(torch.cuda.max_memory_reserved(device))
+                if device.type == "cuda"
+                else 0
+            ),
+            "active_bytes": int(cuda_stats.get("active_bytes.all.peak", 0)),
+            "allocation_retries": int(cuda_stats.get("num_alloc_retries", 0)),
+            "ooms": int(cuda_stats.get("num_ooms", 0)),
+        },
+        "streaming": streaming_stats,
         "output_sha256": _sha256(output_path),
         "elapsed_seconds": round(time.monotonic() - started, 3),
     }

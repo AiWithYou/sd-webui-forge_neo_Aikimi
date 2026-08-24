@@ -13,7 +13,7 @@ from backend.patcher.clip import CLIP
 
 from .adapter import ProgressiveCrossAdapter
 from .files import ARCHITECTURE, adapters, qwen35_models
-from .qwen35 import Qwen35HybridModel
+from .qwen35 import CPUEmbedding, Qwen35HybridModel
 from .tokenizer import Qwen35Tokenizer
 
 logger = logging.getLogger(__name__)
@@ -23,12 +23,43 @@ ANIMA38_BLOCK_COUNT = 52
 
 class Anima3BRuntime:
     def __init__(self) -> None:
-        self._qwen_path: str | None = None
+        self._qwen_key: tuple[str, int, int] | None = None
         self._qwen: Qwen35HybridModel | None = None
         self._qwen_clip: CLIP | None = None
         self._tokenizer: Qwen35Tokenizer | None = None
-        self._adapter_key: tuple[str, int] | None = None
+        self._adapter_key: tuple[tuple[str, int, int], int] | None = None
         self._adapter: ProgressiveCrossAdapter | None = None
+
+    @staticmethod
+    def _file_fingerprint(path: str | None) -> tuple[str, int, int]:
+        if path is None:
+            return "<missing>", -1, -1
+        resolved = Path(path).resolve()
+        try:
+            stat = resolved.stat()
+        except OSError:
+            return str(resolved), -1, -1
+        return str(resolved), stat.st_size, stat.st_mtime_ns
+
+    def _conditioning_cache_signature(
+        self,
+        adapter_name: str,
+        strength: float,
+        negative_strength: float | None,
+    ) -> tuple:
+        qwen_choices = qwen35_models()
+        qwen_path = (
+            qwen_choices.get("qwen35_4b.safetensors")
+            or next(iter(qwen_choices.values()), None)
+        )
+        adapter_path = adapters().get(adapter_name)
+        return (
+            ARCHITECTURE,
+            self._file_fingerprint(qwen_path),
+            self._file_fingerprint(adapter_path),
+            float(strength),
+            None if negative_strength is None else float(negative_strength),
+        )
 
     @staticmethod
     def _require_anima(sd_model):
@@ -56,11 +87,27 @@ class Anima3BRuntime:
                 "qwen35_4b.safetensors was not found in models/text_encoder."
             )
         path = choices.get("qwen35_4b.safetensors") or next(iter(choices.values()))
-        if self._qwen_path == path and self._qwen is not None:
+        key = self._file_fingerprint(path)
+        if self._qwen_key == key and self._qwen is not None:
             return self._qwen, self._tokenizer, self._qwen_clip
+
+        if self._qwen_clip is not None:
+            if not memory_management.unload_model(self._qwen_clip.patcher):
+                self._qwen_clip.patcher.detach()
 
         logger.info("Loading Qwen3.5 4B from %s", path)
         state = load_file(path, device="cpu")
+        embedding = state.pop("embed_tokens.weight", None)
+        if (
+            embedding is None
+            or embedding.shape
+            != (Qwen35HybridModel.VOCAB_SIZE, Qwen35HybridModel.HIDDEN_SIZE)
+            or embedding.dtype != torch.bfloat16
+        ):
+            raise RuntimeError(
+                "Qwen3.5 embed_tokens.weight must be BF16 with shape "
+                f"({Qwen35HybridModel.VOCAB_SIZE}, {Qwen35HybridModel.HIDDEN_SIZE})."
+            )
         dtype = next(
             (
                 state[key].dtype
@@ -84,6 +131,7 @@ class Anima3BRuntime:
                     device=None,
                     operations=ForgeOperations,
                 )
+        model.embed_tokens = CPUEmbedding(embedding)
         incompatible = model.load_state_dict(state, strict=True, assign=True)
         if incompatible.missing_keys or incompatible.unexpected_keys:
             raise RuntimeError(
@@ -95,7 +143,7 @@ class Anima3BRuntime:
         model.eval()
         tokenizer = Qwen35Tokenizer()
         clip = CLIP(model_dict={"qwen35_4b": model}, tokenizer_dict={})
-        self._qwen_path = path
+        self._qwen_key = key
         self._qwen = model
         self._tokenizer = tokenizer
         self._qwen_clip = clip
@@ -110,7 +158,7 @@ class Anima3BRuntime:
             raise FileNotFoundError(
                 f"Adapter '{name}' is unavailable. Refresh Forge and select it again."
             )
-        key = (path, id(native_adapter))
+        key = (self._file_fingerprint(path), id(native_adapter))
         if key == self._adapter_key and self._adapter is not None:
             return self._adapter
 
@@ -132,13 +180,16 @@ class Anima3BRuntime:
     @staticmethod
     def _semantic_layers(model, tokenizer, line: str, device: torch.device):
         ids = tokenizer([line])["input_ids"]
-        token_ids = torch.tensor(ids, device=device, dtype=torch.long)
-        attention_mask = torch.ones_like(token_ids)
+        token_ids = torch.tensor(ids, device="cpu", dtype=torch.long)
+        embeds = model.embed_tokens(token_ids).to(device=device, non_blocking=True)
+        attention_mask = torch.ones(token_ids.shape, device=device, dtype=torch.long)
         output, intermediate = model(
-            token_ids,
-            attention_mask=attention_mask,
+            None,
+            attention_mask=None,
+            embeds=embeds,
             intermediate_output=list(LAYER_INDICES),
             dtype=torch.float32,
+            return_final_output=False,
         )
         del output
         if not isinstance(intermediate, dict):
@@ -219,24 +270,45 @@ class Anima3BRuntime:
         strength: float,
         negative_strength: float | None,
     ) -> None:
-        self._require_anima(processing.sd_model)
-        if hasattr(processing.sd_model, "_anima3b_original_get_learned_conditioning"):
+        model = processing.sd_model
+        self._require_anima(model)
+        if (
+            hasattr(processing, "_anima3b_patched_model")
+            or hasattr(processing, "_anima3b_original_cached_params")
+            or hasattr(model, "_anima3b_original_get_learned_conditioning")
+        ):
             self.restore(processing)
-        original = processing.sd_model.get_learned_conditioning
-        processing.sd_model._anima3b_original_get_learned_conditioning = original
+        cache_signature = self._conditioning_cache_signature(
+            adapter_name,
+            strength,
+            negative_strength,
+        )
+        original = model.get_learned_conditioning
+        model._anima3b_original_get_learned_conditioning = original
+        processing._anima3b_patched_model = model
 
         def patched(prompt):
             return self.encode(
-                processing.sd_model,
+                model,
                 prompt,
                 adapter_name,
                 strength,
                 negative_strength,
             )
 
-        processing.sd_model.get_learned_conditioning = patched
-        processing.cached_c = [None, None, None]
-        processing.cached_uc = [None, None, None]
+        model.get_learned_conditioning = patched
+        original_cached_params = processing.cached_params
+
+        def cached_params(required_prompts, steps, extra_network_data, hires_steps):
+            return original_cached_params(
+                required_prompts,
+                steps,
+                extra_network_data,
+                hires_steps,
+            ) + (("anima3b", cache_signature),)
+
+        processing._anima3b_original_cached_params = original_cached_params
+        processing.cached_params = cached_params
         processing.extra_generation_params.update(
             {
                 "Anima 3.8B adapter": Path(adapter_name).name,
@@ -250,11 +322,44 @@ class Anima3BRuntime:
             ] = float(negative_strength)
 
     @staticmethod
-    def restore(processing) -> None:
-        model = processing.sd_model
+    def restore_model(model) -> None:
         original = getattr(model, "_anima3b_original_get_learned_conditioning", None)
         if original is not None:
             model.get_learned_conditioning = original
             del model._anima3b_original_get_learned_conditioning
-            processing.cached_c = [None, None, None]
-            processing.cached_uc = [None, None, None]
+
+    @staticmethod
+    def restore(processing) -> None:
+        model = getattr(processing, "_anima3b_patched_model", None)
+        if model is not None:
+            Anima3BRuntime.restore_model(model)
+            del processing._anima3b_patched_model
+        else:
+            Anima3BRuntime.restore_model(processing.sd_model)
+        original_cached_params = getattr(
+            processing, "_anima3b_original_cached_params", None
+        )
+        if original_cached_params is not None:
+            processing.cached_params = original_cached_params
+            del processing._anima3b_original_cached_params
+
+    def offload_text_encoders(self, sd_model) -> int:
+        """Move prompt-only encoders to CPU before denoising.
+
+        The final conditioning tensor no longer references either encoder. This
+        is intentionally opt-in because a new prompt must load them again.
+        """
+        _native_engine, native_clip = self._require_anima(sd_model)
+        patchers = [native_clip.patcher]
+        if self._qwen_clip is not None:
+            patchers.append(self._qwen_clip.patcher)
+
+        released = 0
+        for patcher in patchers:
+            released += int(patcher.loaded_size())
+            if not memory_management.unload_model(patcher):
+                patcher.detach()
+        if self._adapter is not None:
+            self._adapter.to("cpu")
+        memory_management.soft_empty_cache()
+        return released

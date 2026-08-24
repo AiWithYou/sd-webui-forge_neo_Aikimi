@@ -117,21 +117,40 @@ class Anima38LiveApiTests(unittest.TestCase):
     def test_txt2img_uses_52_blocks_convrot_and_qwen35_adapter(self):
         width = int(os.environ.get("ANIMA_38B_LIVE_WIDTH", "512"))
         height = int(os.environ.get("ANIMA_38B_LIVE_HEIGHT", "512"))
+        prompt = os.environ.get(
+            "ANIMA_38B_LIVE_PROMPT",
+            (
+                "masterpiece, best quality, high quality, newest, "
+                "Description:\nA silver-haired astronomer stands on a moonlit "
+                "observatory terrace and points toward a bright comet."
+            ),
+        )
+        negative_prompt = os.environ.get(
+            "ANIMA_38B_LIVE_NEGATIVE_PROMPT",
+            "worst quality, low quality, blurry",
+        )
+        sampler_name = os.environ.get(
+            "ANIMA_38B_LIVE_SAMPLER", "Res Multistep"
+        )
+        scheduler = os.environ.get("ANIMA_38B_LIVE_SCHEDULER", "Beta")
+        offload_encoders = (
+            os.environ.get("ANIMA_38B_LIVE_OFFLOAD_ENCODERS", "0") == "1"
+        )
+        enable_adapter = os.environ.get("ANIMA_38B_LIVE_ENABLE_ADAPTER", "1") == "1"
+        distilled_cfg = float(
+            os.environ.get("ANIMA_38B_LIVE_DISTILLED_CFG", "3.0")
+        )
         response = post_json(
             "/sdapi/v1/txt2img",
             {
-                "prompt": (
-                    "masterpiece, best quality, high quality, newest, "
-                    "Description:\nA silver-haired astronomer stands on a moonlit "
-                    "observatory terrace and points toward a bright comet."
-                ),
-                "negative_prompt": "worst quality, low quality, blurry",
-                "seed": 20260823,
-                "sampler_name": "Res Multistep",
-                "scheduler": "Beta",
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "seed": int(os.environ.get("ANIMA_38B_LIVE_SEED", "20260823")),
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
                 "steps": int(os.environ.get("ANIMA_38B_LIVE_STEPS", "4")),
-                "cfg_scale": 7.0,
-                "distilled_cfg_scale": 3.0,
+                "cfg_scale": float(os.environ.get("ANIMA_38B_LIVE_CFG", "7.0")),
+                "distilled_cfg_scale": distilled_cfg,
                 "width": width,
                 "height": height,
                 "n_iter": 1,
@@ -149,7 +168,14 @@ class Anima38LiveApiTests(unittest.TestCase):
                 },
                 "alwayson_scripts": {
                     "Anima 3.8B": {
-                        "args": [True, ADAPTER.name, 1.0, False, 1.0]
+                        "args": [
+                            enable_adapter,
+                            ADAPTER.name,
+                            1.0,
+                            False,
+                            1.0,
+                            offload_encoders,
+                        ]
                     }
                 },
             },
@@ -164,10 +190,23 @@ class Anima38LiveApiTests(unittest.TestCase):
         self.assertGreater(sum(ImageStat.Stat(image).var) / 3.0, 1.0)
 
         info = str(response.get("info", ""))
-        self.assertIn("Anima 3.8B adapter", info)
-        self.assertIn("Sampler: Res Multistep", info)
-        self.assertIn("Schedule type: Beta", info)
-        self.assertIn("Shift: 3.0", info)
+        if enable_adapter:
+            self.assertIn("Anima 3.8B adapter", info)
+        else:
+            self.assertNotIn("Anima 3.8B adapter", info)
+        self.assertIn(f"Sampler: {sampler_name}", info)
+        self.assertIn(f"Schedule type: {scheduler}", info)
+        self.assertIn(f"Shift: {distilled_cfg}", info)
+        if offload_encoders and enable_adapter:
+            info_payload = json.loads(info)
+            extra = info_payload["extra_generation_params"]
+            self.assertTrue(extra["Anima 3.8B encoder offload"])
+            released = extra["Anima 3.8B encoder VRAM released"]
+            released_gib = float(released.split()[0])
+            if os.environ.get("ANIMA_38B_LIVE_REQUIRE_RELEASE", "0") == "1":
+                self.assertGreater(released_gib, 0.0)
+            else:
+                self.assertGreaterEqual(released_gib, 0.0)
         output_info = PngInfo()
         output_info.add_text("parameters", info)
         OUTPUT.parent.mkdir(parents=True, exist_ok=True)

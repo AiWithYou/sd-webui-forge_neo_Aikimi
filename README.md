@@ -138,9 +138,12 @@ Diffusion in Low Bits: Automatic
 Anima 3.8B (Qwen3.5): enabled
 Adapter strength: 1.0
 Use adapter on negative prompt: off
+Low VRAM encoder offload: off
 ```
 
-最初は`832x1216`前後の約1MP、`res_multistep + Beta`、28〜50 Steps、CFG 7〜8を基準にしてください。positive promptでは、品質tagの後に`Description:`を置いて自然文を続けます。adapterを無効にした場合やstrengthを`0.0`にした場合は、Qwen3-0.6Bによる通常のAnima conditioningへ戻ります。
+最初は`832x1216`前後の約1MP、`res_multistep + Beta`、28〜50 Steps、CFG 7〜8を基準にしてください。Qwen3.5のembedding tableはCPUへ保持し、必要tokenだけをGPUへ送ります。同じpromptでSeedだけを変える場合はconditioning cacheを再利用します。VRAMを優先する場合に限り、Low VRAM encoder offloadを有効にしてください。
+
+標準の`webui-user.bat`はRTX 3090向けに`--cuda-malloc`を有効化し、`cudaMallocAsync`でallocation stallと断片化を抑えます。`sd_forge_compile`の`max-autotune`と`reduce-overhead`はこのallocatorと併用できないため、将来そのCompile presetを使う場合は、起動引数から`--cuda-malloc`を外してどちらか一方を選んでください。
 
 ### SenseNova U1.5正式版のINT8 ConvRotを使う場合
 
@@ -156,8 +159,9 @@ download_sensenova_u15_int8.bat
 - Forge内のPyTorch、Transformers、Comfy Kitchenなど、専用loaderに必要な依存関係を検証
 - 約16.52 GiBの`SenseNova-U1.5-8B-MoT-pruned-int8_convrot.safetensors`を再開可能な方式で取得
 - ConvRot署名、17,734,813,848 bytesのサイズ、SHA-256を検証
+- 公式8-Step T2I LoRAを固定revisionから取得し、814,867,236 bytesのサイズ、294 target、SHA-256を検証
 
-完了後にForgeを起動し、`SenseNova U1.5`タブを開きます。既定値は`正式版 · INT8 ConvRot`、`24GB Safe · 2K出力優先`、2048²以下の出力、参照各512²、BF16計算、50 Steps、CFG 4.0です。
+完了後にForgeを起動し、`SenseNova U1.5`タブを開きます。テキスト生成の既定値は公式8-Step LoRA、8 Steps、CFG 1.0です。画像編集はQuality 50-Step、CFG 4.0へ自動的に切り替わります。どちらも`正式版 · INT8 ConvRot`、`24GB Safe · 2K出力優先`、BF16計算を維持します。
 
 このINT8 ConvRotは正式版SenseNova U1.5を基にしています。ただし、変換weightと専用loaderはコミュニティ管理であり、SenseNova公式配布のweightではありません。Studioは固定したcheckpointだけを受け付け、Preview、GGUF、BF16へ暗黙に切り替えません。
 
@@ -172,6 +176,8 @@ download_sensenova_u15_int8.bat
 - 24GB Safeでは2K出力を維持し、参照2枚を各512²へ縮小して、過大な参照入力をモデル読込前に拒否
 - 編集時に1枚目の比率を維持する約4MPの自動出力と、参照画像の縮小モードを独立して選択可能
 - 正式版を基にしたINT8 ConvRotを固定し、Previewとの混在を防止
+- 公式8-Step T2IとQuality 50-Stepを分離し、画像編集への高速LoRA誤適用を防止
+- decoder layerの理解分岐と生成分岐を識別し、各forwardで必要なweightだけをGPUへ転送
 - 生成前にruntime revision、Python依存、safetensorsのサイズ、ConvRot署名、完全性記録を検査
 - 生成時に通常のForgeモデルを退避し、キャンセル時は隔離workerを停止してメモリを解放
 - 完成PNGと生成条件JSONを`outputs/sensenova_u15`へ保存

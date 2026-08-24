@@ -2,9 +2,29 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 
 from .layers import HybridBlock, Qwen35RMSNorm, _precompute_freqs_cis
+
+
+class CPUEmbedding(nn.Module):
+    """Inference-only embedding table that stays outside the GPU patcher.
+
+    Only the rows needed by the current prompt are copied to the accelerator.
+    The plain tensor attribute is intentionally neither a parameter nor a
+    buffer, so ``Module.to()`` cannot move the 1.2 GiB table into VRAM.
+    """
+
+    def __init__(self, weight: torch.Tensor) -> None:
+        super().__init__()
+        if weight.device.type != "cpu":
+            raise ValueError("CPUEmbedding weight must be on CPU.")
+        object.__setattr__(self, "weight", weight.contiguous())
+        self.num_embeddings, self.embedding_dim = weight.shape
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return F.embedding(input_ids.to(device="cpu"), self.weight)
 
 
 class Qwen35HybridModel(nn.Module):
@@ -68,6 +88,7 @@ class Qwen35HybridModel(nn.Module):
         final_layer_norm_intermediate=True,
         dtype=None,
         embeds_info=None,
+        return_final_output=True,
         **kwargs,
     ):
         del num_tokens, final_layer_norm_intermediate, embeds_info, kwargs
@@ -104,15 +125,6 @@ class Qwen35HybridModel(nn.Module):
             )
             padding = padding.masked_fill(padding.to(torch.bool), mask_fill)
             attention_bias = causal + padding
-        elif sequence_length > 1:
-            mask_fill = torch.finfo(hidden_states.dtype).min / 4
-            attention_bias = torch.empty(
-                sequence_length,
-                sequence_length,
-                dtype=hidden_states.dtype,
-                device=hidden_states.device,
-            ).fill_(mask_fill).triu_(1)
-
         intermediate = None
         for index, layer in enumerate(self.layers):
             hidden_states = layer(
@@ -122,10 +134,11 @@ class Qwen35HybridModel(nn.Module):
                 linear_attention_mask=linear_attention_mask,
             )
             if isinstance(intermediate_output, int) and index == intermediate_output:
-                intermediate = hidden_states.clone()
+                intermediate = hidden_states
             elif isinstance(intermediate_output, list) and index in intermediate_output:
                 if intermediate is None:
                     intermediate = {}
-                intermediate[index] = hidden_states.clone()
+                intermediate[index] = hidden_states
 
-        return self.norm(hidden_states), intermediate
+        output = self.norm(hidden_states) if return_final_output else None
+        return output, intermediate

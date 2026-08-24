@@ -104,9 +104,53 @@ class SenseNovaStudioSourceTests(unittest.TestCase):
         self.assertIn("各約0.26MP · 比率保護", self.script)
         self.assertIn("元の入力1枚目を基準", self.bridge)
         self.assertIn("Uncapped streaming", self.script)
-        updates = self.studio._mode_updates(self.studio.MODE_EDIT, "2048x2048")
+        updates = self.studio._mode_updates(
+            self.studio.MODE_EDIT, "2048x2048", True
+        )
         self.assertEqual(updates[1]["value"], "auto")
         self.assertEqual(updates[3]["value"], str(512 * 512))
+        self.assertEqual(updates[5]["value"], self.studio.PROFILE_QUALITY)
+        self.assertEqual(updates[6]["value"], 50)
+        self.assertEqual(updates[7]["value"], 4.0)
+
+    def test_missing_official_lora_defaults_explicitly_to_quality(self):
+        updates = self.studio._mode_updates(
+            self.studio.MODE_TEXT, "2048x2048", False
+        )
+        self.assertEqual(updates[5]["value"], self.studio.PROFILE_QUALITY)
+        self.assertEqual(updates[6]["value"], 50)
+        self.assertEqual(updates[7]["value"], 4.0)
+        self.assertTrue(updates[6]["interactive"])
+        self.assertIn("LoRAが未準備", updates[4]["value"])
+
+        status = RuntimeStatus(
+            ready=True,
+            source_ready=True,
+            dependencies_ready=True,
+            checkpoint_ready=True,
+            source_path=ROOT / "runtime-final",
+            checkpoint_path=ROOT / "model.safetensors",
+            messages=("quality ready",),
+            lora_ready=False,
+        )
+        with mock.patch.object(self.studio, "inspect_runtime", return_value=status):
+            refreshed = self.studio._refresh_runtime("runtime", "checkpoint")
+        self.assertFalse(refreshed[1])
+        self.assertEqual(refreshed[2]["value"], self.studio.PROFILE_QUALITY)
+        self.assertEqual(refreshed[3]["value"], 50)
+        self.assertIn("Quality生成できます", refreshed[0])
+
+    def test_official_8step_and_quality_profiles_update_as_one_preset(self):
+        self.assertIn("公式8-Step · 高速T2I", self.script)
+        fast = self.studio._profile_updates(self.studio.PROFILE_OFFICIAL_8STEP)
+        self.assertEqual([update["value"] for update in fast], [8, 1.0, 3.0])
+        self.assertTrue(all(update["interactive"] is False for update in fast))
+
+        quality = self.studio._profile_updates(self.studio.PROFILE_QUALITY)
+        self.assertEqual(
+            [update["value"] for update in quality], [50, 4.0, 3.0]
+        )
+        self.assertTrue(all(update["interactive"] is True for update in quality))
 
     def test_responsive_and_accessible_ui_contracts(self):
         self.assertIn("@media (max-width: 640px)", self.style)
@@ -151,6 +195,23 @@ class SenseNovaStudioSourceTests(unittest.TestCase):
         self.assertIn("sn-advanced", element_ids)
         self.assertIn("sn-metadata-panel", element_ids)
         self.assertIn("sn-runtime-setup", element_ids)
+
+        profile = next(
+            component["props"]
+            for component in config["components"]
+            if component.get("props", {}).get("label") == "生成プロファイル"
+        )
+        self.assertEqual(profile["value"], self.studio.PROFILE_QUALITY)
+        refresh_dependencies = [
+            dependency
+            for dependency in config["dependencies"]
+            if isinstance(dependency.get("api_name"), str)
+            and dependency["api_name"].startswith("_refresh_runtime")
+        ]
+        self.assertEqual(len(refresh_dependencies), 2)
+        self.assertTrue(
+            all(len(dependency["outputs"]) == 6 for dependency in refresh_dependencies)
+        )
 
         prompt_id = next(
             component["id"]

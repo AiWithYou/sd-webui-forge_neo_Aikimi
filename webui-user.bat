@@ -5,7 +5,7 @@ cd /d "%~dp0"
 :: set GIT=
 set "VENV_DIR=%~dp0venv"
 
-set "COMMANDLINE_ARGS=--uv --bnb --api --port 7861 --theme dark --tiled-conv2d 128"
+set "COMMANDLINE_ARGS=--uv --bnb --api --port 7861 --theme dark --tiled-conv2d 128 --cuda-malloc"
 if exist "%~dp0forge_neo_model_paths.yaml" (
   set "COMMANDLINE_ARGS=%COMMANDLINE_ARGS% --forge-ref-comfy-yaml forge_neo_model_paths.yaml"
 ) else (

@@ -2,6 +2,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import torch
 from PIL import Image
@@ -102,6 +103,7 @@ class SenseNovaWorkerTests(unittest.TestCase):
                 {
                     "mode": "edit",
                     "prompt": "combine",
+                    "generation_profile": worker.PROFILE_QUALITY,
                     "input_images": [str(first), str(second)],
                     "quantization": "int8_convrot",
                     "model_path": worker.FINAL_MODEL_ID,
@@ -114,6 +116,50 @@ class SenseNovaWorkerTests(unittest.TestCase):
                 }
             )
 
+    def test_official_8step_payload_requires_fixed_asset_and_sampling_contract(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            checkpoint = root / "model.safetensors"
+            lora = root / "official-8step.safetensors"
+            checkpoint.write_bytes(b"checkpoint")
+            lora.write_bytes(b"lora")
+            payload = {
+                "mode": "text",
+                "prompt": "A lighthouse",
+                "input_images": [],
+                "quantization": "int8_convrot",
+                "model_path": worker.FINAL_MODEL_ID,
+                "checkpoint_revision": worker.CHECKPOINT_REVISION,
+                "checkpoint": str(checkpoint),
+                "width": 512,
+                "height": 512,
+                "generation_profile": worker.PROFILE_OFFICIAL_8STEP,
+                "cfg_norm": "none",
+                "steps": 8,
+                "cfg_scale": 1.0,
+                "timestep_shift": 3.0,
+                "lora_path": str(lora),
+                "lora_revision": worker.OFFICIAL_LORA_REVISION,
+                "lora_sha256": worker.OFFICIAL_LORA_SHA256,
+                "vram_mode": "low",
+            }
+            with (
+                mock.patch.object(
+                    worker, "OFFICIAL_LORA_EXPECTED_BYTES", lora.stat().st_size
+                ),
+                mock.patch.object(
+                    worker, "_sha256", return_value=worker.OFFICIAL_LORA_SHA256
+                ),
+            ):
+                worker._validate_payload(payload)
+                payload["cfg_norm"] = "global"
+                with self.assertRaisesRegex(RuntimeError, "cfg_norm none"):
+                    worker._validate_payload(payload)
+                payload["cfg_norm"] = "none"
+                payload["steps"] = 7
+                with self.assertRaisesRegex(RuntimeError, "exactly 8 steps"):
+                    worker._validate_payload(payload)
+
     def test_low_vram_payload_rejects_uncapped_four_megapixel_edit(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -124,6 +170,7 @@ class SenseNovaWorkerTests(unittest.TestCase):
             payload = {
                 "mode": "edit",
                 "prompt": "combine",
+                "generation_profile": worker.PROFILE_QUALITY,
                 "input_images": [str(image), str(image)],
                 "quantization": "int8_convrot",
                 "model_path": worker.FINAL_MODEL_ID,
@@ -162,6 +209,36 @@ class SenseNovaWorkerTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(RuntimeError, "at most 2 references"):
                 worker._validate_payload(payload)
+
+    def test_quality_profile_rejects_all_hidden_lora_provenance(self):
+        with tempfile.TemporaryDirectory() as temp:
+            checkpoint = Path(temp) / "model.safetensors"
+            checkpoint.write_bytes(b"test")
+            payload = {
+                "mode": "text",
+                "prompt": "A lighthouse",
+                "generation_profile": worker.PROFILE_QUALITY,
+                "input_images": [],
+                "quantization": "int8_convrot",
+                "model_path": worker.FINAL_MODEL_ID,
+                "checkpoint_revision": worker.CHECKPOINT_REVISION,
+                "checkpoint": str(checkpoint),
+                "width": 512,
+                "height": 512,
+                "vram_mode": "low",
+            }
+            missing_profile = dict(payload)
+            missing_profile.pop("generation_profile")
+            with self.assertRaisesRegex(RuntimeError, "generation_profile is required"):
+                worker._validate_payload(missing_profile)
+            worker._validate_payload(payload)
+            for field in ("lora_path", "lora_revision", "lora_sha256"):
+                payload[field] = "hidden"
+                with self.assertRaisesRegex(
+                    RuntimeError, "hidden LoRA provenance"
+                ):
+                    worker._validate_payload(payload)
+                payload[field] = ""
 
     def test_normalized_tensor_is_converted_to_rgb_image(self):
         batch = torch.tensor([[[[-1.0]], [[0.0]], [[1.0]]]])

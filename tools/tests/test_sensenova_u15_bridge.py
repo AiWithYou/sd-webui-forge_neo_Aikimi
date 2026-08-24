@@ -39,6 +39,7 @@ class SenseNovaRequestTests(unittest.TestCase):
         request = bridge.SenseNovaRequest(
             mode=bridge.MODE_EDIT,
             prompt="Use every image in order.",
+            generation_profile=bridge.PROFILE_QUALITY,
             input_images=images,
             width=None,
             height=None,
@@ -51,6 +52,7 @@ class SenseNovaRequestTests(unittest.TestCase):
                 bridge.SenseNovaRequest(
                     mode=bridge.MODE_EDIT,
                     prompt="Too many references",
+                    generation_profile=bridge.PROFILE_QUALITY,
                     input_images=images + (Image.new("RGB", (32, 32)),),
                 )
             )
@@ -63,6 +65,7 @@ class SenseNovaRequestTests(unittest.TestCase):
         unsafe = bridge.SenseNovaRequest(
             mode=bridge.MODE_EDIT,
             prompt="Combine two references",
+            generation_profile=bridge.PROFILE_QUALITY,
             input_images=images,
             width=1664,
             height=2496,
@@ -81,6 +84,7 @@ class SenseNovaRequestTests(unittest.TestCase):
         request = bridge.SenseNovaRequest(
             mode=bridge.MODE_EDIT,
             prompt="Combine two references",
+            generation_profile=bridge.PROFILE_QUALITY,
             input_images=(
                 Image.new("RGB", (32, 32)),
                 Image.new("RGB", (32, 32)),
@@ -106,6 +110,7 @@ class SenseNovaRequestTests(unittest.TestCase):
         two_k = bridge.SenseNovaRequest(
             mode=bridge.MODE_EDIT,
             prompt="2K edit",
+            generation_profile=bridge.PROFILE_QUALITY,
             input_images=request.input_images,
             width=2048,
             height=2048,
@@ -116,6 +121,7 @@ class SenseNovaRequestTests(unittest.TestCase):
         request = bridge.SenseNovaRequest(
             mode=bridge.MODE_TEXT,
             prompt="A lighthouse",
+            generation_profile=bridge.PROFILE_QUALITY,
             input_images=(Image.new("RGB", (32, 32)),),
         )
         with self.assertRaisesRegex(bridge.SenseNovaBridgeError, "画像編集"):
@@ -127,6 +133,7 @@ class SenseNovaRequestTests(unittest.TestCase):
             request = bridge.SenseNovaRequest(
                 mode=bridge.MODE_TEXT,
                 prompt="A lighthouse",
+                generation_profile=bridge.PROFILE_QUALITY,
                 checkpoint=str(root / "model.safetensors"),
             )
             payload = bridge._request_payload(
@@ -140,11 +147,55 @@ class SenseNovaRequestTests(unittest.TestCase):
             payload["checkpoint_revision"], bridge.CHECKPOINT_REVISION
         )
         self.assertEqual(payload["quantization"], bridge.QUANT_INT8_CONVROT)
+        self.assertEqual(payload["generation_profile"], bridge.PROFILE_QUALITY)
+        self.assertEqual(payload["lora_path"], "")
+
+    def test_official_8step_profile_is_fixed_to_the_verified_t2i_preset(self):
+        request = bridge.SenseNovaRequest(
+            mode=bridge.MODE_TEXT,
+            prompt="A lighthouse",
+            generation_profile=bridge.PROFILE_OFFICIAL_8STEP,
+            steps=8,
+            cfg_scale=1.0,
+            timestep_shift=3.0,
+        )
+        with mock.patch.object(bridge, "_official_lora_is_ready", return_value=True):
+            bridge.validate_request(request)
+
+        payload = bridge._request_payload(
+            request,
+            input_paths=[],
+            output_path=Path("output.png"),
+            metadata_path=Path("output.json"),
+        )
+        self.assertEqual(
+            payload["lora_path"], str(bridge.DEFAULT_LORA_PATH.resolve())
+        )
+        self.assertEqual(payload["lora_revision"], bridge.OFFICIAL_LORA_REVISION)
+        self.assertEqual(payload["lora_sha256"], bridge.OFFICIAL_LORA_SHA256)
+
+        for updates, message in (
+            ({"mode": bridge.MODE_EDIT}, "テキスト生成専用"),
+            ({"steps": 7}, "Steps 8"),
+            ({"cfg_scale": 4.0}, "CFG 1.0"),
+            ({"timestep_shift": 2.0}, "Shift 3.0"),
+        ):
+            invalid = bridge.SenseNovaRequest(
+                **{**request.__dict__, **updates}
+            )
+            with (
+                mock.patch.object(
+                    bridge, "_official_lora_is_ready", return_value=True
+                ),
+                self.assertRaisesRegex(bridge.SenseNovaBridgeError, message),
+            ):
+                bridge.validate_request(invalid)
 
     def test_convrot_requires_safetensors_extension(self):
         request = bridge.SenseNovaRequest(
             mode=bridge.MODE_TEXT,
             prompt="A lighthouse",
+            generation_profile=bridge.PROFILE_QUALITY,
             checkpoint="weights.gguf",
         )
         with self.assertRaisesRegex(bridge.SenseNovaBridgeError, r"\.safetensors"):
@@ -154,6 +205,7 @@ class SenseNovaRequestTests(unittest.TestCase):
         request = bridge.SenseNovaRequest(
             mode=bridge.MODE_TEXT,
             prompt="A lighthouse",
+            generation_profile=bridge.PROFILE_QUALITY,
             model_path="sensenova/SenseNova-U1.5-8B-MoT-Preview",
         )
         with self.assertRaisesRegex(bridge.SenseNovaBridgeError, "正式版"):
@@ -282,6 +334,7 @@ print('SENSENOVA_EVENT ' + json.dumps({"stage": "complete", "message": "fake don
             request = bridge.SenseNovaRequest(
                 mode=bridge.MODE_EDIT,
                 prompt="Combine in order",
+                generation_profile=bridge.PROFILE_QUALITY,
                 quantization=bridge.QUANT_INT8_CONVROT,
                 checkpoint="weights.safetensors",
                 input_images=(
@@ -344,6 +397,7 @@ time.sleep(60)
             request = bridge.SenseNovaRequest(
                 mode=bridge.MODE_TEXT,
                 prompt="A lighthouse",
+                generation_profile=bridge.PROFILE_QUALITY,
                 quantization=bridge.QUANT_INT8_CONVROT,
                 checkpoint="weights.safetensors",
                 width=1024,

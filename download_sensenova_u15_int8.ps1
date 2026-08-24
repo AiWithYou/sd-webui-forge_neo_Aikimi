@@ -32,6 +32,14 @@ $ModelUrl = "https://huggingface.co/$ModelRepository/resolve/$ModelRevision/$Mod
 $ModelPath = Join-Path $PSScriptRoot "models\SenseNova-U1\$ModelFileName"
 $ModelBytes = [Int64]17734813848
 $ModelSha256 = "cf6ed9ee3be516612b7fe083edfc7c9dd5d059cc759e300d2cf1f2726c0d250e"
+$LoraRepository = "sensenova/SenseNova-U1.5-8B-MoT-LoRAs"
+$LoraRevision = "e909f4636d119d65fe4cba8770c19daff2ac102e"
+$LoraFileName = "SenseNova-U1.5-8B-MoT-LoRA-8step.safetensors"
+$LoraUrl = "https://huggingface.co/$LoraRepository/resolve/$LoraRevision/$LoraFileName"
+$LoraPath = Join-Path $PSScriptRoot "models\SenseNova-U1\$LoraFileName"
+$LoraBytes = [Int64]814867236
+$LoraSha256 = "3ef32180cdf1e30a870a83f4f136e897ea50b7ee467f863d75633464ebb25708"
+$LoraTargetCount = 294
 $ParallelDownloads = 16
 
 function Format-Bytes {
@@ -186,6 +194,95 @@ function Assert-ModelFile {
     if ($actualSha256 -ne $ModelSha256) {
         throw "SHA-256 mismatch for $Path. Expected $ModelSha256, got $actualSha256."
     }
+}
+
+function Assert-Official8StepLoraHeader {
+    param([string]$Path)
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $header = New-Object byte[] 8
+        if ($stream.Read($header, 0, $header.Length) -ne $header.Length) {
+            throw "Cannot read the official 8-step LoRA header length: $Path"
+        }
+        $headerLength = [BitConverter]::ToUInt64($header, 0)
+        if ($headerLength -lt 3 -or $headerLength -gt 256MB) {
+            throw "Invalid official 8-step LoRA header length: $headerLength"
+        }
+        $metadata = New-Object byte[] ([Int32]$headerLength)
+        $offset = 0
+        while ($offset -lt $metadata.Length) {
+            $read = $stream.Read($metadata, $offset, $metadata.Length - $offset)
+            if ($read -le 0) {
+                throw "Cannot read the complete official 8-step LoRA header: $Path"
+            }
+            $offset += $read
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+
+    $metadataText = [System.Text.Encoding]::UTF8.GetString($metadata)
+    if (-not $metadataText.Contains('"tensor_kind":"neo_hf_lora"')) {
+        throw "The official 8-step LoRA tensor_kind marker is missing: $Path"
+    }
+    $downCount = [regex]::Matches($metadataText, '\.lora_down\.weight"').Count
+    $upCount = [regex]::Matches($metadataText, '\.lora_up\.weight"').Count
+    $alphaCount = [regex]::Matches($metadataText, '\.alpha"').Count
+    if ($downCount -ne $LoraTargetCount -or $upCount -ne $LoraTargetCount -or $alphaCount -ne $LoraTargetCount) {
+        throw "Official 8-step LoRA target coverage mismatch: down=$downCount up=$upCount alpha=$alphaCount"
+    }
+}
+
+function Assert-Official8StepLora {
+    param([string]$Path)
+
+    $actualBytes = (Get-Item -LiteralPath $Path).Length
+    if ($actualBytes -ne $LoraBytes) {
+        throw "Official 8-step LoRA size mismatch. Expected $LoraBytes bytes, got $actualBytes bytes."
+    }
+    Assert-Official8StepLoraHeader -Path $Path
+    Write-Host "Verifying official 8-step LoRA SHA-256..."
+    $actualSha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualSha256 -ne $LoraSha256) {
+        throw "Official 8-step LoRA SHA-256 mismatch. Expected $LoraSha256, got $actualSha256."
+    }
+}
+
+function Install-Official8StepLora {
+    $targetDirectory = Split-Path -Parent $LoraPath
+    New-RequiredDirectory $targetDirectory
+
+    if (Test-Path -LiteralPath $LoraPath -PathType Leaf) {
+        Assert-Official8StepLora -Path $LoraPath
+        [System.IO.File]::WriteAllText("$LoraPath.sha256", "$LoraSha256  $LoraFileName`n", $Utf8NoBom)
+        Write-Host "Existing official 8-step T2I LoRA is valid. Skipping download."
+        return
+    }
+
+    $curlPath = (Get-Command curl.exe -ErrorAction Stop).Source
+    $partialPath = "$LoraPath.part"
+    Write-Host "Downloading the official SenseNova U1.5 8-step T2I LoRA."
+    $partialBytes = if (Test-Path -LiteralPath $partialPath -PathType Leaf) {
+        (Get-Item -LiteralPath $partialPath).Length
+    }
+    else {
+        [Int64]0
+    }
+    if ($partialBytes -gt $LoraBytes) {
+        throw "Official 8-step LoRA partial file is larger than expected: $partialPath"
+    }
+    if ($partialBytes -lt $LoraBytes) {
+        & $curlPath --location --fail --continue-at - --retry 5 --retry-delay 5 --retry-all-errors --output $partialPath $LoraUrl
+        if ($LASTEXITCODE -ne 0) {
+            throw "Official 8-step LoRA download failed. Run this script again to resume."
+        }
+    }
+    Assert-Official8StepLora -Path $partialPath
+    Move-Item -LiteralPath $partialPath -Destination $LoraPath
+    [System.IO.File]::WriteAllText("$LoraPath.sha256", "$LoraSha256  $LoraFileName`n", $Utf8NoBom)
+    Write-Host "Official 8-step T2I LoRA is ready."
 }
 
 function Download-ConvRotChunks {
@@ -442,6 +539,7 @@ if (-not $ModelOnly) {
 }
 if (-not $RuntimeOnly) {
     Install-ConvRotModel
+    Install-Official8StepLora
 }
 
 Write-Host ""

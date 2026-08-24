@@ -38,6 +38,21 @@ class SenseNovaDownloadScriptTests(unittest.TestCase):
         self.assertIn('$_.path -like "SenseNova-U1.5-8B-MoT/*"', self.script)
         self.assertIn("comfy_kitchen", self.script)
 
+    def test_official_8step_lora_is_pinned_and_integrity_checked(self):
+        self.assertIn(
+            'LoraRevision = "e909f4636d119d65fe4cba8770c19daff2ac102e"',
+            self.script,
+        )
+        self.assertIn("LoraBytes = [Int64]814867236", self.script)
+        self.assertIn(
+            'LoraSha256 = "3ef32180cdf1e30a870a83f4f136e897ea50b7ee467f863d75633464ebb25708"',
+            self.script,
+        )
+        self.assertIn("LoraTargetCount = 294", self.script)
+        self.assertIn("Assert-Official8StepLoraHeader", self.script)
+        self.assertIn('Contains(\'"tensor_kind":"neo_hf_lora"\')', self.script)
+        self.assertIn("Install-Official8StepLora", self.script)
+
     def test_download_is_resumable_and_batch_calls_the_script(self):
         self.assertIn("--continue-at -", self.script)
         self.assertIn("--retry-all-errors", self.script)

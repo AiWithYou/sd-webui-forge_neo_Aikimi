@@ -9,6 +9,9 @@ from modules_forge.sensenova_u15_bridge import (
     DEFAULT_CHECKPOINT_PATH,
     DEFAULT_SOURCE_PATH,
     MODE_EDIT,
+    MODE_TEXT,
+    PROFILE_OFFICIAL_8STEP,
+    PROFILE_QUALITY,
     QUANT_INT8_CONVROT,
     SenseNovaRequest,
     inspect_runtime,
@@ -52,6 +55,7 @@ class SenseNovaU15LiveTest(unittest.TestCase):
                 "Use the centered blue circle from the first image as the main subject. "
                 "Apply the warm red color palette from the second image while preserving a clean simple background."
             ),
+            generation_profile=PROFILE_QUALITY,
             quantization=QUANT_INT8_CONVROT,
             checkpoint=str(DEFAULT_CHECKPOINT_PATH),
             source_path=str(DEFAULT_SOURCE_PATH),
@@ -93,7 +97,7 @@ class SenseNovaU15LiveTest(unittest.TestCase):
         )
         self.assertEqual(complete[0]["metadata"]["release_variant"], "final")
         self.assertEqual(complete[0]["metadata"]["loaded_int8_layers"], 588)
-        self.assertEqual(complete[0]["metadata"]["schema_version"], 2)
+        self.assertEqual(complete[0]["metadata"]["schema_version"], 3)
         return complete[0]
 
     def test_convrot_two_image_edit_generates_nonuniform_png(self):
@@ -137,6 +141,52 @@ class SenseNovaU15LiveTest(unittest.TestCase):
             ],
         )
         self.assertEqual(metadata["input_preprocessing"], "aspect_fit_edge_pad_32")
+
+    def test_official_8step_t2i_generates_nonuniform_png(self):
+        status = inspect_runtime(DEFAULT_SOURCE_PATH, checkpoint=DEFAULT_CHECKPOINT_PATH)
+        self.assertTrue(status.ready, " / ".join(status.messages))
+        self.assertTrue(status.lora_ready, " / ".join(status.messages))
+        request = SenseNovaRequest(
+            mode=MODE_TEXT,
+            prompt=(
+                "A quiet observatory on a snowy mountain at blue hour, one "
+                "brass telescope pointing toward a bright comet, cinematic light."
+            ),
+            quantization=QUANT_INT8_CONVROT,
+            checkpoint=str(DEFAULT_CHECKPOINT_PATH),
+            width=512,
+            height=512,
+            generation_profile=PROFILE_OFFICIAL_8STEP,
+            steps=8,
+            cfg_scale=1.0,
+            timestep_shift=3.0,
+            seed=20260824,
+            vram_mode="low",
+            attn_backend="sdpa",
+            dtype="bfloat16",
+        )
+        updates = list(
+            run_generation(
+                request,
+                output_directory=ROOT / "outputs" / "sensenova_u15_live_smoke",
+                cache_directory=ROOT / "cache" / "sensenova_u15_live_smoke",
+                log_directory=ROOT / "logs" / "sensenova_u15_live_smoke",
+            )
+        )
+        complete = [update for update in updates if update["stage"] == "complete"]
+        self.assertEqual(len(complete), 1)
+        output_path = Path(complete[0]["path"])
+        with Image.open(output_path) as opened:
+            image = opened.convert("RGB")
+            values = np.asarray(image, dtype=np.float32)
+        self.assertEqual(image.size, (512, 512))
+        self.assertGreater(float(values.var()), 1.0)
+        metadata = complete[0]["metadata"]
+        self.assertEqual(metadata["generation_profile"], PROFILE_OFFICIAL_8STEP)
+        self.assertEqual(metadata["steps"], 8)
+        self.assertEqual(metadata["cfg_scale"], 1.0)
+        self.assertEqual(metadata["official_8step_lora"]["targets"], 294)
+        self.assertEqual(metadata["cuda_peak"]["ooms"], 0)
 
 
 if __name__ == "__main__":

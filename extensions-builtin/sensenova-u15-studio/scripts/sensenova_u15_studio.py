@@ -15,6 +15,8 @@ from modules_forge.sensenova_u15_bridge import (
     MAX_REFERENCE_IMAGES,
     MODE_EDIT,
     MODE_TEXT,
+    PROFILE_OFFICIAL_8STEP,
+    PROFILE_QUALITY,
     QUANT_INT8_CONVROT,
     SenseNovaBridgeError,
     SenseNovaGenerationCancelled,
@@ -133,7 +135,7 @@ def _select_reference(evt: gr.SelectData = None) -> int:
     return int(evt.index) if evt is not None else -1
 
 
-def _mode_updates(mode: str, current_resolution: str):
+def _mode_updates(mode: str, current_resolution: str, fast_available: bool):
     choices = resolution_choices(mode)
     values = {value for _, value in choices}
     if mode == MODE_EDIT:
@@ -144,6 +146,9 @@ def _mode_updates(mode: str, current_resolution: str):
             if current_resolution in values and current_resolution != "auto"
             else "2048x2048"
         )
+    text_profile = (
+        PROFILE_OFFICIAL_8STEP if fast_available else PROFILE_QUALITY
+    )
     return (
         gr.update(visible=mode == MODE_EDIT),
         gr.update(choices=choices, value=selected),
@@ -156,21 +161,71 @@ def _mode_updates(mode: str, current_resolution: str):
             value=(
                 f'<div class="sn-mode-note"><b>MULTI-IMAGE EDIT</b><span>モデル上限は{MAX_REFERENCE_IMAGES}枚。RTX 3090では2K出力を維持し、参照2枚を各約0.26MPに抑えながら被写体の縦横比を保ちます。</span></div>'
                 if mode == MODE_EDIT
-                else '<div class="sn-mode-note"><b>TEXT TO IMAGE</b><span>参照画像を使わず、公式解像度バケットから生成します。</span></div>'
+                else (
+                    '<div class="sn-mode-note"><b>TEXT TO IMAGE</b><span>参照画像を使わず、公式8-Step高速プリセットまたは50-Step品質プリセットで生成します。</span></div>'
+                    if fast_available
+                    else '<div class="sn-mode-note"><b>TEXT TO IMAGE</b><span>公式8-Step LoRAが未準備のため、Quality 50-Stepを選択しています。</span></div>'
+                )
             )
         ),
+        gr.update(
+            visible=mode == MODE_TEXT,
+            value=(
+                text_profile if mode == MODE_TEXT else PROFILE_QUALITY
+            ),
+        ),
+        gr.update(
+            value=8 if mode == MODE_TEXT and fast_available else 50,
+            interactive=mode != MODE_TEXT or not fast_available,
+        ),
+        gr.update(
+            value=1.0 if mode == MODE_TEXT and fast_available else 4.0,
+            interactive=mode != MODE_TEXT or not fast_available,
+        ),
+        gr.update(
+            value=3.0,
+            interactive=mode != MODE_TEXT or not fast_available,
+        ),
     )
+
+
+def _profile_updates(profile: str):
+    if profile == PROFILE_OFFICIAL_8STEP:
+        return (
+            gr.update(value=8, interactive=False),
+            gr.update(value=1.0, interactive=False),
+            gr.update(value=3.0, interactive=False),
+        )
+    if profile == PROFILE_QUALITY:
+        return (
+            gr.update(value=50, interactive=True),
+            gr.update(value=4.0, interactive=True),
+            gr.update(value=3.0, interactive=True),
+        )
+    raise SenseNovaBridgeError(f"未対応の生成プロファイルです: {profile!r}")
 
 
 def _refresh_runtime(source_path: str, checkpoint_path: str):
     try:
         status = inspect_runtime(source_path, checkpoint=checkpoint_path)
-        return runtime_status_html(status)
+        profile = (
+            PROFILE_OFFICIAL_8STEP if status.lora_ready else PROFILE_QUALITY
+        )
+        steps, cfg, shift = _profile_updates(profile)
+        return (
+            runtime_status_html(status),
+            status.lora_ready,
+            gr.update(value=profile),
+            steps,
+            cfg,
+            shift,
+        )
     except (OSError, ValueError, SenseNovaBridgeError) as exc:
+        steps, cfg, shift = _profile_updates(PROFILE_QUALITY)
         return (
             '<section class="sn-runtime sn-runtime-setup" role="alert">'
             f"<strong>準備状況を確認できません</strong><p>{html.escape(str(exc))}</p></section>"
-        )
+        ), False, gr.update(value=PROFILE_QUALITY), steps, cfg, shift
 
 
 def _request_from_ui(
@@ -183,6 +238,7 @@ def _request_from_ui(
     source_path: str,
     resolution: str,
     input_max_pixels: str,
+    generation_profile: str,
     steps: int,
     cfg_scale: float,
     img_cfg_scale: float,
@@ -208,6 +264,7 @@ def _request_from_ui(
         height=height,
         target_pixels=2048 * 2048,
         input_max_pixels=input_max_pixels,
+        generation_profile=generation_profile,
         steps=int(steps),
         cfg_scale=float(cfg_scale),
         img_cfg_scale=float(img_cfg_scale),
@@ -232,6 +289,7 @@ def _summary_from_ui(
     source_path,
     resolution,
     input_max_pixels,
+    generation_profile,
     steps,
     cfg_scale,
     img_cfg_scale,
@@ -252,6 +310,7 @@ def _summary_from_ui(
             source_path,
             resolution,
             input_max_pixels,
+            generation_profile,
             steps,
             cfg_scale,
             img_cfg_scale,
@@ -287,6 +346,7 @@ def _generate(
     source_path,
     resolution,
     input_max_pixels,
+    generation_profile,
     steps,
     cfg_scale,
     img_cfg_scale,
@@ -318,6 +378,7 @@ def _generate(
             source_path,
             resolution,
             input_max_pixels,
+            generation_profile,
             steps,
             cfg_scale,
             img_cfg_scale,
@@ -386,7 +447,18 @@ def _cancel(job_id: str):
 
 def _build_ui():
     initial_status = inspect_runtime(DEFAULT_SOURCE_PATH, checkpoint=DEFAULT_CHECKPOINT_PATH)
-    initial_request = SenseNovaRequest(mode=MODE_TEXT, prompt="")
+    initial_profile = (
+        PROFILE_OFFICIAL_8STEP if initial_status.lora_ready else PROFILE_QUALITY
+    )
+    initial_steps = 8 if initial_status.lora_ready else 50
+    initial_cfg = 1.0 if initial_status.lora_ready else 4.0
+    initial_request = SenseNovaRequest(
+        mode=MODE_TEXT,
+        prompt="",
+        generation_profile=initial_profile,
+        steps=initial_steps,
+        cfg_scale=initial_cfg,
+    )
 
     with gr.Blocks(analytics_enabled=False) as interface:
         with gr.Column(elem_id="sensenova-u15-studio", elem_classes=["sn-shell"]):
@@ -404,6 +476,7 @@ def _build_ui():
             )
             quantization = gr.State(QUANT_INT8_CONVROT)
             job_id = gr.State("")
+            lora_ready = gr.State(initial_status.lora_ready)
 
             with gr.Row(elem_classes=["sn-main-grid"]):
                 with gr.Column(scale=6, min_width=430, elem_classes=["sn-compose"]):
@@ -422,7 +495,11 @@ def _build_ui():
                         elem_classes=["sn-mode"],
                     )
                     mode_note = gr.HTML(
-                        '<div class="sn-mode-note"><b>TEXT TO IMAGE</b><span>参照画像を使わず、公式解像度バケットから生成します。</span></div>',
+                        (
+                            '<div class="sn-mode-note"><b>TEXT TO IMAGE</b><span>参照画像を使わず、公式8-Step高速プリセットまたは50-Step品質プリセットで生成します。</span></div>'
+                            if initial_status.lora_ready
+                            else '<div class="sn-mode-note"><b>TEXT TO IMAGE</b><span>公式8-Step LoRAが未準備のため、Quality 50-Stepを選択しています。</span></div>'
+                        ),
                         elem_id="sn-mode-note",
                     )
                     with gr.Group(elem_classes=["sn-prompt-card"]):
@@ -510,6 +587,17 @@ def _build_ui():
                         '<div class="sn-section-title"><h3>生成設定</h3></div>'
                     )
                     with gr.Group(elem_classes=["sn-settings-card"]):
+                        generation_profile = gr.Radio(
+                            choices=[
+                                (
+                                    "公式8-Step · 高速T2I · 推奨",
+                                    PROFILE_OFFICIAL_8STEP,
+                                ),
+                                ("Quality 50-Step · 基本モデル", PROFILE_QUALITY),
+                            ],
+                            value=initial_profile,
+                            label="生成プロファイル",
+                        )
                         resolution = gr.Dropdown(
                             choices=resolution_choices(MODE_TEXT),
                             value="2048x2048",
@@ -529,7 +617,14 @@ def _build_ui():
                         )
                         with gr.Accordion("詳細設定", open=False, elem_id="sn-advanced"):
                             with gr.Row():
-                                steps = gr.Slider(1, 100, value=50, step=1, label="Steps")
+                                steps = gr.Slider(
+                                    1,
+                                    100,
+                                    value=initial_steps,
+                                    step=1,
+                                    label="Steps",
+                                    interactive=not initial_status.lora_ready,
+                                )
                                 seed = gr.Number(
                                     value=42,
                                     precision=0,
@@ -539,7 +634,12 @@ def _build_ui():
                                 )
                             with gr.Row():
                                 cfg_scale = gr.Slider(
-                                    0, 20, value=4.0, step=0.1, label="CFG"
+                                    0,
+                                    20,
+                                    value=initial_cfg,
+                                    step=0.1,
+                                    label="CFG",
+                                    interactive=not initial_status.lora_ready,
                                 )
                                 img_cfg_scale = gr.Slider(
                                     0,
@@ -556,6 +656,7 @@ def _build_ui():
                                     value=3.0,
                                     step=0.1,
                                     label="Timestep Shift",
+                                    interactive=not initial_status.lora_ready,
                                 )
                             with gr.Row():
                                 vram_mode = gr.Dropdown(
@@ -729,20 +830,37 @@ def _build_ui():
 
         mode.change(
             _mode_updates,
-            inputs=[mode, resolution],
+            inputs=[mode, resolution, lora_ready],
             outputs=[
                 reference_group,
                 resolution,
                 img_cfg_scale,
                 input_max_pixels,
                 mode_note,
+                generation_profile,
+                steps,
+                cfg_scale,
+                timestep_shift,
             ],
+            queue=False,
+        )
+        generation_profile.change(
+            _profile_updates,
+            inputs=[generation_profile],
+            outputs=[steps, cfg_scale, timestep_shift],
             queue=False,
         )
         refresh_button.click(
             _refresh_runtime,
             inputs=[source_path, checkpoint_path],
-            outputs=[runtime_status],
+            outputs=[
+                runtime_status,
+                lora_ready,
+                generation_profile,
+                steps,
+                cfg_scale,
+                timestep_shift,
+            ],
             queue=False,
         )
 
@@ -756,6 +874,7 @@ def _build_ui():
             source_path,
             resolution,
             input_max_pixels,
+            generation_profile,
             steps,
             cfg_scale,
             img_cfg_scale,
@@ -772,6 +891,7 @@ def _build_ui():
             source_path,
             resolution,
             input_max_pixels,
+            generation_profile,
             steps,
             cfg_scale,
             img_cfg_scale,
@@ -846,7 +966,14 @@ def _build_ui():
         interface.load(
             _refresh_runtime,
             inputs=[source_path, checkpoint_path],
-            outputs=[runtime_status],
+            outputs=[
+                runtime_status,
+                lora_ready,
+                generation_profile,
+                steps,
+                cfg_scale,
+                timestep_shift,
+            ],
             queue=False,
         )
 

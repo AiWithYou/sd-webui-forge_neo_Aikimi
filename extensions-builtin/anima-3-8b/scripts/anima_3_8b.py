@@ -63,7 +63,22 @@ class Anima3BScript(scripts.Script):
                 show_progress=False,
                 queue=False,
             )
-        return [enabled, adapter, strength, negative, negative_strength]
+            offload_encoders = gr.Checkbox(
+                label="Low VRAM: offload text encoders before sampling",
+                value=False,
+                info=(
+                    "Releases about 5 GiB after conditioning. A changed prompt "
+                    "must load the encoders again; seed-only repeats use the cache."
+                ),
+            )
+        return [
+            enabled,
+            adapter,
+            strength,
+            negative,
+            negative_strength,
+            offload_encoders,
+        ]
 
     def process_batch(
         self,
@@ -73,6 +88,7 @@ class Anima3BScript(scripts.Script):
         strength: float,
         negative: bool = False,
         negative_strength: float = 1.0,
+        offload_encoders: bool = False,
         **kwargs,
     ):
         if not enabled:
@@ -84,6 +100,9 @@ class Anima3BScript(scripts.Script):
             float(negative_strength) if negative else None,
         )
 
+    def before_process(self, p: StableDiffusionProcessing, *args):
+        self.runtime.restore_model(p.sd_model)
+
     def process_before_every_sampling(
         self,
         p: StableDiffusionProcessing,
@@ -92,18 +111,25 @@ class Anima3BScript(scripts.Script):
         strength: float,
         negative: bool = False,
         negative_strength: float = 1.0,
+        offload_encoders: bool = False,
         **kwargs,
     ):
-        if not enabled or self.runtime._qwen_clip is None:
+        if not enabled:
             return
-        unet = p.sd_model.forge_objects.unet
-        required = self.runtime._qwen_clip.patcher.model_size()
-        current = unet.model_options.get(
-            "extra_preserved_memory_during_sampling", 0
-        )
-        unet.model_options["extra_preserved_memory_during_sampling"] = max(
-            current, required
-        )
+        if offload_encoders:
+            released = self.runtime.offload_text_encoders(p.sd_model)
+            released = max(
+                int(getattr(p, "_anima3b_encoder_vram_released", 0)),
+                released,
+            )
+            p._anima3b_encoder_vram_released = released
+            p.extra_generation_params["Anima 3.8B encoder offload"] = True
+            p.extra_generation_params["Anima 3.8B encoder VRAM released"] = (
+                f"{released / (1024**3):.2f} GiB"
+            )
 
     def postprocess(self, p, processed, *args):
+        self.runtime.restore(p)
+
+    def on_process_cleanup(self, p, *args):
         self.runtime.restore(p)

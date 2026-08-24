@@ -26,6 +26,8 @@ from PIL import Image, ImageOps
 MODE_TEXT = "text"
 MODE_EDIT = "edit"
 QUANT_INT8_CONVROT = "int8_convrot"
+PROFILE_QUALITY = "quality"
+PROFILE_OFFICIAL_8STEP = "official_8step"
 
 DEFAULT_MODEL_ID = "sensenova/SenseNova-U1.5-8B-MoT"
 SOURCE_REVISION = "e6dfd45762eb46f805067fe079c14bcb643ccccd"
@@ -34,6 +36,13 @@ CONVROT_FILE_NAME = "SenseNova-U1.5-8B-MoT-pruned-int8_convrot.safetensors"
 CONVROT_EXPECTED_BYTES = 17_734_813_848
 CONVROT_SHA256 = "cf6ed9ee3be516612b7fe083edfc7c9dd5d059cc759e300d2cf1f2726c0d250e"
 EXPECTED_CONVROT_LAYERS = 588
+OFFICIAL_LORA_REVISION = "e909f4636d119d65fe4cba8770c19daff2ac102e"
+OFFICIAL_LORA_FILE_NAME = "SenseNova-U1.5-8B-MoT-LoRA-8step.safetensors"
+OFFICIAL_LORA_EXPECTED_BYTES = 814_867_236
+OFFICIAL_LORA_SHA256 = (
+    "3ef32180cdf1e30a870a83f4f136e897ea50b7ee467f863d75633464ebb25708"
+)
+EXPECTED_LORA_TARGETS = 294
 
 MAX_REFERENCE_IMAGES = 64
 MAX_PROMPT_LENGTH = 20_000
@@ -50,6 +59,7 @@ LOW_VRAM_MAX_REFERENCE_IMAGES = 2
 VRAM_MODES = ("low", "unrestricted", "full")
 ATTENTION_BACKENDS = ("auto", "sdpa", "flash")
 DTYPES = ("bfloat16",)
+GENERATION_PROFILES = (PROFILE_QUALITY, PROFILE_OFFICIAL_8STEP)
 
 RESOLUTIONS: dict[str, tuple[int, int]] = {
     "512x512": (512, 512),
@@ -70,6 +80,7 @@ RESOLUTIONS: dict[str, tuple[int, int]] = {
 _ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE_PATH = _ROOT / "models" / "SenseNova-U1" / "runtime-final"
 DEFAULT_CHECKPOINT_PATH = _ROOT / "models" / "SenseNova-U1" / CONVROT_FILE_NAME
+DEFAULT_LORA_PATH = _ROOT / "models" / "SenseNova-U1" / OFFICIAL_LORA_FILE_NAME
 DEFAULT_WORKER_PATH = _ROOT / "tools" / "sensenova_u15_worker.py"
 
 _PROCESS_LOCK = threading.RLock()
@@ -106,6 +117,7 @@ class SenseNovaGenerationCancelled(SenseNovaBridgeError):
 class SenseNovaRequest:
     mode: str
     prompt: str
+    generation_profile: str
     model_path: str = DEFAULT_MODEL_ID
     quantization: str = QUANT_INT8_CONVROT
     checkpoint: str = os.fspath(DEFAULT_CHECKPOINT_PATH)
@@ -135,6 +147,7 @@ class RuntimeStatus:
     checkpoint_path: Path | None
     messages: tuple[str, ...]
     partial_bytes: int = 0
+    lora_ready: bool = False
 
 
 def parse_resolution(value: str, mode: str) -> tuple[int | None, int | None]:
@@ -239,6 +252,27 @@ def validate_request(request: SenseNovaRequest) -> None:
         raise SenseNovaBridgeError(
             f"INT8 ConvRotのconfigは正式版 {DEFAULT_MODEL_ID} に固定されています。"
         )
+    if request.generation_profile not in GENERATION_PROFILES:
+        raise SenseNovaBridgeError(
+            "生成プロファイルは quality または official_8step を指定してください。"
+        )
+    if request.generation_profile == PROFILE_OFFICIAL_8STEP:
+        if request.mode != MODE_TEXT:
+            raise SenseNovaBridgeError(
+                "公式8-Step LoRAはテキスト生成専用です。画像編集ではQuality 50-Stepを使ってください。"
+            )
+        if int(request.steps) != 8 or float(request.cfg_scale) != 1.0:
+            raise SenseNovaBridgeError(
+                "公式8-StepはSteps 8・CFG 1.0の固定プリセットです。"
+            )
+        if float(request.timestep_shift) != 3.0:
+            raise SenseNovaBridgeError(
+                "公式8-StepはTimestep Shift 3.0の固定プリセットです。"
+            )
+        if not _official_lora_is_ready(DEFAULT_LORA_PATH):
+            raise SenseNovaBridgeError(
+                "公式8-Step LoRAが未準備です。download_sensenova_u15_int8.batを再実行してください。"
+            )
     if not request.checkpoint.strip():
         raise SenseNovaBridgeError("INT8 ConvRot checkpointを指定してください。")
     if Path(request.checkpoint).suffix.lower() != ".safetensors":
@@ -360,6 +394,45 @@ def _convrot_safetensors_header_is_valid(path: Path) -> bool:
         return False
 
 
+def _official_lora_header_is_valid(path: Path) -> bool:
+    try:
+        with path.open("rb") as stream:
+            length_bytes = stream.read(8)
+            if len(length_bytes) != 8:
+                return False
+            header_length = int.from_bytes(length_bytes, "little")
+            if header_length <= 2 or header_length > 256 * 1024 * 1024:
+                return False
+            header = stream.read(header_length)
+        return (
+            len(header) == header_length
+            and b'"tensor_kind":"neo_hf_lora"' in header.replace(b" ", b"")
+            and header.count(b'.lora_down.weight"') == EXPECTED_LORA_TARGETS
+            and header.count(b'.lora_up.weight"') == EXPECTED_LORA_TARGETS
+            and header.count(b'.alpha"') == EXPECTED_LORA_TARGETS
+        )
+    except OSError:
+        return False
+
+
+def _official_lora_is_ready(path: Path = DEFAULT_LORA_PATH) -> bool:
+    sidecar = Path(str(path) + ".sha256")
+    try:
+        sidecar_sha256 = (
+            sidecar.read_text(encoding="utf-8").strip().split()[0].lower()
+            if sidecar.is_file()
+            else ""
+        )
+        return (
+            path.is_file()
+            and path.stat().st_size == OFFICIAL_LORA_EXPECTED_BYTES
+            and _official_lora_header_is_valid(path)
+            and sidecar_sha256 == OFFICIAL_LORA_SHA256
+        )
+    except (OSError, IndexError):
+        return False
+
+
 def inspect_runtime(
     source_path: str | os.PathLike[str] = DEFAULT_SOURCE_PATH,
     *,
@@ -462,6 +535,14 @@ def inspect_runtime(
     else:
         messages.append("正式版INT8 ConvRotが未準備です。セットアップを実行してください。")
 
+    lora_ready = _official_lora_is_ready(DEFAULT_LORA_PATH)
+    if lora_ready:
+        messages.append("公式8-Step T2I LoRAを確認しました。")
+    else:
+        messages.append(
+            "公式8-Step T2I LoRAは未準備です。Quality 50-Stepは利用できます。"
+        )
+
     return RuntimeStatus(
         ready=source_ready and dependencies_ready and checkpoint_ready,
         source_ready=source_ready,
@@ -471,15 +552,26 @@ def inspect_runtime(
         checkpoint_path=checkpoint_path,
         messages=tuple(messages),
         partial_bytes=partial_bytes,
+        lora_ready=lora_ready,
     )
 
 
 def runtime_status_html(status: RuntimeStatus) -> str:
     state = "ready" if status.ready else "setup"
-    title = "生成できます" if status.ready else "準備が必要です"
+    title = (
+        "生成できます"
+        if status.ready and status.lora_ready
+        else "Quality生成できます"
+        if status.ready
+        else "準備が必要です"
+    )
     items = "".join(f"<li>{html.escape(message)}</li>" for message in status.messages)
-    summary = status.messages[0] if status.messages else (
-        "正式版INT8 ConvRotを使用できます。"
+    summary = (
+        "Quality 50-Stepを使用できます。公式8-Step LoRAは未準備です。"
+        if status.ready and not status.lora_ready
+        else status.messages[0]
+        if status.messages
+        else "正式版INT8 ConvRotを使用できます。"
         if status.ready
         else "実行環境の設定を確認してください。"
     )
@@ -585,6 +677,22 @@ def _request_payload(
         "height": request.height,
         "target_pixels": int(request.target_pixels),
         "input_max_pixels": request.input_max_pixels,
+        "generation_profile": request.generation_profile,
+        "lora_path": (
+            os.fspath(DEFAULT_LORA_PATH.resolve())
+            if request.generation_profile == PROFILE_OFFICIAL_8STEP
+            else ""
+        ),
+        "lora_revision": (
+            OFFICIAL_LORA_REVISION
+            if request.generation_profile == PROFILE_OFFICIAL_8STEP
+            else ""
+        ),
+        "lora_sha256": (
+            OFFICIAL_LORA_SHA256
+            if request.generation_profile == PROFILE_OFFICIAL_8STEP
+            else ""
+        ),
         "steps": int(request.steps),
         "cfg_scale": float(request.cfg_scale),
         "img_cfg_scale": float(request.img_cfg_scale),
@@ -854,6 +962,13 @@ def cancel_generation(job_id: str | None = None) -> str:
 def request_summary_html(request: SenseNovaRequest) -> str:
     mode = "複数画像編集" if request.mode == MODE_EDIT else "テキスト生成"
     quantization = "正式版 · INT8 ConvRot"
+    profile = {
+        PROFILE_OFFICIAL_8STEP: "公式8-Step T2I",
+        PROFILE_QUALITY: "Quality",
+    }.get(
+        request.generation_profile,
+        f"UNKNOWN ({request.generation_profile})",
+    )
     size = (
         f"元の入力1枚目を基準 · 約{request.target_pixels / 1_000_000:.1f}MP"
         if request.width is None
@@ -870,6 +985,6 @@ def request_summary_html(request: SenseNovaRequest) -> str:
         f"<span><small>WEIGHTS</small>{html.escape(quantization)}</span>"
         f"<span><small>OUTPUT</small>{html.escape(size)}</span>"
         f"<span><small>REFERENCES</small>{len(request.input_images)}枚</span>"
-        f"<span><small>SAMPLING</small>{html.escape(vram_label)} · {request.steps} steps · CFG {request.cfg_scale:g}</span>"
+        f"<span><small>SAMPLING</small>{html.escape(profile)} · {html.escape(vram_label)} · {request.steps} steps · CFG {request.cfg_scale:g}</span>"
         "</div>"
     )

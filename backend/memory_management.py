@@ -1374,7 +1374,7 @@ def unload_model(model: "ModelPatcher") -> bool:
 
     if index is not None:
         mdl = current_loaded_models.pop(index)
-        del mdl
+        mdl.model_unload()
         return True
 
     return False

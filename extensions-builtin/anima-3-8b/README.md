@@ -41,6 +41,10 @@ Diffusion in Low Bits: Automatic
 
 negative promptは既定でAnima標準encoderだけを使います。`Use adapter on negative prompt`を有効にすると、negative側のstrengthを個別に指定できます。
 
+Qwen3.5の約1.2 GiBのembedding tableはCPUに保持し、promptで使うtoken行だけをGPUへ送ります。同じpromptでSeedだけを変えた場合は、ForgeのPersistent Cond Cacheがadapter設定とweight fingerprintを含む条件でconditioningを再利用します。
+
+通常はtext encoderをGPUへ残す方が高速です。VRAMを優先する場合は`Low VRAM: offload text encoders before sampling`を有効にしてください。RTX 3090の実測では、生成後のTorch activeが9,766,217,180 bytesから4,247,712,928 bytesへ減り、約5.14 GiBを解放しました。一方、新しいpromptではencoderの再読込時間が加わります。
+
 最初の生成条件は次を目安にしてください。
 
 ```text
@@ -61,12 +65,17 @@ A fox-girl jumps over a high fence.
 
 ## 読込と安全条件
 
-- safetensors metadataに`anima_progressive_qwen35_cross_adapter_v1`を持つadapterが検出対象です。
-- Qwen3.5は`qwen35_4b`、`qwen3.5-4b`、`qwen3_5_4b`を含むファイル名が候補です。
-- 52層以外のAnima checkpointではadapterを適用せず、組み合わせの誤りを表示して停止します。
+- safetensors metadataに`anima_progressive_qwen35_cross_adapter_v1`を持つadapterだけを検出対象とします。
+- Qwen3.5の候補は、ファイル名に`qwen35_4b`、`qwen3.5-4b`、`qwen3_5_4b`のいずれかを含むものです。
+- 52層以外のAnima checkpointにはadapterを適用せず、組み合わせが誤っていれば理由を表示して停止する設計です。
 - Qwen3.5はAnima標準encoderに追加して読み込むため、conditioning中のVRAMとRAM使用量、待ち時間が増えます。
+- Qwen3.5の未使用final projectionと中間tensor copyを省き、paddingなしpromptではPyTorchのcausal SDPA経路を使う実装です。
+- 同一promptのconditioning cacheはadapter、Qwen3.5、strength、negative設定が変わると無効になります。
 - adapter名、positive strength、任意のnegative strengthは画像の生成parameterへの記録対象です。
+- encoder offloadを有効にした場合は、解放量も生成parameterへ記録します。
 - extensionを無効にした生成では、Forge標準のAnima処理を変更しません。
+
+RTX 3090で保存済みの832×1216、32 Steps、CFG 7.0、同一prompt・Seedを再生成した比較では、wall timeが29.770秒から25.010秒へ短縮しました。平均RGB差は5.19/255で、人物、透明レインコート、蝶、左右の花、じょうろ、温室の配置を目視で維持していることを確認しました。
 
 ## ライセンスと由来
 

@@ -7,6 +7,8 @@ from torch import nn
 
 from backend.nn.anima import Attention
 
+_MISSING = object()
+
 
 class ProgressiveCrossAdapter(nn.Module):
     """Inference-only Forge port of the trained progressive cross adapter."""
@@ -74,24 +76,38 @@ class ProgressiveCrossAdapter(nn.Module):
         semantic_rope = native.rotary_emb(x, semantic_positions)
         mix = self.layer_mix_logits.float().softmax(dim=-1).to(x.dtype)
 
-        for index, block in enumerate(native.blocks):
-            x = block(
-                x,
-                native_source,
-                position_embeddings=query_rope,
-                position_embeddings_context=native_rope,
-            )
-            semantic_source = sum(
-                state * mix[index, state_index]
-                for state_index, state in enumerate(semantic_states)
-            )
-            semantic_source = self.source_norms[index](semantic_source)
-            x = x + self.semantic_attentions[index](
-                self.query_norms[index](x),
-                mask=semantic_mask,
-                context=semantic_source,
-                position_embeddings=query_rope,
-                position_embeddings_context=semantic_rope,
-            )
+        previous_flags = [
+            getattr(block, "_anima38_inplace", _MISSING) for block in native.blocks
+        ]
+        try:
+            for block in native.blocks:
+                block._anima38_inplace = True
+            for index, block in enumerate(native.blocks):
+                x = block(
+                    x,
+                    native_source,
+                    position_embeddings=query_rope,
+                    position_embeddings_context=native_rope,
+                )
+                semantic_source = sum(
+                    state * mix[index, state_index]
+                    for state_index, state in enumerate(semantic_states)
+                )
+                semantic_source = self.source_norms[index](semantic_source)
+                x.add_(self.semantic_attentions[index](
+                    self.query_norms[index](x),
+                    mask=semantic_mask,
+                    context=semantic_source,
+                    position_embeddings=query_rope,
+                    position_embeddings_context=semantic_rope,
+                ))
+        finally:
+            for block, previous in zip(
+                native.blocks, previous_flags, strict=True
+            ):
+                if previous is _MISSING:
+                    del block._anima38_inplace
+                else:
+                    block._anima38_inplace = previous
 
         return native.norm(native.out_proj(x))
