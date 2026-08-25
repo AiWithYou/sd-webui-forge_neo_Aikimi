@@ -41,7 +41,7 @@ Diffusion in Low Bits: Automatic
 
 negative promptは既定でAnima標準encoderだけを使います。`Use adapter on negative prompt`を有効にすると、negative側のstrengthを個別に指定できます。
 
-通常のAnima LoRAを使う場合は、同じパネルの`Standard Anima LoRA`で選択し、`Standard LoRA strength`を指定します。`models/Lora`にある完全な28層・40層・52層のsafetensors LoRAだけを候補に表示し、28層版と40層版は52層へ自動展開してからForge標準LoRA経路で適用します。起動後にLoRAを追加した場合は`Refresh standard Anima LoRAs`を押してください。LoRAタブや`<lora:name:weight>`タグも従来どおり使えるため、複数LoRAを組み合わせる場合はタグを追加してください。
+通常のAnima LoRAを使う場合は、同じパネルの`Standard Anima LoRA`で1件目を選択し、`Standard LoRA strength`を指定します。`Additional Standard Anima LoRAs`を開けば、さらに3件のLoRAと個別のstrengthを追加可能です。候補は`models/Lora`にある完全な28層・40層・52層のsafetensors LoRAに限定し、28層版と40層版は52層へ自動展開してからForge標準LoRA経路で適用します。起動後にLoRAを追加した場合は`Refresh standard Anima LoRAs`を押してください。5件以上を組み合わせる場合は、LoRAタブまたは`<lora:name:weight>`タグを利用します。
 
 Qwen3.5の約1.2 GiBのembedding tableはCPUに保持し、promptで使うtoken行だけをGPUへ送ります。同じpromptでSeedだけを変えた場合は、ForgeのPersistent Cond Cacheがadapter設定とweight fingerprintを含む条件でconditioningを再利用します。
 
@@ -74,7 +74,7 @@ A fox-girl jumps over a high fence.
 - Qwen3.5の未使用final projectionと中間tensor copyを省き、paddingなしpromptではPyTorchのcausal SDPA経路を使う実装です。
 - 同一promptのconditioning cacheはadapter、Qwen3.5、strength、negative設定が変わると無効になります。
 - adapter名、positive strength、任意のnegative strengthは画像の生成parameterへの記録対象です。
-- パネルで選んだ通常Anima LoRAとstrengthは生成parameterへ記録し、Forge標準のLoRA hashも併記します。
+- パネルで選んだ各Anima LoRAとstrengthは生成parameterへまとめて記録し、Forge標準のLoRA hashも併記します。
 - encoder offloadを有効にした場合は、解放量も生成parameterへ記録します。
 - extensionを無効にした生成では、Forge標準のAnima処理を変更しません。
 

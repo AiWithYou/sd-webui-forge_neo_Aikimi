@@ -25,7 +25,10 @@ from anima3b.files import (
 from anima3b.adapter import ProgressiveCrossAdapter
 from anima3b.qwen35 import CPUEmbedding, Qwen35HybridModel
 from anima3b.runtime import ANIMA38_BLOCK_COUNT, Anima3BRuntime
-from anima3b.standard_lora import apply_standard_lora_selection
+from anima3b.standard_lora import (
+    apply_standard_lora_selection,
+    apply_standard_lora_selections,
+)
 
 
 def fake_anima(block_count: int):
@@ -314,6 +317,71 @@ class Anima38ExtensionTests(unittest.TestCase):
                     float("nan"),
                     {"regular-anima": str(path)},
                 )
+
+    def test_multiple_standard_lora_selections_use_individual_weights(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            regular = root / "regular-anima.safetensors"
+            cinematic = root / "cinematic-anima.safetensors"
+            regular.touch()
+            cinematic.touch()
+            processing = SimpleNamespace(
+                prompt="portrait",
+                all_prompts=["first portrait", "second portrait"],
+                extra_generation_params={},
+            )
+
+            applied = apply_standard_lora_selections(
+                processing,
+                [
+                    ("regular-anima", 0.75),
+                    ("cinematic-anima", 0.35),
+                    ("regular-anima", 1.5),
+                    (None, 1.0),
+                ],
+                {
+                    "regular-anima": str(regular),
+                    "cinematic-anima": str(cinematic),
+                },
+            )
+
+        expected_tags = (
+            "<lora:regular-anima:0.75> <lora:cinematic-anima:0.35>"
+        )
+        self.assertTrue(applied)
+        self.assertEqual(processing.prompt, f"portrait {expected_tags}")
+        self.assertEqual(
+            processing.all_prompts,
+            [
+                f"first portrait {expected_tags}",
+                f"second portrait {expected_tags}",
+            ],
+        )
+        self.assertEqual(
+            processing.extra_generation_params["Anima 3.8B standard LoRA"],
+            "regular-anima:0.75, cinematic-anima:0.35",
+        )
+
+    def test_multiple_standard_lora_validation_is_atomic(self):
+        with TemporaryDirectory() as directory:
+            regular = Path(directory) / "regular-anima.safetensors"
+            regular.touch()
+            processing = SimpleNamespace(
+                prompt="portrait",
+                all_prompts=["portrait"],
+                extra_generation_params={},
+            )
+
+            with self.assertRaisesRegex(FileNotFoundError, "missing-anima"):
+                apply_standard_lora_selections(
+                    processing,
+                    [("regular-anima", 0.75), ("missing-anima", 0.35)],
+                    {"regular-anima": str(regular)},
+                )
+
+        self.assertEqual(processing.prompt, "portrait")
+        self.assertEqual(processing.all_prompts, ["portrait"])
+        self.assertEqual(processing.extra_generation_params, {})
 
     def test_runtime_requires_the_paired_52_block_checkpoint(self):
         engine, clip = Anima3BRuntime._require_anima(

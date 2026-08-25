@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 import math
 from pathlib import Path
 import re
@@ -37,29 +37,55 @@ def apply_standard_lora_selection(
 ) -> bool:
     """Inject one UI-selected LoRA into standard Forge prompt processing."""
 
-    if name in {None, "", NO_STANDARD_LORA}:
-        return False
-    if name not in available:
-        raise FileNotFoundError(
-            f"Standard Anima LoRA '{name}' is unavailable. Refresh Forge and select it again."
-        )
-    path = Path(available[name])
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"Standard Anima LoRA '{name}' no longer exists at {path}."
-        )
-
-    strength = float(strength)
-    if not math.isfinite(strength):
-        raise ValueError("Standard Anima LoRA strength must be finite.")
-
-    processing.prompt = _append_to_prompt_value(processing.prompt, name, strength)
-    processing.all_prompts = _append_to_prompt_value(
-        processing.all_prompts,
-        name,
-        strength,
+    return apply_standard_lora_selections(
+        processing,
+        [(name, strength)],
+        available,
     )
-    processing.extra_generation_params["Anima 3.8B standard LoRA"] = (
-        f"{name}:{strength:.12g}"
+
+
+def apply_standard_lora_selections(
+    processing: Any,
+    selections: Iterable[tuple[str | None, float]],
+    available: Mapping[str, str],
+) -> bool:
+    """Inject UI-selected LoRAs into standard Forge prompt processing."""
+
+    validated: list[tuple[str, float]] = []
+    seen: set[str] = set()
+
+    for name, strength in selections:
+        if name in {None, "", NO_STANDARD_LORA} or name in seen:
+            continue
+        if name not in available:
+            raise FileNotFoundError(
+                f"Standard Anima LoRA '{name}' is unavailable. Refresh Forge and select it again."
+            )
+        path = Path(available[name])
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Standard Anima LoRA '{name}' no longer exists at {path}."
+            )
+
+        strength = float(strength)
+        if not math.isfinite(strength):
+            raise ValueError("Standard Anima LoRA strength must be finite.")
+
+        seen.add(name)
+        validated.append((name, strength))
+
+    if not validated:
+        return False
+
+    prompt = processing.prompt
+    all_prompts = processing.all_prompts
+    for name, strength in validated:
+        prompt = _append_to_prompt_value(prompt, name, strength)
+        all_prompts = _append_to_prompt_value(all_prompts, name, strength)
+
+    processing.prompt = prompt
+    processing.all_prompts = all_prompts
+    processing.extra_generation_params["Anima 3.8B standard LoRA"] = ", ".join(
+        f"{name}:{strength:.12g}" for name, strength in validated
     )
     return True
