@@ -1,4 +1,4 @@
-<h2 align="center">Stable Diffusion WebUI Forge - Neo (Docker)</h2>
+<h2 align="center">Aikimi Neo (Docker)</h2>
 
 > [!Warning]
 > Requires an **NVIDIA** GPU<br>
@@ -46,10 +46,28 @@
 ## Building Locally
 
 ```bash
-git clone https://github.com/Haoming02/sd-webui-forge-classic sd-webui-forge-neo --branch neo
-cd sd-webui-forge-neo/docker
-docker build -t forge-neo-local .
+git clone --branch neo https://github.com/AiWithYou/sd-webui-forge_neo_Aikimi.git
+cd sd-webui-forge_neo_Aikimi/docker
+docker build -t aikimi-neo-local .
 ```
+
+The container binds to `127.0.0.1` by default. Keep this default for local use.
+
+## Authenticated Remote Mode
+
+Remote binding is an explicit opt-in. Set `AIKIMI_CONTAINER_REMOTE=1` and provide both Gradio and API authentication files. Remote mode fails before launch when either authentication source is missing.
+
+```bash
+docker run --gpus all \
+  -e AIKIMI_CONTAINER_REMOTE=1 \
+  -e 'COMMANDLINE_ARGS=--api --gradio-auth-path /run/secrets/gradio-auth.txt --api-auth-path /run/secrets/api-auth.txt' \
+  -v /host/secrets/gradio-auth.txt:/run/secrets/gradio-auth.txt:ro \
+  -v /host/secrets/api-auth.txt:/run/secrets/api-auth.txt:ro \
+  -p 7860:7860 \
+  aikimi-neo-local
+```
+
+Each authentication file uses one `username:password` entry per line. Do not bake credentials into the image or place them in the repository. Use a TLS reverse proxy and a firewall when clients connect from outside the trusted LAN.
 
 <hr>
 

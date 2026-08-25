@@ -13,12 +13,17 @@ if [[ -n "$RAW_ARGS" ]]; then
     read -ra EXTRA_ARGS <<< "$RAW_ARGS"
 fi
 
+NETWORK_ARGS=(--server-name 127.0.0.1)
+if [[ "${AIKIMI_CONTAINER_REMOTE:-0}" == "1" ]]; then
+    NETWORK_ARGS=(--aikimi-remote --listen)
+fi
+
 # Symlink settings files into the config bind-mount so they persist across container recreations
 for f in config.json ui-config.json styles.csv user.css; do
     ln -sf /home/forge/sd-webui/config/$f /home/forge/sd-webui/$f
 done
 
 exec python /home/forge/sd-webui/launch.py \
-    --listen \
+    "${NETWORK_ARGS[@]}" \
     "${EXTRA_ARGS[@]}" \
     "$@"
