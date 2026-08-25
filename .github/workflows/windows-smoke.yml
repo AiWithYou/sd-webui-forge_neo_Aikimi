@@ -1,0 +1,160 @@
+name: Windows smoke tests
+
+on:
+  pull_request:
+    paths:
+      - "**/*.bat"
+      - "**/*.ps1"
+      - "extensions-builtin/minimax-h3-studio/**"
+      - "extensions-builtin/sensenova-u15-studio/**"
+      - "javascript/**"
+      - "modules/aikimi_capabilities.py"
+      - "modules/aikimi_diagnostics.py"
+      - "modules/aikimi_status.py"
+      - "modules/aikimi_security/**"
+      - "modules/api/**"
+      - "modules/cmd_args.py"
+      - "modules/gradio_*.py"
+      - "modules/initialize_util.py"
+      - "modules/launch_utils.py"
+      - "modules/options.py"
+      - "modules/shared_cmd_options.py"
+      - "modules/sysinfo.py"
+      - "modules/ui*.py"
+      - "modules/ui_tempdir.py"
+      - "modules/ui_settings.py"
+      - "modules_forge/minimax_h3_bridge.py"
+      - "modules_forge/sensenova_u15_bridge.py"
+      - "requirements.txt"
+      - "style.css"
+      - "tools/tests/test_aikimi_diagnostics.py"
+      - "tools/tests/test_aikimi_status.py"
+      - "tools/tests/test_api_public_state.py"
+      - "tools/tests/test_api_script_args.py"
+      - "tools/tests/test_gradio_compatibility.py"
+      - "tools/tests/test_gradio_chromium_smoke.py"
+      - "tools/tests/test_gradio_file_security.py"
+      - "tools/tests/test_legacy_yaml_security.py"
+      - "tools/tests/test_launch_utils_environment.py"
+      - "tools/tests/test_minimax_h3_studio.py"
+      - "tools/tests/test_remote_auth_middleware.py"
+      - "tools/tests/test_safe_image_fetch.py"
+      - "tools/tests/test_security_redaction.py"
+      - "tools/tests/test_sensenova_u15_studio.py"
+      - "tools/tests/test_sysinfo_security.py"
+      - "tools/tests/test_ui_tempdir_security.py"
+      - "tools/tests/test_workflow_ui.py"
+      - ".github/workflows/windows-smoke.yml"
+  push:
+    branches: [neo]
+    paths:
+      - "**/*.bat"
+      - "**/*.ps1"
+      - "extensions-builtin/minimax-h3-studio/**"
+      - "extensions-builtin/sensenova-u15-studio/**"
+      - "javascript/**"
+      - "modules/aikimi_capabilities.py"
+      - "modules/aikimi_diagnostics.py"
+      - "modules/aikimi_status.py"
+      - "modules/aikimi_security/**"
+      - "modules/api/**"
+      - "modules/cmd_args.py"
+      - "modules/gradio_*.py"
+      - "modules/initialize_util.py"
+      - "modules/launch_utils.py"
+      - "modules/options.py"
+      - "modules/shared_cmd_options.py"
+      - "modules/sysinfo.py"
+      - "modules/ui*.py"
+      - "modules/ui_tempdir.py"
+      - "modules/ui_settings.py"
+      - "modules_forge/minimax_h3_bridge.py"
+      - "modules_forge/sensenova_u15_bridge.py"
+      - "requirements.txt"
+      - "style.css"
+      - "tools/tests/test_aikimi_diagnostics.py"
+      - "tools/tests/test_aikimi_status.py"
+      - "tools/tests/test_api_public_state.py"
+      - "tools/tests/test_api_script_args.py"
+      - "tools/tests/test_gradio_compatibility.py"
+      - "tools/tests/test_gradio_chromium_smoke.py"
+      - "tools/tests/test_gradio_file_security.py"
+      - "tools/tests/test_legacy_yaml_security.py"
+      - "tools/tests/test_launch_utils_environment.py"
+      - "tools/tests/test_minimax_h3_studio.py"
+      - "tools/tests/test_remote_auth_middleware.py"
+      - "tools/tests/test_safe_image_fetch.py"
+      - "tools/tests/test_security_redaction.py"
+      - "tools/tests/test_sensenova_u15_studio.py"
+      - "tools/tests/test_sysinfo_security.py"
+      - "tools/tests/test_ui_tempdir_security.py"
+      - "tools/tests/test_workflow_ui.py"
+      - ".github/workflows/windows-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-313-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CUDA_VISIBLE_DEVICES: "-1"
+      DIFFUSERS_OFFLINE: "1"
+      HF_DATASETS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_OFFLINE: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Update pip to the audited patch release
+        run: python -m pip install --disable-pip-version-check pip==26.2.1
+      - name: Install the pinned CPU PyTorch build
+        run: >-
+          python -m pip install
+          --index-url https://download.pytorch.org/whl/cpu
+          torch==2.11.0 torchvision==0.26.0
+      - name: Install runtime requirements
+        run: python -m pip install -r requirements.txt
+      - name: Import the security and built-in workflow modules
+        run: >-
+          python -c
+          "import modules.aikimi_security;
+          import modules.launch_utils;
+          import modules_forge.minimax_h3_bridge;
+          import modules_forge.sensenova_u15_bridge"
+      - name: Run launch, security, and UI smoke tests
+        run: >-
+          python tools/run_ci_tests.py --verbosity 2
+          --preload modules.shared
+          --module tools.tests.test_aikimi_diagnostics
+          --module tools.tests.test_aikimi_status
+          --module tools.tests.test_api_public_state
+          --module tools.tests.test_api_script_args
+          --module tools.tests.test_gradio_compatibility
+          --module tools.tests.test_gradio_chromium_smoke
+          --module tools.tests.test_gradio_file_security
+          --module tools.tests.test_legacy_yaml_security
+          --module tools.tests.test_launch_utils_environment
+          --module tools.tests.test_minimax_h3_studio
+          --module tools.tests.test_remote_auth_middleware
+          --module tools.tests.test_run_ci_tests
+          --module tools.tests.test_safe_image_fetch
+          --module tools.tests.test_security_redaction
+          --module tools.tests.test_sensenova_u15_studio
+          --module tools.tests.test_sysinfo_security
+          --module tools.tests.test_ui_tempdir_security
+          --module tools.tests.test_workflow_ui
