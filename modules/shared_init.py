@@ -16,6 +16,9 @@ def initialize():
         shared.opts.load(shared.config_filename)
     except FileNotFoundError:
         pass
+    # The safe URL fetcher always rejects local/private destinations. Preserve
+    # the legacy option key for compatibility, but never honor an older false value.
+    shared.opts.data["api_forbid_local_requests"] = True
 
     from modules import devices
     shared.device = devices.device

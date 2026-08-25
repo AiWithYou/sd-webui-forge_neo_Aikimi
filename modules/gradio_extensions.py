@@ -7,7 +7,7 @@ import gradio.blocks
 import gradio.component_meta
 import gradio.events
 
-from modules import patches, scripts, ui_tempdir
+from modules import gradio_compat, patches, scripts, ui_tempdir
 
 
 class GradioDeprecationWarning(DeprecationWarning):
@@ -27,6 +27,10 @@ def add_classes_to_gradio_component(comp: gr.components.Component):
 
 def IOComponent_init(self, *args, **kwargs):
     self.webui_tooltip = kwargs.pop("tooltip", None)
+    if "visible" in kwargs:
+        kwargs["visible"] = gradio_compat.keep_hidden_component_mounted(
+            kwargs["visible"]
+        )
 
     if scripts.scripts_current is not None:
         scripts.scripts_current.before_component(self, **kwargs)
@@ -45,8 +49,8 @@ def IOComponent_init(self, *args, **kwargs):
     return res
 
 
-def Block_get_config(self):
-    config = original_Block_get_config(self)
+def Block_get_config(self, *args, **kwargs):
+    config = original_Block_get_config(self, *args, **kwargs)
 
     webui_tooltip = getattr(self, "webui_tooltip", None)
     if webui_tooltip:
@@ -58,6 +62,11 @@ def Block_get_config(self):
 
 
 def BlockContext_init(self, *args, **kwargs):
+    if "visible" in kwargs:
+        kwargs["visible"] = gradio_compat.keep_hidden_component_mounted(
+            kwargs["visible"]
+        )
+
     if scripts.scripts_current is not None:
         scripts.scripts_current.before_component(self, **kwargs)
 
@@ -95,17 +104,31 @@ ui_tempdir.install_ui_tempdir_override()
 
 
 def gradio_component_meta_create_or_modify_pyi(component_class, class_name, events):
-    if hasattr(component_class, "webui_do_not_create_gradio_pyi_thank_you"):
-        return
-
-    gradio_component_meta_create_or_modify_pyi_original(component_class, class_name, events)
+    # Runtime type-stub generation writes into the checkout and is not needed
+    # for packaged components. Gradio 6 otherwise creates modules/*.pyi while
+    # importing WebUI subclasses.
+    return None
 
 
 # this prevents creation of .pyi files in webui dir
-gradio_component_meta_create_or_modify_pyi_original = patches.patch(__file__, gradio.component_meta, "create_or_modify_pyi", gradio_component_meta_create_or_modify_pyi)
+patches.patch(__file__, gradio.component_meta, "create_or_modify_pyi", gradio_component_meta_create_or_modify_pyi)
 
 # this function is broken and does not seem to do anything useful
 gradio.component_meta.updateable = lambda x: x
+
+
+original_gradio_update = gr.update
+
+
+def gradio_update(*args, **kwargs):
+    if "visible" in kwargs:
+        kwargs["visible"] = gradio_compat.keep_hidden_component_mounted(
+            kwargs["visible"]
+        )
+    return original_gradio_update(*args, **kwargs)
+
+
+gr.update = gradio_update
 
 
 class EventWrapper:

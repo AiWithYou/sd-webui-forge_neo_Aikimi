@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from modules import paths_internal, timer, shared_cmd_options, errors, launch_utils
+from modules.aikimi_security.api_policy import public_options
+from modules.aikimi_security.redaction import redact_argv, redact_mapping, safe_error_message
 
 checksum_token = "DontStealMyGamePlz__WINNERS_DONT_USE_DRUGS__DONT_COPY_THAT_FLOPPY"
 environment_whitelist = {
@@ -116,28 +118,15 @@ def get_dict():
         "Packages": get_packages(),
     }
 
-    return res
+    return redact_mapping(res)
 
 
 def get_environment():
-    return {k: os.environ[k] for k in sorted(os.environ) if k in environment_whitelist}
+    return redact_mapping({k: os.environ[k] for k in sorted(os.environ) if k in environment_whitelist})
 
 
 def get_argv():
-    res = []
-
-    for v in sys.argv:
-        if shared_cmd_options.cmd_opts.gradio_auth and shared_cmd_options.cmd_opts.gradio_auth == v:
-            res.append("<hidden>")
-            continue
-
-        if shared_cmd_options.cmd_opts.api_auth and shared_cmd_options.cmd_opts.api_auth == v:
-            res.append("<hidden>")
-            continue
-
-        res.append(v)
-
-    return res
+    return redact_argv(sys.argv)
 
 
 re_newline = re.compile(r"\r*\n")
@@ -150,7 +139,7 @@ def get_torch_sysinfo():
 
         return {k: re.split(re_newline, str(v)) if "\n" in str(v) else v for k, v in info.items()}
     except Exception as e:
-        return str(e)
+        return safe_error_message(e)
 
 
 def run_git(path, *args):
@@ -198,21 +187,65 @@ def get_extensions(*, enabled, fallback_disabled_extensions=None):
 def get_config():
     try:
         from modules import shared
-        return shared.opts.data
+        return redact_mapping(shared.opts.data)
     except Exception as _:
         try:
             with open(shared_cmd_options.cmd_opts.ui_settings_file, 'r') as f:
                 return json.load(f)
         except Exception as e:
-            return str(e)
+            return safe_error_message(e)
 
-def set_config(req: dict[str, Any], is_api=False, run_callbacks=True, save_config=True):
+
+class UnknownOptionError(ValueError):
+    pass
+
+
+class RestrictedOptionError(PermissionError):
+    pass
+
+
+class InvalidOptionTypeError(TypeError):
+    pass
+
+
+def get_api_config() -> dict[str, Any]:
+    from modules import shared
+
+    return public_options(shared.opts)
+
+
+def set_config(req: dict[str, Any], is_api=False, run_callbacks=True, save_config=True) -> list[str]:
     from modules import shared, sd_models
     from modules_forge import main_entry
 
     should_refresh_model_loading_params = False
+    changed_keys: list[str] = []
+
+    if not isinstance(req, dict):
+        raise InvalidOptionTypeError("The settings request must be a JSON object.")
+
+    # Validate the complete request before applying anything so an invalid later
+    # field cannot leave a partially changed configuration behind.
+    for k, v in req.items():
+        if k not in shared.opts.data_labels:
+            raise UnknownOptionError(f"Unknown option: {k}")
+        if is_api and not shared.opts.api_accessible(k, write=True):
+            raise RestrictedOptionError(f"Option is not writable through the API: {k}")
+        expected = shared.opts.data.get(k, shared.opts.data_labels[k].default)
+        type_is_valid = (
+            v is None
+            if expected is None
+            else v is not None and shared.opts.same_type(expected, v)
+        )
+        if not type_is_valid:
+            raise InvalidOptionTypeError(
+                f"Invalid type for option {k}: expected {type(expected).__name__}"
+            )
+        if k == "sd_model_checkpoint" and v is not None and v not in sd_models.checkpoint_aliases:
+            raise InvalidOptionTypeError("The requested checkpoint is not available.")
 
     for k, v in req.items():
+
         # ignore unchanged options
         if v == shared.opts.data.get(k):
             continue
@@ -220,22 +253,25 @@ def set_config(req: dict[str, Any], is_api=False, run_callbacks=True, save_confi
         # checkpoints, modules, and options pertaining to memory management are managed in dedicated functions
         # If values for these options change, call refresh_model_loading_parameters()
         if k == "sd_model_checkpoint":
-            if v is not None and v not in sd_models.checkpoint_aliases:
-                raise RuntimeError(f'Model "{v!r}" not found...')
             checkpoint_changed = main_entry.checkpoint_change(v, preset=None, save=False, refresh=False)
             if checkpoint_changed:
                 should_refresh_model_loading_params = True
-        if k == "forge_additional_modules":
+                changed_keys.append(k)
+        elif k == "forge_additional_modules":
             modules_changed = main_entry.modules_change(v, preset=None, save=False, refresh=False)
             if modules_changed:
                 should_refresh_model_loading_params = True
+                changed_keys.append(k)
 
         # set all other options
         else:
-            shared.opts.set(k, v, is_api=is_api, run_callbacks=run_callbacks)
+            if shared.opts.set(k, v, is_api=is_api, run_callbacks=run_callbacks):
+                changed_keys.append(k)
 
     if should_refresh_model_loading_params:
         main_entry.refresh_model_loading_parameters()
 
     if save_config:
         shared.opts.save(shared.config_filename)
+
+    return changed_keys

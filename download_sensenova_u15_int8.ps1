@@ -89,6 +89,9 @@ function Install-SenseNovaRuntimeSource {
     $headers = @{ "User-Agent" = "Forge-Neo-SenseNova-Installer" }
     Write-Host "Downloading pinned final SenseNova ConvRot runtime: $SourceRevision"
     $tree = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri $SourceTreeUrl
+    if ($tree.truncated) {
+        throw "Pinned SenseNova source tree response was truncated. No runtime files were changed."
+    }
     $entries = @(
         $tree.tree | Where-Object {
             $_.type -eq "blob" -and (
@@ -102,8 +105,27 @@ function Install-SenseNovaRuntimeSource {
         throw "Pinned SenseNova source tree is incomplete: only $($entries.Count) files were listed."
     }
 
+    $runtimeRootFull = [System.IO.Path]::GetFullPath($RuntimeRoot).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $runtimePrefix = "$runtimeRootFull$([System.IO.Path]::DirectorySeparatorChar)"
     foreach ($entry in $entries) {
-        $targetPath = Join-Path $RuntimeRoot $entry.path
+        $relativePath = [string]$entry.path
+        $pathParts = @($relativePath -split "[/\\]")
+        if (
+            [System.IO.Path]::IsPathRooted($relativePath) -or
+            $pathParts.Count -eq 0 -or
+            $pathParts -contains ".." -or
+            $pathParts -contains "." -or
+            $pathParts -contains ""
+        ) {
+            throw "Pinned SenseNova source tree contained an unsafe path."
+        }
+        $targetPath = [System.IO.Path]::GetFullPath((Join-Path $runtimeRootFull $relativePath))
+        if (-not $targetPath.StartsWith($runtimePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Pinned SenseNova source tree path escaped the managed runtime directory."
+        }
         $targetDirectory = Split-Path -Parent $targetPath
         New-RequiredDirectory $targetDirectory
 

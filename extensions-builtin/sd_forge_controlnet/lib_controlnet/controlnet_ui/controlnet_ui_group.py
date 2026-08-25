@@ -3,7 +3,6 @@ from dataclasses import dataclass
 
 import gradio as gr
 import numpy as np
-from gradio_rangeslider import RangeSlider
 from lib_controlnet import external_code, global_state
 from lib_controlnet.controlnet_ui.canvas_editor import CanvasEditor
 from lib_controlnet.controlnet_ui.openpose_editor import OpenposeEditor
@@ -12,7 +11,7 @@ from lib_controlnet.external_code import UiControlNetUnit
 from lib_controlnet.logging import logger
 from lib_controlnet.utils import judge_image_type
 
-from modules import shared
+from modules import gradio_compat, shared
 from modules.ui_components import FormRow, ToolButton
 from modules_forge.forge_canvas.canvas import ForgeCanvas
 from modules_forge.utils import HWC3
@@ -402,18 +401,34 @@ class ControlNetUiGroup:
                 elem_id=f"{elem_id_tabname}_{tabname}_controlnet_control_weight_slider",
                 elem_classes="controlnet_control_weight_slider",
             )
-            self.timestep_range = RangeSlider(
-                label="Timestep Range",
+            self.guidance_start = gr.Slider(
+                label="Guidance Start",
                 minimum=0,
                 maximum=1.0,
-                value=(self.default_unit.guidance_start, self.default_unit.guidance_end),
-                elem_id=f"{elem_id_tabname}_{tabname}_controlnet_control_step_slider",
+                step=0.01,
+                value=self.default_unit.guidance_start,
+                elem_id=f"{elem_id_tabname}_{tabname}_controlnet_control_step_start_slider",
                 elem_classes="controlnet_control_step_slider",
             )
-            self.guidance_start = gr.State(self.default_unit.guidance_start)
-            self.guidance_end = gr.State(self.default_unit.guidance_end)
+            self.guidance_end = gr.Slider(
+                label="Guidance End",
+                minimum=0,
+                maximum=1.0,
+                step=0.01,
+                value=self.default_unit.guidance_end,
+                elem_id=f"{elem_id_tabname}_{tabname}_controlnet_control_step_end_slider",
+                elem_classes="controlnet_control_step_slider",
+            )
+            self.timestep_range = (self.guidance_start, self.guidance_end)
 
-        self.timestep_range.change(lambda x: (x[0], x[1]), inputs=[self.timestep_range], outputs=[self.guidance_start, self.guidance_end])
+        for slider in self.timestep_range:
+            slider.release(
+                gradio_compat.normalize_unit_interval,
+                inputs=[self.guidance_start, self.guidance_end],
+                outputs=[self.guidance_start, self.guidance_end],
+                queue=False,
+                show_progress=False,
+            )
 
         # advanced options
         with gr.Column(visible=False) as self.advanced:

@@ -7,15 +7,14 @@ import sys
 import starlette
 
 from modules.timer import startup_timer
+from modules.paths_internal import data_path, script_path
 
 
 def gradio_server_name():
     from modules.shared_cmd_options import cmd_opts
+    from modules.aikimi_security.remote_access import server_bind_name
 
-    if cmd_opts.server_name:
-        return cmd_opts.server_name
-    else:
-        return "0.0.0.0" if cmd_opts.listen else None
+    return server_bind_name(cmd_opts)
 
 
 def fix_torch_version():
@@ -111,26 +110,9 @@ def get_gradio_auth_creds():
     an iterable of (username, password) tuples.
     """
     from modules.shared_cmd_options import cmd_opts
+    from modules.aikimi_security.auth import credentials_from_options
 
-    def process_credential_line(s):
-        s = s.strip()
-        if not s:
-            return None
-        return tuple(s.split(":", 1))
-
-    if cmd_opts.gradio_auth:
-        for cred in cmd_opts.gradio_auth.split(","):
-            cred = process_credential_line(cred)
-            if cred:
-                yield cred
-
-    if cmd_opts.gradio_auth_path:
-        with open(cmd_opts.gradio_auth_path, "r", encoding="utf8") as file:
-            for line in file.readlines():
-                for cred in line.strip().split(","):
-                    cred = process_credential_line(cred)
-                    if cred:
-                        yield cred
+    yield from credentials_from_options(cmd_opts, "gradio")
 
 
 def dumpstacks():

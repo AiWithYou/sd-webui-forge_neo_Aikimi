@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any, Final, NamedTuple
 
 from modules import cmd_args, errors
@@ -19,6 +20,7 @@ from modules.paths_internal import extensions_builtin_dir, extensions_dir, scrip
 from modules.timer import startup_timer
 from modules_forge import forge_version
 from modules_forge.config import always_disabled_extensions
+from modules.aikimi_security.redaction import redact_argv, redact_text
 
 args, _ = cmd_args.parser.parse_known_args()
 
@@ -56,13 +58,29 @@ def git_tag():
     return f"{forge_version.version} {forge_version.release}"
 
 
-def run(command, desc=None, errdesc=None, custom_env=None, live: bool = default_command_live) -> str:
+def _split_command(command: str | Sequence[object]) -> list[str]:
+    if not isinstance(command, str):
+        return [str(item) for item in command]
+    tokens = shlex.split(command, posix=os.name != "nt")
+    if os.name == "nt":
+        tokens = [
+            token[1:-1]
+            if len(token) >= 2 and token[0] == token[-1] and token[0] in {'"', "'"}
+            else token
+            for token in tokens
+        ]
+    return tokens
+
+
+def run(command: str | Sequence[object], desc=None, errdesc=None, custom_env=None, live: bool = default_command_live) -> str:
     if desc is not None:
         print(desc)
 
+    command_args = _split_command(command)
     run_kwargs = {
-        "args": command,
-        "shell": True,
+        "args": command_args,
+        "shell": False,
+        "cwd": script_path,
         "env": os.environ if custom_env is None else custom_env,
         "encoding": "utf8",
         "errors": "ignore",
@@ -76,13 +94,13 @@ def run(command, desc=None, errdesc=None, custom_env=None, live: bool = default_
     if result.returncode != 0:
         error_bits = [
             f"{errdesc or 'Error running command'}.",
-            f"Command: {command}",
+            f"Command: {shlex.join(redact_argv(command_args))}",
             f"Error code: {result.returncode}",
         ]
         if result.stdout:
-            error_bits.append(f"stdout: {result.stdout}")
+            error_bits.append(f"stdout: {redact_text(result.stdout)}")
         if result.stderr:
-            error_bits.append(f"stderr: {result.stderr}")
+            error_bits.append(f"stderr: {redact_text(result.stderr)}")
         raise RuntimeError("\n".join(error_bits))
 
     return result.stdout or ""
@@ -127,8 +145,10 @@ def run_pip(command, desc=None, live=default_command_live):
     if args.skip_install:
         return
 
-    index_url_line = f" --index-url {index_url}" if index_url != "" else ""
-    return run(f'"{python}" -m pip {command} --prefer-binary{index_url_line}', desc=f"Installing {desc}", errdesc=f"Couldn't install {desc}", live=live)
+    command_args = [python, "-m", "pip", *_split_command(command), "--prefer-binary"]
+    if index_url:
+        command_args.extend(["--index-url", index_url])
+    return run(command_args, desc=f"Installing {desc}", errdesc=f"Couldn't install {desc}", live=live)
 
 
 def check_run_python(code: str, *, return_error: bool = False) -> bool | tuple[bool, str]:
@@ -247,39 +267,37 @@ def run_extensions_installers(settings_file):
                 startup_timer.record(dirname_extension)
 
 
-re_requirement = re.compile(r"\s*(\S+)\s*==\s*([^\s;]+)\s*")
-
-
 def requirements_met(requirements_file):
-    """
-    Does a simple parse of a requirements.txt file to determine if all rerqirements in it
-    are already installed. Returns True if so, False if not installed or parsing fails.
-    """
+    """Return whether every applicable PEP 508 requirement is installed."""
 
     import importlib.metadata
 
-    import packaging.version
+    from packaging.requirements import InvalidRequirement, Requirement
 
-    with open(requirements_file, "r", encoding="utf8") as file:
-        for line in file:
-            if line.strip() == "":
+    with open(requirements_file, encoding="utf8") as file:
+        for raw_line in file:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
                 continue
-
-            if (m := re.match(re_requirement, line)) is None:
-                continue
-
-            package = m.group(1)
-            version_required = m.group(2)
+            if " #" in line:
+                line = line.split(" #", 1)[0].rstrip()
 
             try:
-                version_installed = importlib.metadata.version(package)
-            except Exception:
+                requirement = Requirement(line)
+            except InvalidRequirement:
                 return False
 
-            if version_installed is None:
+            if requirement.marker is not None and not requirement.marker.evaluate():
+                continue
+
+            try:
+                installed_version = importlib.metadata.version(requirement.name)
+            except importlib.metadata.PackageNotFoundError:
                 return False
 
-            if packaging.version.parse(version_installed) < packaging.version.parse(version_required):
+            if requirement.specifier and not requirement.specifier.contains(
+                installed_version, prereleases=True
+            ):
                 return False
 
     return True
@@ -292,7 +310,6 @@ def prepare_environment():
     bnb_package = os.environ.get("BNB_PACKAGE", "bitsandbytes==0.49.2")
 
     packaging_package = os.environ.get("PACKAGING_PACKAGE", "packaging==26.2")
-    gradio_package = os.environ.get("GRADIO_PACKAGE", "gradio==4.40.0 gradio_rangeslider==0.0.8")
     requirements_file = os.environ.get("REQS_FILE", "requirements.txt")
 
     try:
@@ -420,9 +437,6 @@ assert cuda or xpu or mps
         run_pip("install ngrok", "ngrok")
         startup_timer.record("install ngrok")
 
-    if not is_installed("gradio"):
-        run_pip(f"install {gradio_package}", "gradio")
-
     if not os.path.isfile(requirements_file):
         requirements_file = os.path.join(script_path, requirements_file)
 
@@ -542,7 +556,10 @@ def configure_comfy_yaml(comfy_yaml: Path):
 
 
 def start():
-    print(f"Launching {'API server' if '--nowebui' in sys.argv else 'Web UI'} with arguments: {shlex.join(sys.argv[1:])}")
+    print(
+        f"Launching {'API server' if '--nowebui' in sys.argv else 'Web UI'} "
+        f"with arguments: {shlex.join(redact_argv(sys.argv[1:]))}"
+    )
 
     from modules import logging_config
 

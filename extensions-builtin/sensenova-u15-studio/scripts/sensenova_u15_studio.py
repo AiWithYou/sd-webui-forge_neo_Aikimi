@@ -961,7 +961,7 @@ def _build_ui():
             }}''',
             queue=False,
             show_progress="hidden",
-            api_name=False,
+            api_visibility="private",
         )
         interface.load(
             _refresh_runtime,

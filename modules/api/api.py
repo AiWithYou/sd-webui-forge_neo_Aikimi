@@ -1,7 +1,6 @@
 import base64
 import datetime
 import io
-import ipaddress
 import os
 import time
 from contextlib import closing
@@ -13,7 +12,6 @@ from typing import Any, Union, get_args, get_origin
 import gradio as gr
 import piexif
 import piexif.helper
-import requests
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.encoders import jsonable_encoder
@@ -27,6 +25,10 @@ import modules.textual_inversion.textual_inversion
 from modules import errors, images, infotext_utils, postprocessing, restart, script_callbacks, scripts, sd_models, sd_samplers, sd_schedulers, shared_items, ui
 from modules.api import models
 from modules.api.script_args import overlay_script_args
+from modules.aikimi_security.api_policy import public_cmd_flags
+from modules.aikimi_security.auth import credentials_from_options
+from modules.aikimi_security.redaction import redact_mapping, safe_error_message
+from modules.aikimi_security.url_fetch import SafeFetchError, fetch_remote_image, validate_decoded_image
 from modules.processing import StableDiffusionProcessingImg2Img, StableDiffusionProcessingTxt2Img, process_extra_images, process_images
 from modules.progress import add_task_to_queue, create_task_id, current_task, finish_task, start_task
 from modules.shared import cmd_opts, opts
@@ -54,41 +56,19 @@ def setUpscalers(req: dict):
     return reqDict
 
 
-def verify_url(url):
-    """Returns True if the url refers to a global resource."""
-
-    import socket
-    from urllib.parse import urlparse
-
-    try:
-        parsed_url = urlparse(url)
-        domain_name = parsed_url.netloc
-        host = socket.gethostbyname_ex(domain_name)
-        for ip in host[2]:
-            ip_addr = ipaddress.ip_address(ip)
-            if not ip_addr.is_global:
-                return False
-    except Exception:
-        return False
-
-    return True
-
-
 def decode_base64_to_image(encoding):
-    if encoding.startswith("http://") or encoding.startswith("https://"):
+    if encoding.casefold().startswith(("http://", "https://")):
         if not opts.api_enable_requests:
-            raise HTTPException(status_code=500, detail="Requests not allowed")
-
-        if opts.api_forbid_local_requests and not verify_url(encoding):
-            raise HTTPException(status_code=500, detail="Request to local resource not allowed")
-
-        headers = {"user-agent": opts.api_useragent} if opts.api_useragent else {}
-        response = requests.get(encoding, timeout=30, headers=headers)
+            raise HTTPException(status_code=403, detail="Remote image requests are disabled")
         try:
-            image = images.read(BytesIO(response.content))
+            payload = fetch_remote_image(encoding, user_agent=opts.api_useragent)
+            image = images.read(BytesIO(payload))
+            validate_decoded_image(image)
             return image
+        except SafeFetchError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
         except Exception as e:
-            raise HTTPException(status_code=500, detail="Invalid image url") from e
+            raise HTTPException(status_code=400, detail="Invalid remote image") from e
 
     if encoding.startswith("data:image/"):
         encoding = encoding.split(";")[1].split(",")[1]
@@ -168,15 +148,14 @@ def api_middleware(app: FastAPI):
     def handle_exception(request: Request, e: Exception):
         err = {
             "error": type(e).__name__,
-            "detail": vars(e).get("detail", ""),
-            "body": vars(e).get("body", ""),
-            "errors": str(e),
+            "detail": safe_error_message(vars(e).get("detail", "")),
+            "errors": safe_error_message(e),
         }
         if not isinstance(e, HTTPException):  # do not print backtrace on known httpexceptions
-            message = f"API error: {request.method}: {request.url} {err}"
+            message = f"API error: {request.method}: {request.url.path} {redact_mapping(err)}"
             if rich_available:
                 print(message)
-                console.print_exception(show_locals=True, max_frames=2, extra_lines=1, suppress=[anyio, starlette], word_wrap=False, width=min([console.width, 200]))
+                console.print_exception(show_locals=False, max_frames=2, extra_lines=1, suppress=[anyio, starlette], word_wrap=False, width=min([console.width, 200]))
             else:
                 errors.report(message, exc_info=True)
         return JSONResponse(status_code=vars(e).get("status_code", 500), content=jsonable_encoder(err))
@@ -199,11 +178,7 @@ def api_middleware(app: FastAPI):
 
 class Api:
     def __init__(self, app: FastAPI, queue_lock: Lock):
-        if shared.cmd_opts.api_auth:
-            self.credentials = {}
-            for auth in shared.cmd_opts.api_auth.split(","):
-                user, password = auth.split(":")
-                self.credentials[user] = password
+        self.credentials = dict(credentials_from_options(shared.cmd_opts, "api"))
 
         self.router = APIRouter()
         self.app = app
@@ -217,9 +192,9 @@ class Api:
         self.add_api_route("/sdapi/v1/progress", self.progressapi, methods=["GET"], response_model=models.ProgressResponse)
         self.add_api_route("/sdapi/v1/interrupt", self.interruptapi, methods=["POST"])
         self.add_api_route("/sdapi/v1/skip", self.skip, methods=["POST"])
-        self.add_api_route("/sdapi/v1/options", self.get_config, methods=["GET"], response_model=models.OptionsModel)
+        self.add_api_route("/sdapi/v1/options", self.get_config, methods=["GET"])
         self.add_api_route("/sdapi/v1/options", self.set_config, methods=["POST"])
-        self.add_api_route("/sdapi/v1/cmd-flags", self.get_cmd_flags, methods=["GET"], response_model=models.FlagsModel)
+        self.add_api_route("/sdapi/v1/cmd-flags", self.get_cmd_flags, methods=["GET"])
         self.add_api_route("/sdapi/v1/samplers", self.get_samplers, methods=["GET"], response_model=list[models.SamplerItem])
         self.add_api_route("/sdapi/v1/schedulers", self.get_schedulers, methods=["GET"], response_model=list[models.SchedulerItem])
         self.add_api_route("/sdapi/v1/upscalers", self.get_upscalers, methods=["GET"], response_model=list[models.UpscalerItem])
@@ -250,6 +225,10 @@ class Api:
         self.add_api_route("/sdapi/v1/script-info", self.get_script_info, methods=["GET"], response_model=list[models.ScriptInfo])
         self.add_api_route("/sdapi/v1/extensions", self.get_extensions_list, methods=["GET"], response_model=list[models.ExtensionItem])
 
+        from modules import aikimi_diagnostics
+
+        aikimi_diagnostics.register_api_routes(self)
+
         if shared.cmd_opts.api_server_stop:
             self.add_api_route("/sdapi/v1/server-kill", self.kill_webui, methods=["POST"])
             self.add_api_route("/sdapi/v1/server-restart", self.restart_webui, methods=["POST"])
@@ -279,7 +258,7 @@ class Api:
         self.embedding_db.load_textual_inversion_embeddings(force_reload=True, sync_with_sd_model=False)
 
     def add_api_route(self, path: str, endpoint, **kwargs):
-        if shared.cmd_opts.api_auth:
+        if self.credentials:
             return self.app.add_api_route(path, endpoint, dependencies=[Depends(self.auth)], **kwargs)
         return self.app.add_api_route(path, endpoint, **kwargs)
 
@@ -665,17 +644,23 @@ class Api:
         shared.state.skip()
 
     def get_config(self):
-        from modules.sysinfo import get_config
+        from modules.sysinfo import get_api_config
 
-        return get_config()
+        return get_api_config()
 
     def set_config(self, req: dict[str, Any]):
-        from modules.sysinfo import set_config
+        from modules.sysinfo import InvalidOptionTypeError, RestrictedOptionError, UnknownOptionError, set_config
 
-        set_config(req)
+        try:
+            changed = set_config(req, is_api=True)
+        except RestrictedOptionError as exc:
+            raise HTTPException(status_code=403, detail=safe_error_message(exc)) from exc
+        except (InvalidOptionTypeError, UnknownOptionError) as exc:
+            raise HTTPException(status_code=422, detail=safe_error_message(exc)) from exc
+        return {"changed": changed}
 
     def get_cmd_flags(self):
-        return vars(shared.cmd_opts)
+        return public_cmd_flags(shared.cmd_opts)
 
     def get_samplers(self):
         return [{"name": sampler[0], "aliases": sampler[2], "options": sampler[3]} for sampler in sd_samplers.all_samplers]

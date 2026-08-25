@@ -28,6 +28,10 @@
     const VALID_POSITIONS = new Set(["bottom-right", "bottom-left", "top-right", "top-left"]);
     const SAFE_ASSET_NAME = /^[a-z0-9][a-z0-9._-]*$/i;
     const ERROR_SELECTORS = ["#html_log_txt2img .error", "#html_log_img2img .error", "#html_log_extras .error"];
+    const ACTIVE_POLL_MS = 1500;
+    const IDLE_POLL_MS = 5000;
+    const MAX_BACKOFF_MS = 60000;
+    const FETCH_TIMEOUT_MS = 8000;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
     let panel = null;
@@ -42,6 +46,7 @@
     let pollingTimer = null;
     let pollingController = null;
     let pollingFailures = 0;
+    let pollingGeneration = 0;
     let enabled = false;
     let animationEnabled = true;
     let dialogueEnabled = true;
@@ -77,6 +82,15 @@
     function setAttribute(element, name, value) {
         const next = String(value);
         if (element && element.getAttribute(name) !== next) element.setAttribute(name, next);
+    }
+
+    function publicTechnicalDetail(value) {
+        return String(value || "")
+            .replace(/(?:[a-z]:[\\/]|\\\\)[^\s<>"|]+/gi, "<local-path>")
+            .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1<redacted>@")
+            .replace(/([?&](?:token|secret|password|credential|auth|key|sig)[^=]*=)[^&#\s]+/gi, "$1<redacted>")
+            .replace(/\b(token|secret|password|credential|authorization|cookie|auth)\s*[=:]\s*[^\s,;]+/gi, "$1=<redacted>")
+            .slice(0, 500);
     }
 
     function formatBytes(value) {
@@ -543,13 +557,16 @@
         );
         setText(field("queue"), `${queueSize} waiting${candidate.state === "queued" && candidate.text ? ` · ${candidate.text}` : ""}`);
         setText(field("backend"), backend.ready ? `Online · uptime ${formatSeconds(backend.uptime_seconds)}` : "Unavailable");
-        setText(field("error"), candidate.errorDetails || portraitLoadIssue || "None");
+        setText(field("error"), publicTechnicalDetail(candidate.errorDetails || portraitLoadIssue || "None"));
 
     }
 
     function requestFreshSnapshot() {
         if (pollingTimer) window.clearTimeout(pollingTimer);
         pollingTimer = null;
+        pollingGeneration += 1;
+        if (pollingController) pollingController.abort();
+        pollingController = null;
         schedulePoll();
     }
 
@@ -647,7 +664,7 @@
                 const outOfMemory = normalized === "oom" || normalized.includes("out of memory");
                 currentIssue = {
                     state: outOfMemory ? "out_of_memory" : "error",
-                    details: text,
+                    details: publicTechnicalDetail(text),
                     expiresAt: Number.POSITIVE_INFINITY,
                 };
                 completedUntil = 0;
@@ -660,12 +677,19 @@
         pollingTimer = null;
         if (!enabled || document.hidden) return;
 
-        pollingController = new AbortController();
+        const generation = ++pollingGeneration;
+        const controller = new AbortController();
+        pollingController = controller;
+        let timedOut = false;
+        const timeout = window.setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+        }, FETCH_TIMEOUT_MS);
         try {
             const response = await fetch(appUrl("./internal/aikimi-status"), {
                 cache: "no-store",
                 headers: { Accept: "application/json" },
-                signal: pollingController.signal,
+                signal: controller.signal,
             });
             if (!response.ok) throw new Error(`Status returned ${response.status}`);
 
@@ -674,15 +698,20 @@
 
             render();
         } catch (error) {
-            if (error.name !== "AbortError") {
+            if (error.name !== "AbortError" || timedOut) {
                 pollingFailures += 1;
                 render();
             }
         } finally {
-            pollingController = null;
-            if (enabled && !document.hidden) {
+            window.clearTimeout(timeout);
+            if (pollingController === controller) pollingController = null;
+            if (generation === pollingGeneration && enabled && !document.hidden) {
                 const active = tasks.size > 0 || snapshot?.generation?.active || snapshot?.model?.loading;
-                schedulePoll(active ? 750 : 5000);
+                const baseDelay = active ? ACTIVE_POLL_MS : IDLE_POLL_MS;
+                const delay = pollingFailures
+                    ? Math.min(MAX_BACKOFF_MS, baseDelay * 2 ** Math.min(pollingFailures, 6))
+                    : baseDelay;
+                schedulePoll(delay);
             }
         }
     }
@@ -697,6 +726,7 @@
         pollingTimer = null;
         if (pollingController) pollingController.abort();
         pollingController = null;
+        pollingGeneration += 1;
     }
 
     function selectedOption(value, allowed, fallback) {
@@ -804,6 +834,8 @@
     }
 
     function initialize() {
+        if (window.__aikimiStatusInitialized) return;
+        window.__aikimiStatusInitialized = true;
         createBrandHeader();
         createPanel();
 

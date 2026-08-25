@@ -347,6 +347,13 @@ class AikimiStatusTests(unittest.TestCase):
         self.assertIn("failedAssetUrls", assistant_source)
         self.assertIn("preloadConfiguredAssets", assistant_source)
         self.assertIn("let enabled = false", assistant_source)
+        self.assertIn("const ACTIVE_POLL_MS = 1500", assistant_source)
+        self.assertIn("const MAX_BACKOFF_MS = 60000", assistant_source)
+        self.assertIn("const FETCH_TIMEOUT_MS = 8000", assistant_source)
+        self.assertIn("pollingController === controller", assistant_source)
+        self.assertIn("pollingGeneration", assistant_source)
+        self.assertIn("window.__aikimiStatusInitialized", assistant_source)
+        self.assertIn("publicTechnicalDetail", assistant_source)
         self.assertNotIn("aikimi-working", (ROOT / "style.css").read_text(encoding="utf-8"))
 
         manifest = json.loads((ASSET_ROOT / "manifest.json").read_text(encoding="utf-8"))

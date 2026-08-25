@@ -28,6 +28,40 @@ start = launch_utils.start
 
 
 def main():
+    import os
+
+    from modules.aikimi_security.auth import AuthenticationConfigError, validate_auth_configuration
+    from modules.aikimi_security.paths import UnsafeAllowedPathError, build_gradio_allowed_paths
+    from modules.aikimi_security.remote_access import RemoteAccessError, validate_remote_access
+    from modules.paths_internal import data_path, script_path
+
+    try:
+        validate_remote_access(args)
+        validate_auth_configuration(args)
+        build_gradio_allowed_paths(
+            script_path,
+            data_path,
+            requested_paths=getattr(args, "gradio_allowed_path", ()),
+        )
+    except (AuthenticationConfigError, RemoteAccessError, UnsafeAllowedPathError) as exc:
+        raise SystemExit(f"Aikimi Neo launch policy error: {exc}") from exc
+
+    # Framework environment variables must not silently widen the reviewed CLI
+    # policy. Gradio temporary files stay under the managed data tmp directory.
+    for variable in (
+        "GRADIO_ALLOWED_PATHS",
+        "GRADIO_BLOCKED_PATHS",
+        "GRADIO_SERVER_NAME",
+        "GRADIO_SHARE",
+    ):
+        os.environ.pop(variable, None)
+    managed_gradio_temp = os.path.join(data_path, "tmp", "gradio")
+    try:
+        os.makedirs(managed_gradio_temp, exist_ok=True)
+    except OSError as exc:
+        raise SystemExit("Aikimi Neo could not prepare its managed temporary directory.") from exc
+    os.environ["GRADIO_TEMP_DIR"] = managed_gradio_temp
+
     if args.dump_sysinfo:
         filename = launch_utils.dump_sysinfo()
 

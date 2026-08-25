@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -10,6 +11,8 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
+
+import modules_forge.minimax_h3_bridge as h3_bridge
 
 from modules_forge.minimax_h3_bridge import (
     ComfyH3Client,
@@ -56,6 +59,7 @@ from modules_forge.minimax_h3_bridge import (
     generation_preset_values,
     h3_core_optimization_status,
     history_html,
+    history_choices,
     inspect_readiness,
     list_history,
     load_history_request,
@@ -1359,12 +1363,54 @@ class MiniMaxH3RuntimeTests(unittest.TestCase):
             )
             mirrored = Path(updates[-1]["path"])
             self.assertEqual(mirrored.read_bytes(), b"generated video")
-            metadata = json.loads(mirrored.with_suffix(".json").read_text(encoding="utf-8"))
+            metadata_text = mirrored.with_suffix(".json").read_text(encoding="utf-8")
+            metadata = json.loads(metadata_text)
             self.assertEqual(metadata["prompt_id"], "completed-job-1234")
             self.assertEqual(metadata["seed"], 314159)
             self.assertEqual(metadata["runtime_profile"], RUNTIME_PROFILE_FAST)
+            self.assertEqual(metadata["schema_version"], 1)
+            self.assertEqual(metadata["source_backend"], "comfyui")
+            self.assertEqual(metadata["source_file"], source.name)
+            self.assertNotIn("source", metadata)
+            self.assertNotIn(os.fspath(source.resolve()), metadata_text)
             self.assertFalse(managed.exists())
             client.cancel.assert_not_called()
+
+    def test_history_choices_use_opaque_ids_without_disclosing_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            video = root / "runtime" / "private-video.mp4"
+            video.parent.mkdir()
+            video.write_bytes(b"video")
+            item = HistoryItem(video.resolve(), video.stat().st_mtime, "ComfyUI")
+
+            choices = history_choices([item])
+
+            self.assertEqual(len(choices), 1)
+            self.assertTrue(choices[0][1].startswith("h3-"))
+            self.assertNotIn(os.fspath(root), choices[0][1])
+            cached = Path(cache_history_video(choices[0][1], [item], root / "output"))
+            self.assertEqual(cached.read_bytes(), b"video")
+
+    def test_managed_runtime_timeout_falls_back_to_kill(self):
+        process = mock.MagicMock()
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired("comfy", 10), 0]
+
+        with (
+            mock.patch.object(h3_bridge, "_MANAGED_PROCESS", process),
+            mock.patch.object(
+                h3_bridge,
+                "_MANAGED_PROCESS_IDENTITY",
+                (Path("runtime"), "http://127.0.0.1:8188"),
+            ),
+        ):
+            h3_bridge._stop_managed_runtime()
+            self.assertIsNone(h3_bridge._MANAGED_PROCESS)
+            self.assertIsNone(h3_bridge._MANAGED_PROCESS_IDENTITY)
+
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
 
     def test_runtime_is_discovered_from_model_path_yaml(self):
         with tempfile.TemporaryDirectory() as temporary:

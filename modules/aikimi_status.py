@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from modules.aikimi_security.redaction import safe_error_message
+
 
 def _display_name(path: object | None) -> str | None:
     return Path(str(path).replace("\\", "/")).name if path else None
@@ -13,19 +15,9 @@ def _display_name(path: object | None) -> str | None:
 
 def request_is_authorized(app, request) -> bool:
     """Match Gradio's login boundary for an add-on FastAPI route."""
+    from modules.aikimi_security.auth import request_has_gradio_auth
 
-    auth_dependency = getattr(app, "auth_dependency", None)
-    auth = getattr(app, "auth", None)
-    if auth_dependency is None and auth is None:
-        return True
-    if auth_dependency is not None:
-        return auth_dependency(request) is not None
-
-    cookie_id = getattr(app, "cookie_id", "")
-    token = request.cookies.get(f"access-token-{cookie_id}") or request.cookies.get(
-        f"access-token-unsecure-{cookie_id}"
-    )
-    return getattr(app, "tokens", {}).get(token) is not None
+    return request_has_gradio_auth(app, request)
 
 
 def _model_snapshot(model_data=None) -> dict[str, Any]:
@@ -101,7 +93,7 @@ def _generation_snapshot(state=None, pending_tasks=None) -> dict[str, Any]:
         "active": active,
         "progress": value,
         "eta": eta,
-        "text": textinfo,
+        "text": safe_error_message(textinfo, limit=240) if textinfo else None,
         "queue_size": len(pending_tasks),
     }
 
@@ -134,7 +126,7 @@ def _memory_snapshot() -> dict[str, Any]:
         return {
             "available": False,
             "device": None,
-            "error": f"{type(exc).__name__}: {exc}",
+            "error": f"{type(exc).__name__}: {safe_error_message(exc, limit=160)}",
         }
 
 

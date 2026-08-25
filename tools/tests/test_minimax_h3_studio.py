@@ -71,7 +71,7 @@ class MiniMaxH3StudioCallbackTests(unittest.TestCase):
             "max",
         )
         self.assertEqual(len(updates), 6)
-        self.assertFalse(updates[1]["visible"])
+        self.assertEqual(updates[1]["visible"], "hidden")
         self.assertEqual(updates[3]["value"], "match")
         self.assertNotIn("Reference Max", updates[4])
         self.assertEqual(updates[5]["__type__"], "update")

@@ -22,6 +22,12 @@ from typing import Any, Iterator, Sequence
 import numpy as np
 from PIL import Image, ImageOps
 
+from modules.aikimi_security.redaction import (
+    redact_mapping,
+    redact_text,
+    sanitized_subprocess_environment,
+)
+
 
 MODE_TEXT = "text"
 MODE_EDIT = "edit"
@@ -624,9 +630,20 @@ def _cleanup_job_directory(job_directory: Path, cache_root: Path) -> None:
     resolved = job_directory.resolve()
     if resolved.parent != expected_parent or not _is_within(resolved, cache_root):
         raise SenseNovaBridgeError(
-            f"一時jobの削除先が許可範囲外です。削除を中止しました: {resolved}"
+            "一時jobの削除先が許可範囲外です。削除を中止しました。"
         )
-    shutil.rmtree(resolved)
+    for attempt in range(3):
+        try:
+            shutil.rmtree(resolved)
+            return
+        except OSError as exc:
+            if attempt == 2:
+                print(
+                    "SenseNova temporary cleanup did not complete "
+                    f"({type(exc).__name__})."
+                )
+                return
+            time.sleep(0.1 * (attempt + 1))
 
 
 def _release_forge_vram() -> None:
@@ -671,6 +688,7 @@ def _request_payload(
         "quantization": request.quantization,
         "checkpoint": os.fspath(Path(request.checkpoint).expanduser().resolve()),
         "checkpoint_revision": CHECKPOINT_REVISION,
+        "checkpoint_sha256": CONVROT_SHA256,
         "source_path": os.fspath(Path(request.source_path).expanduser().resolve()),
         "input_images": list(input_paths),
         "width": request.width,
@@ -782,15 +800,19 @@ def run_generation(
         _ACTIVE_JOB_ID = job_id
         _CANCELLED_JOB_IDS.discard(job_id)
 
-    started = time.monotonic()
-    yield {
-        "stage": "prepare",
-        "message": "入力画像と実行環境を確認しました",
-        "progress": 0.02,
-        "job_id": job_id,
-    }
     try:
+        started = time.monotonic()
+        yield {
+            "stage": "prepare",
+            "message": "入力画像と実行環境を確認しました",
+            "progress": 0.02,
+            "job_id": job_id,
+        }
+        if job_id in _CANCELLED_JOB_IDS:
+            raise SenseNovaGenerationCancelled("SenseNova生成をキャンセルしました。")
         input_paths = _stage_images(request.input_images, job_directory)
+        if job_id in _CANCELLED_JOB_IDS:
+            raise SenseNovaGenerationCancelled("SenseNova生成をキャンセルしました。")
         payload = _request_payload(
             request,
             input_paths=input_paths,
@@ -801,6 +823,8 @@ def run_generation(
         request_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
+        if job_id in _CANCELLED_JOB_IDS:
+            raise SenseNovaGenerationCancelled("SenseNova生成をキャンセルしました。")
         _release_forge_vram()
         yield {
             "stage": "vram",
@@ -808,8 +832,10 @@ def run_generation(
             "progress": 0.05,
             "job_id": job_id,
         }
+        if job_id in _CANCELLED_JOB_IDS:
+            raise SenseNovaGenerationCancelled("SenseNova生成をキャンセルしました。")
 
-        environment = os.environ.copy()
+        environment = sanitized_subprocess_environment(os.environ)
         environment.pop("PYTHONUTF8", None)
         environment.update(
             {
@@ -865,12 +891,14 @@ def run_generation(
                 if line is None:
                     output_closed = True
                 elif line:
-                    log_stream.write(line + "\n")
+                    safe_line = redact_text(line)
+                    log_stream.write(safe_line + "\n")
                     log_stream.flush()
-                    log_tail.append(line)
+                    log_tail.append(safe_line)
                     del log_tail[:-20]
                     event = _parse_event(line)
                     if event is not None:
+                        event = redact_mapping(event)
                         last_event = event
                         if event["stage"] != "complete":
                             event["elapsed"] = time.monotonic() - started
@@ -918,7 +946,7 @@ def run_generation(
             "job_id": job_id,
             "path": os.fspath(output_path),
             "metadata_path": os.fspath(metadata_path),
-            "metadata": metadata,
+            "metadata": redact_mapping(metadata),
         }
     finally:
         if process is not None:
@@ -944,11 +972,13 @@ def cancel_generation(job_id: str | None = None) -> str:
     with _PROCESS_LOCK:
         process = _ACTIVE_PROCESS
         active_job = _ACTIVE_JOB_ID
-        if process is None or process.poll() is not None or active_job is None:
+        if active_job is None:
             return "実行中のSenseNova生成はありません。"
         if job_id and job_id != active_job:
             return "指定された生成はすでに終了しています。"
         _CANCELLED_JOB_IDS.add(active_job)
+        if process is None or process.poll() is not None:
+            return "キャンセルを受け付けました。worker起動前に停止します。"
         process.terminate()
 
     try:

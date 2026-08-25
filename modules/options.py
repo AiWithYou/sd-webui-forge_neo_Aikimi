@@ -11,7 +11,7 @@ from modules.ui_components import FormRow
 
 
 class OptionInfo:
-    def __init__(self, default=None, label="", component=None, component_args=None, onchange=None, section=None, refresh=None, comment_before='', comment_after='', infotext=None, restrict_api=False, category_id=None):
+    def __init__(self, default=None, label="", component=None, component_args=None, onchange=None, section=None, refresh=None, comment_before='', comment_after='', infotext=None, restrict_api=False, category_id=None, api_access=None):
         self.default = default
         self.label = label
         self.component = component
@@ -32,6 +32,9 @@ class OptionInfo:
 
         self.restrict_api = restrict_api
         """If True, the setting will not be accessible via API"""
+
+        self.api_access = api_access
+        """One of hidden/read/read-write; extension options default to hidden."""
 
     def link(self, label, url):
         self.comment_before += f"[<a href='{url}' target='_blank'>{label}</a>]"
@@ -100,6 +103,20 @@ class Options:
         self.data_labels = data_labels
         self.data = {k: v.default for k, v in self.data_labels.items() if not v.do_not_save}
         self.restricted_opts = restricted_opts
+        from modules.aikimi_security.api_policy import option_name_is_public
+
+        # Core settings present at initialization preserve API compatibility when
+        # reviewed as non-sensitive. Options registered later by extensions are
+        # hidden unless the extension explicitly supplies api_access.
+        for key, info in self.data_labels.items():
+            if info.api_access is None:
+                info.api_access = (
+                    "read-write"
+                    if not info.restrict_api
+                    and key not in self.restricted_opts
+                    and option_name_is_public(key)
+                    else "hidden"
+                )
 
     def __setattr__(self, key, value):
         if key in options_builtin_fields:
@@ -158,6 +175,9 @@ class Options:
     def set(self, key, value, is_api=False, run_callbacks=True):
         """sets an option and calls its onchange callback, returning True if the option changed and False otherwise"""
 
+        if key not in self.data_labels:
+            return False
+
         oldval = self.data.get(key, None)
         if oldval == value:
             return False
@@ -166,7 +186,7 @@ class Options:
         if option.do_not_save:
             return False
 
-        if is_api and option.restrict_api:
+        if is_api and not self.api_accessible(key, write=True):
             return False
 
         try:
@@ -183,6 +203,19 @@ class Options:
                 return False
 
         return True
+
+    def api_accessible(self, key: str, *, write: bool) -> bool:
+        """Return whether a setting is intentionally exposed through the API."""
+
+        from modules.aikimi_security.api_policy import option_name_is_public
+
+        option = self.data_labels.get(key)
+        if option is None or option.restrict_api or key in self.restricted_opts:
+            return False
+        if not option_name_is_public(key):
+            return False
+        access = option.api_access
+        return access == "read-write" if write else access in {"read", "read-write"}
 
     def get_default(self, key):
         """returns the default value for the key"""

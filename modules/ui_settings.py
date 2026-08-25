@@ -3,7 +3,7 @@ from contextlib import nullcontext
 
 import gradio as gr
 
-from modules import script_callbacks, scripts, sd_models, shared, shared_items, sysinfo, timer, ui_common
+from modules import aikimi_diagnostics, script_callbacks, scripts, sd_models, shared, shared_items, sysinfo, timer, ui_common
 from modules.call_queue import wrap_gradio_call_no_job
 from modules.options import options_section
 from modules.shared import opts
@@ -195,6 +195,21 @@ class UiSettings:
                 with gr.TabItem("Defaults", id="defaults", elem_id="settings_tab_defaults"):
                     loadsave.create_ui()
 
+                with gr.TabItem("Diagnostics", id="diagnostics", elem_id="settings_tab_diagnostics"):
+                    gr.Markdown(
+                        "Review the local runtime, storage, security boundary, and built-in workflows. "
+                        "This check does not download models, run generation, or recompute large model hashes."
+                    )
+                    diagnostics_refresh = gr.Button(
+                        value="Run System Check",
+                        variant="secondary",
+                        elem_id="aikimi_diagnostics_refresh",
+                    )
+                    diagnostics_output = gr.HTML(
+                        value=aikimi_diagnostics.render_diagnostics_html,
+                        elem_id="aikimi_system_check",
+                    )
+
                 with gr.TabItem("Sysinfo", id="sysinfo", elem_id="settings_tab_sysinfo"):
                     gr.HTML('<a href="./internal/sysinfo-download" class="sysinfo_big_link" download>Download system info</a><br /><a href="./internal/sysinfo" target="_blank">(or open as text in a new page)</a>', elem_id="sysinfo_download")
 
@@ -277,6 +292,14 @@ class UiSettings:
                 fn=check_file,
                 inputs=[sysinfo_check_file],
                 outputs=[sysinfo_check_output],
+            )
+
+            diagnostics_refresh.click(
+                fn=aikimi_diagnostics.render_diagnostics_html,
+                inputs=[],
+                outputs=[diagnostics_output],
+                queue=False,
+                show_progress=False,
             )
 
             def calculate_all_checkpoint_hash_fn(max_thread):

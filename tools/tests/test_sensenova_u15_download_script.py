@@ -36,6 +36,10 @@ class SenseNovaDownloadScriptTests(unittest.TestCase):
         self.assertIn("Get-GitBlobSha1", self.script)
         self.assertIn('$_.path -like "SenseNova/*"', self.script)
         self.assertIn('$_.path -like "SenseNova-U1.5-8B-MoT/*"', self.script)
+        self.assertIn("if ($tree.truncated)", self.script)
+        self.assertIn("[System.IO.Path]::IsPathRooted($relativePath)", self.script)
+        self.assertIn("$pathParts -contains \"..\"", self.script)
+        self.assertIn("$targetPath.StartsWith($runtimePrefix", self.script)
         self.assertIn("comfy_kitchen", self.script)
 
     def test_official_8step_lora_is_pinned_and_integrity_checked(self):

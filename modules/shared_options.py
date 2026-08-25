@@ -24,6 +24,7 @@ restricted_opts = {
     "outdir_save",
     "outdir_txt2img_grids",
     "outdir_txt2img_samples",
+    "outdir_videos",
     "samples_filename_pattern",
     "temp_dir",
 }
@@ -70,7 +71,7 @@ options_templates.update(
             "use_original_name_batch": OptionInfo(True, "During batch process in Extras tab, use the input filename for output filename"),
             "save_selected_only": OptionInfo(True, 'When using the "Save" button, only save the selected image'),
             "save_write_log_csv": OptionInfo(True, 'Write the generation parameters to a log.csv when saving images using the "Save" button'),
-            "temp_dir": OptionInfo(util.truncate_path(os.path.join(data_path, "tmp")), "Directory for temporary images; leave empty to use the system TEMP folder").info("only used for intermediate/interrupted images"),
+            "temp_dir": OptionInfo(util.truncate_path(os.path.join(data_path, "tmp", "gradio")), "Directory for temporary images; leave empty to use the managed Gradio folder").info("only used for intermediate/interrupted images"),
             "clean_temp_dir_at_start": OptionInfo(True, "Clean up the temporary directory above when starting webui").info("only when the directory is not the system TEMP"),
             "save_incomplete_images": OptionInfo(False, "Save Interrupted Images"),
             "notification_audio": OptionInfo(True, "Play a notification sound after image generation").info('a "notification.mp3" file is required in the root directory').needs_reload_ui(),
@@ -208,7 +209,12 @@ options_templates.update(
         ("API", "API", "system"),
         {
             "api_enable_requests": OptionInfo(True, 'Allow "http://" and "https://" URLs as input images', restrict_api=True),
-            "api_forbid_local_requests": OptionInfo(True, "Forbid URLs to local resources", restrict_api=True),
+            "api_forbid_local_requests": OptionInfo(
+                True,
+                "Forbid URLs to local/private resources (always enforced by Aikimi Neo)",
+                component_args={"interactive": False},
+                restrict_api=True,
+            ),
             "api_useragent": OptionInfo("", "User Agent for Requests", restrict_api=True),
         },
     )

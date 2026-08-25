@@ -146,6 +146,7 @@ class SenseNovaRequestTests(unittest.TestCase):
         self.assertEqual(
             payload["checkpoint_revision"], bridge.CHECKPOINT_REVISION
         )
+        self.assertEqual(payload["checkpoint_sha256"], bridge.CONVROT_SHA256)
         self.assertEqual(payload["quantization"], bridge.QUANT_INT8_CONVROT)
         self.assertEqual(payload["generation_profile"], bridge.PROFILE_QUALITY)
         self.assertEqual(payload["lora_path"], "")
@@ -376,6 +377,51 @@ print('SENSENOVA_EVENT ' + json.dumps({"stage": "complete", "message": "fake don
             )
             self.assertTrue(Path(completed[0]["path"]).is_file())
             self.assertEqual(list((cache / "jobs").glob("*")), [])
+
+    def test_cancel_before_worker_launch_cleans_job_without_spawning(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            worker = root / "worker.py"
+            worker.write_text("raise SystemExit(99)\n", encoding="utf-8")
+            cache = root / "cache"
+            request = bridge.SenseNovaRequest(
+                mode=bridge.MODE_TEXT,
+                prompt="Cancel before launch",
+                generation_profile=bridge.PROFILE_QUALITY,
+                quantization=bridge.QUANT_INT8_CONVROT,
+                checkpoint="weights.safetensors",
+                width=1024,
+                height=1024,
+            )
+            ready = bridge.RuntimeStatus(
+                ready=True,
+                source_ready=True,
+                dependencies_ready=True,
+                checkpoint_ready=True,
+                source_path=root,
+                checkpoint_path=root / "weights.safetensors",
+                messages=(),
+            )
+            updates = bridge.run_generation(
+                request,
+                output_directory=root / "outputs",
+                cache_directory=cache,
+                log_directory=root / "logs",
+                worker_path=worker,
+            )
+            with (
+                mock.patch.object(bridge, "inspect_runtime", return_value=ready),
+                mock.patch.object(bridge.subprocess, "Popen") as popen,
+            ):
+                prepared = next(updates)
+                self.assertEqual(prepared["stage"], "prepare")
+                self.assertIn("worker起動前", bridge.cancel_generation(prepared["job_id"]))
+                with self.assertRaises(bridge.SenseNovaGenerationCancelled):
+                    next(updates)
+
+            popen.assert_not_called()
+            self.assertEqual(list((cache / "jobs").glob("*")), [])
+            self.assertIsNone(bridge._ACTIVE_JOB_ID)
 
     def test_cancel_terminates_the_active_worker_and_cleans_the_job(self):
         fake_worker = r"""

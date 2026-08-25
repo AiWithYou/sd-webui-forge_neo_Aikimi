@@ -9,7 +9,7 @@ import gradio as gr
 
 import modules.images
 import modules.infotext_utils as parameters_copypaste
-from modules import call_queue, shared, ui_tempdir, util
+from modules import call_queue, gradio_compat, shared, ui_tempdir, util
 from modules.ui_components import ToolButton
 
 folder_symbol = "\U0001f4c2"  # 📂
@@ -190,7 +190,7 @@ def create_output_panel(tabname, outdir, toprow=None):
         with gr.Column(variant="panel", elem_id=f"{tabname}_results_panel"):
             with gr.Group(elem_id=f"{tabname}_gallery_container"):
                 res.gallery = gr.Gallery(label="Output", show_label=False, elem_id=f"{tabname}_gallery", columns=4, preview=True, height=shared.opts.gallery_height or None, interactive=False, type="pil", object_fit="contain")
-                res.player = gr.Video(label="Output", show_label=False, elem_id=f"{tabname}_player", height=shared.opts.gallery_height or None, interactive=False, autoplay=shared.opts.video_player_auto, loop=shared.opts.video_player_loop, include_audio=False, show_download_button=False, show_share_button=False, visible=False)
+                res.player = gr.Video(label="Output", show_label=False, elem_id=f"{tabname}_player", height=shared.opts.gallery_height or None, interactive=False, autoplay=shared.opts.video_player_auto, loop=shared.opts.video_player_loop, include_audio=False, buttons=[], visible=False)
 
             with gr.Row(elem_id=f"image_buttons_{tabname}", elem_classes="image-buttons"):
                 open_folder_button = ToolButton(folder_symbol, elem_id=f"{tabname}_open_folder", visible=not shared.cmd_opts.hide_ui_dir_config, tooltip="Open images output directory.")
@@ -319,7 +319,7 @@ def create_refresh_button(refresh_component, refresh_method, refreshed_args, ele
 def setup_dialog(button_show, dialog, *, button_close=None):
     """Sets up the UI so that the dialog (gr.Group) is invisible, and is only shown when buttons_show is clicked, in a fullscreen modal window."""
 
-    dialog.visible = False
+    dialog.visible = gradio_compat.keep_hidden_component_mounted(False)
 
     button_show.click(
         fn=lambda: gr.update(visible=True),

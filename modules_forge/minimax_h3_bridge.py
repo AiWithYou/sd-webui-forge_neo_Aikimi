@@ -26,6 +26,8 @@ import httpx
 
 import yaml
 
+from modules.aikimi_security.redaction import sanitized_subprocess_environment
+
 
 H3_FPS = 24
 H3_MIN_SECONDS = 5.0
@@ -297,6 +299,13 @@ class HistoryItem:
     modified_at: float
     source: str
     size_bytes: int | None = None
+
+    @property
+    def public_id(self) -> str:
+        """Return an opaque browser value without disclosing the local path."""
+
+        normalized = os.path.normcase(os.fspath(self.path.resolve(strict=False)))
+        return f"h3-{hashlib.sha256(normalized.encode('utf-8')).hexdigest()[:32]}"
 
     @property
     def label(self) -> str:
@@ -1095,6 +1104,7 @@ def start_runtime(
                     stdin=subprocess.DEVNULL,
                     stdout=stdout,
                     stderr=stderr,
+                    env=sanitized_subprocess_environment(os.environ),
                     creationflags=creationflags,
                 )
                 _MANAGED_PROCESS_IDENTITY = identity
@@ -1121,14 +1131,27 @@ def _stop_managed_runtime() -> None:
     global _MANAGED_PROCESS, _MANAGED_PROCESS_IDENTITY
     with _PROCESS_LOCK:
         process = _MANAGED_PROCESS
-        _MANAGED_PROCESS = None
-        _MANAGED_PROCESS_IDENTITY = None
     if process is not None and process.poll() is None:
         try:
             process.terminate()
             process.wait(timeout=10)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+                process.wait(timeout=10)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                _LOG.warning(
+                    "Managed H3 runtime did not stop cleanly (%s).",
+                    type(exc).__name__,
+                )
+        except OSError as exc:
+            _LOG.warning(
+                "Managed H3 runtime could not be stopped (%s).", type(exc).__name__
+            )
+    with _PROCESS_LOCK:
+        if _MANAGED_PROCESS is process:
+            _MANAGED_PROCESS = None
+            _MANAGED_PROCESS_IDENTITY = None
 
 
 atexit.register(_stop_managed_runtime)
@@ -1761,6 +1784,7 @@ def mirror_result(
     staged_video = target.with_name(f".{target.name}.{token}.part")
     staged_metadata = metadata_path.with_name(f".{metadata_path.name}.{token}.part")
     metadata = {
+        "schema_version": 1,
         "model": "MiniMax H3",
         "prompt_id": prompt_id,
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -1780,7 +1804,8 @@ def mirror_result(
         "comfy_kitchen_version": readiness.package_versions.get("comfy-kitchen"),
         "comfyui_revision": readiness.core_revision,
         "runtime_profile": readiness.runtime_profile,
-        "source": os.fspath(source),
+        "source_backend": "comfyui",
+        "source_file": source.name,
     }
     try:
         shutil.copy2(source, staged_video)
@@ -2098,13 +2123,21 @@ def history_html(items: Sequence[HistoryItem]) -> str:
 
 
 def history_choices(items: Sequence[HistoryItem]) -> list[tuple[str, str]]:
-    return [(item.label, os.fspath(item.path)) for item in items]
+    return [(item.label, item.public_id) for item in items]
 
 
 def _resolve_history_selection(selected: str, items: Sequence[HistoryItem]) -> Path:
     try:
-        selected_path = Path(selected).resolve()
-        allowed = {item.path.resolve() for item in items}
+        public_matches = {
+            item.public_id: item.path.resolve() for item in items
+        }
+        if selected in public_matches:
+            selected_path = public_matches[selected]
+        else:
+            # Preserve the server-side Python API during the UI migration. The
+            # browser only receives opaque IDs from history_choices().
+            selected_path = Path(selected).resolve()
+        allowed = set(public_matches.values())
     except (OSError, RuntimeError) as exc:
         raise H3BridgeError(f"履歴ファイルを確認できません: {exc}") from exc
     if selected_path not in allowed:

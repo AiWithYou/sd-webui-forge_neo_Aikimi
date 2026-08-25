@@ -1,6 +1,6 @@
 import gradio as gr
 
-from modules import shared, ui_common, ui_components, styles
+from modules import gradio_compat, shared, styles, ui_common, ui_components
 
 styles_edit_symbol = "\U0001f58c\ufe0f"  # 🖌️
 styles_materialize_symbol = "\U0001f4cb"  # 📋
@@ -8,6 +8,7 @@ styles_copy_symbol = "\U0001f4dd"  # 📝
 
 
 def select_style(name):
+    name = gradio_compat.normalize_single_selection(name)
     style = shared.prompt_styles.styles.get(name)
     existing = style is not None
     empty = not name
@@ -19,6 +20,7 @@ def select_style(name):
 
 
 def save_style(name, prompt, negative_prompt):
+    name = gradio_compat.normalize_single_selection(name)
     if not name:
         return gr.update(visible=False)
 
@@ -33,6 +35,7 @@ def save_style(name, prompt, negative_prompt):
 
 
 def delete_style(name):
+    name = gradio_compat.normalize_single_selection(name)
     if name == "":
         return
 
@@ -65,7 +68,7 @@ class UiPromptStyles:
 
         with gr.Group(elem_id=f"{tabname}_styles_dialog", elem_classes="popup-dialog") as styles_dialog:
             with gr.Row():
-                self.selection = gr.Dropdown(label="Styles", elem_id=f"{tabname}_styles_edit_select", choices=list(shared.prompt_styles.styles), value=[], allow_custom_value=True, info="Styles allow you to add custom text to prompt. Use the {prompt} token in style text, and it will be replaced with user's prompt when applying style. Otherwise, style's text will be added to the end of the prompt.")
+                self.selection = gr.Dropdown(label="Styles", elem_id=f"{tabname}_styles_edit_select", choices=list(shared.prompt_styles.styles), value="", allow_custom_value=True, info="Styles allow you to add custom text to prompt. Use the {prompt} token in style text, and it will be replaced with user's prompt when applying style. Otherwise, style's text will be added to the end of the prompt.")
                 ui_common.create_refresh_button([self.dropdown, self.selection], shared.prompt_styles.reload, lambda: {"choices": list(shared.prompt_styles.styles)}, f"refresh_{tabname}_styles")
                 self.materialize = ui_components.ToolButton(value=styles_materialize_symbol, elem_id=f"{tabname}_style_apply_dialog", tooltip="Apply all selected styles from the style selection dropdown in main UI to the prompt. Strips comments, if enabled.")
                 self.copy = ui_components.ToolButton(value=styles_copy_symbol, elem_id=f"{tabname}_style_copy", tooltip="Copy main UI prompt to style.")

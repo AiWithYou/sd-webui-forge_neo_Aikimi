@@ -2,15 +2,20 @@ import sys
 import textwrap
 import traceback
 
+from modules.aikimi_security.redaction import redact_text, safe_error_message
+
 exception_records = []
 
 
 def format_traceback(tb):
-    return [[f"{x.filename}, line {x.lineno}, {x.name}", x.line] for x in traceback.extract_tb(tb)]
+    return [
+        [redact_text(f"{x.filename}, line {x.lineno}, {x.name}"), redact_text(x.line or "")]
+        for x in traceback.extract_tb(tb)
+    ]
 
 
 def format_exception(e, tb):
-    return {"exception": str(e), "traceback": format_traceback(tb)}
+    return {"exception": safe_error_message(e), "traceback": format_traceback(tb)}
 
 
 def get_exceptions():
@@ -42,9 +47,9 @@ def report(message: str, *, exc_info: bool = False) -> None:
     record_exception()
 
     for line in message.splitlines():
-        print("***", line, file=sys.stderr)
+        print("***", redact_text(line), file=sys.stderr)
     if exc_info:
-        print(textwrap.indent(traceback.format_exc(), "    "), file=sys.stderr)
+        print(textwrap.indent(redact_text(traceback.format_exc()), "    "), file=sys.stderr)
         print("---", file=sys.stderr)
 
 
@@ -56,7 +61,7 @@ def print_error_explanation(message):
 
     print("=" * max_len, file=sys.stderr)
     for line in lines:
-        print(line, file=sys.stderr)
+        print(redact_text(line), file=sys.stderr)
     print("=" * max_len, file=sys.stderr)
 
 
@@ -68,7 +73,7 @@ def display(e: Exception, task, *, full_traceback=False):
     if full_traceback:
         # include frames leading up to the try-catch block
         te.stack = traceback.StackSummary(traceback.extract_stack()[:-2] + te.stack)
-    print(*te.format(), sep="", file=sys.stderr)
+    print(redact_text("".join(te.format())), file=sys.stderr)
 
 
 already_displayed = {}
@@ -97,11 +102,11 @@ def check_versions():
     import torch
     from packaging import version
 
-    from modules import shared
+    from modules import gradio_compat, shared
 
     expected_torch = "2.11.0"
     expected_xformers = "0.0.35"
-    expected_gradio = "4.40.0"
+    expected_gradio = gradio_compat.SUPPORTED_GRADIO_VERSION
 
     outdated: list[str] = []
 

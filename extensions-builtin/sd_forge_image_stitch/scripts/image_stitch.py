@@ -43,8 +43,7 @@ class ImageStitch(scripts.Script):
                 interactive=True,
                 show_label=False,
                 container=False,
-                show_download_button=False,
-                show_share_button=False,
+                buttons=[],
                 label="Reference Image(s)",
                 min_width=512,
                 height=384,
@@ -74,8 +73,7 @@ class ImageStitch(scripts.Script):
                     sources="upload",
                     type="pil",
                     label="Image to Upload",
-                    show_download_button=False,
-                    show_share_button=False,
+                    buttons=[],
                 )
                 with gr.Column():
                     btn_upload = gr.Button("Append Pasted Image")

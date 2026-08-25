@@ -14,5 +14,20 @@ if os.environ.get("IGNORE_CMD_ARGS_ERRORS", None) is None:
 else:
     cmd_opts, _ = parser.parse_known_args()
 
-cmd_opts.webui_is_non_local = any([cmd_opts.share, cmd_opts.listen, cmd_opts.ngrok, cmd_opts.server_name])
+from modules.aikimi_security.auth import AuthenticationConfigError, validate_auth_configuration
+from modules.aikimi_security.remote_access import RemoteAccessError, exposure_reasons, validate_remote_access
+
+try:
+    remote_reasons = validate_remote_access(cmd_opts)
+    validate_auth_configuration(cmd_opts)
+except (AuthenticationConfigError, RemoteAccessError) as exc:
+    parser.error(str(exc))
+
+cmd_opts.webui_is_non_local = bool(exposure_reasons(cmd_opts))
 cmd_opts.disable_extension_access = cmd_opts.webui_is_non_local and not cmd_opts.enable_insecure_extension_access
+
+if remote_reasons:
+    print(
+        "[Aikimi Neo] WARNING: authenticated remote mode is enabled "
+        f"({', '.join(remote_reasons)}). Treat every enabled extension as remotely reachable."
+    )

@@ -11,6 +11,9 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from modules import initialize, initialize_util, timer
+from modules.aikimi_security.auth import install_remote_auth_middleware
+from modules.aikimi_security.paths import build_gradio_allowed_paths, build_gradio_blocked_paths
+from modules.aikimi_security.redaction import safe_error_message
 from modules_forge.initialization import initialize_forge
 
 startup_timer = timer.startup_timer
@@ -32,9 +35,8 @@ def _handle_exception(request: Request, e: Exception):
     error_information = vars(e)
     content = {
         "error": type(e).__name__,
-        "detail": error_information.get("detail", ""),
-        "body": error_information.get("body", ""),
-        "message": str(e),
+        "detail": safe_error_message(error_information.get("detail", "")),
+        "message": safe_error_message(e),
     }
     return JSONResponse(status_code=int(error_information.get("status_code", 500)), content=jsonable_encoder(content))
 
@@ -54,6 +56,7 @@ def api_only_worker():
 
     app = FastAPI(exception_handlers={Exception: _handle_exception})
     initialize_util.setup_middleware(app)
+    install_remote_auth_middleware(app, cmd_opts)
     api = create_api(app)
 
     from modules import script_callbacks
@@ -102,7 +105,17 @@ def webui_worker():
             elif shared.opts.auto_launch_browser == "Local":
                 auto_launch_browser = not cmd_opts.webui_is_non_local
 
-        from modules_forge.forge_canvas.canvas import canvas_js_root_path
+        from modules_forge.forge_canvas.canvas import canvas_head, canvas_js_root_path
+
+        allowed_paths = build_gradio_allowed_paths(
+            initialize_util.script_path,
+            initialize_util.data_path,
+            canvas_root=canvas_js_root_path,
+            requested_paths=cmd_opts.gradio_allowed_path,
+        )
+        blocked_paths = build_gradio_blocked_paths(
+            initialize_util.script_path, initialize_util.data_path
+        )
 
         app, local_url, share_url = shared.demo.launch(
             share=cmd_opts.share,
@@ -116,13 +129,16 @@ def webui_worker():
             inbrowser=auto_launch_browser,
             prevent_thread_lock=True,
             favicon_path=os.path.join(os.path.dirname(__file__), "assets", "aikimi", "favicon.png"),
-            allowed_paths=cmd_opts.gradio_allowed_path + [canvas_js_root_path],
+            allowed_paths=allowed_paths,
+            blocked_paths=blocked_paths,
             app_kwargs={
                 "docs_url": "/docs",
                 "redoc_url": "/redoc",
                 "exception_handlers": {Exception: _handle_exception},
             },
             root_path=f"/{cmd_opts.subpath}" if cmd_opts.subpath else "",
+            theme=shared.gradio_theme,
+            head=canvas_head,
         )
 
         startup_timer.record("gradio launch")
@@ -131,9 +147,12 @@ def webui_worker():
         # an attacker to trick the user into opening a malicious HTML page, which makes a request to the
         # running web ui and do whatever the attacker wants, including installing an extension and
         # running its code. We disable this here. Suggested by RyotaK.
-        app.user_middleware = [x for x in app.user_middleware if x.cls.__name__ != "CORSMiddleware"]
+        app.user_middleware = [
+            x for x in app.user_middleware if "cors" not in x.cls.__name__.casefold()
+        ]
 
         initialize_util.setup_middleware(app)
+        install_remote_auth_middleware(app, cmd_opts)
 
         progress.setup_progress_api(app)
         ui.setup_ui_api(app)

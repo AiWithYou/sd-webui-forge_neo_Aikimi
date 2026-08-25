@@ -2190,6 +2190,139 @@ button.neo-workflow-action:focus-visible {
     }
 }
 
+.aikimi-diagnostics {
+    display: grid;
+    gap: 1rem;
+    margin-top: 0.75rem;
+    color: var(--body-text-color);
+}
+
+.aikimi-diagnostics-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem;
+    border: 1px solid var(--block-border-color);
+    border-radius: var(--block-radius);
+    background: var(--background-fill-secondary);
+}
+
+.aikimi-diagnostics-header h3,
+.aikimi-diagnostic-card h4 {
+    margin: 0;
+}
+
+.aikimi-diagnostics-header p {
+    max-width: 54rem;
+    margin: 0.3rem 0 0;
+    color: var(--body-text-color-subdued);
+    line-height: 1.5;
+}
+
+.aikimi-diagnostics-eyebrow {
+    color: var(--primary-500) !important;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+}
+
+.aikimi-diagnostics-overall,
+.aikimi-diagnostic-state,
+.aikimi-diagnostics-counts span {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.65rem;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--block-border-color);
+    border-radius: 999px;
+    background: var(--background-fill-primary);
+    font-size: 0.68rem;
+    font-weight: 750;
+    white-space: nowrap;
+}
+
+.aikimi-diagnostics.is-ready .aikimi-diagnostics-overall,
+.aikimi-diagnostic-card.is-ready .aikimi-diagnostic-state {
+    border-color: color-mix(in srgb, #65a98f 62%, var(--block-border-color));
+    color: #4f947c;
+}
+
+.aikimi-diagnostics.is-warning .aikimi-diagnostics-overall,
+.aikimi-diagnostic-card.is-warning .aikimi-diagnostic-state {
+    border-color: color-mix(in srgb, #d99b2b 62%, var(--block-border-color));
+    color: #b77c17;
+}
+
+.aikimi-diagnostics.is-blocked .aikimi-diagnostics-overall,
+.aikimi-diagnostic-card.is-blocked .aikimi-diagnostic-state {
+    border-color: color-mix(in srgb, #d35f6f 62%, var(--block-border-color));
+    color: #c14d60;
+}
+
+.aikimi-diagnostics-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.aikimi-diagnostics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+    gap: 0.75rem;
+}
+
+.aikimi-diagnostic-card {
+    min-width: 0;
+    padding: 0.85rem;
+    border: 1px solid var(--block-border-color);
+    border-left-width: 0.25rem;
+    border-radius: var(--block-radius);
+    background: var(--background-fill-secondary);
+}
+
+.aikimi-diagnostic-card.is-ready {
+    border-left-color: #65a98f;
+}
+
+.aikimi-diagnostic-card.is-warning {
+    border-left-color: #d99b2b;
+}
+
+.aikimi-diagnostic-card.is-blocked {
+    border-left-color: #d35f6f;
+}
+
+.aikimi-diagnostic-card-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+}
+
+.aikimi-diagnostic-card p {
+    margin: 0.55rem 0 0;
+    overflow-wrap: anywhere;
+    color: var(--body-text-color-subdued);
+    font-size: 0.82rem;
+    line-height: 1.5;
+}
+
+.aikimi-diagnostic-card .aikimi-diagnostic-action {
+    color: var(--body-text-color);
+}
+
+.aikimi-diagnostics-generated {
+    margin: 0;
+    color: var(--body-text-color-subdued);
+    font-size: 0.72rem;
+}
+
+@media (max-width: 640px) {
+    .aikimi-diagnostics-header {
+        flex-direction: column;
+    }
+}
+
 /* ==== AIKIMI NEO BRAND AND STATUS ==== */
 
 #aikimi-brand-header {

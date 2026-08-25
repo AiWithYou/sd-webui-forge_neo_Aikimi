@@ -202,7 +202,7 @@ def create_ui():
     scripts.scripts_current = scripts.scripts_txt2img
     scripts.scripts_txt2img.initialize_scripts(is_img2img=False)
 
-    with gr.Blocks(analytics_enabled=False, head=canvas_head) as txt2img_interface:
+    with gr.Blocks(analytics_enabled=False) as txt2img_interface:
         toprow = ui_toprow.Toprow(is_img2img=False)
 
         dummy_component = gr.Textbox(visible=False)
@@ -487,7 +487,7 @@ def create_ui():
     scripts.scripts_current = scripts.scripts_img2img
     scripts.scripts_img2img.initialize_scripts(is_img2img=True)
 
-    with gr.Blocks(analytics_enabled=False, head=canvas_head) as img2img_interface:
+    with gr.Blocks(analytics_enabled=False) as img2img_interface:
         toprow = ui_toprow.Toprow(is_img2img=True)
 
         extra_tabs = gr.Tabs(elem_id="img2img_extra_tabs", elem_classes=["extra-networks"])
@@ -540,8 +540,8 @@ def create_ui():
                                 add_copy_image_controls("inpaint_sketch", inpaint_color_sketch)
 
                             with gr.TabItem("Inpaint upload", id="inpaint_upload", elem_id="img2img_inpaint_upload_tab") as tab_inpaint_upload:
-                                init_img_inpaint = gr.Image(label="Image for img2img", show_label=False, source="upload", interactive=True, type="pil", elem_id="img_inpaint_base")
-                                init_mask_inpaint = gr.Image(label="Mask", source="upload", interactive=True, type="pil", image_mode="RGBA", elem_id="img_inpaint_mask")
+                                init_img_inpaint = gr.Image(label="Image for img2img", show_label=False, sources="upload", interactive=True, type="pil", elem_id="img_inpaint_base")
+                                init_mask_inpaint = gr.Image(label="Mask", sources="upload", interactive=True, type="pil", image_mode="RGBA", elem_id="img_inpaint_mask")
 
                             with gr.TabItem("Batch", id="batch", elem_id="img2img_batch_tab") as tab_batch:
                                 with gr.Tabs(elem_id="img2img_batch_source"):
@@ -848,7 +848,7 @@ def create_ui():
     with gr.Blocks(analytics_enabled=False) as pnginfo_interface:
         with ResizeHandleRow(equal_height=False):
             with gr.Column(variant="panel"):
-                image = gr.Image(elem_id="pnginfo_image", label="Source", source="upload", interactive=True, type="pil", height="50vh", image_mode="RGBA")
+                image = gr.Image(elem_id="pnginfo_image", label="Source", sources="upload", interactive=True, type="pil", height="50vh", image_mode="RGBA")
 
             with gr.Column(variant="panel"):
                 html = gr.HTML()
@@ -898,7 +898,7 @@ def create_ui():
     for _interface, label, _ifid in interfaces:
         shared.tab_names.append(label)
 
-    with gr.Blocks(theme=shared.gradio_theme, analytics_enabled=False, title="Aikimi Neo", head=canvas_head) as demo:
+    with gr.Blocks(analytics_enabled=False, title="Aikimi Neo") as demo:
         settings.add_quicksettings()
 
         parameters_copypaste.connect_paste_params_buttons()
@@ -993,9 +993,10 @@ def setup_ui_api(app):
     app.add_api_route("/internal/ping", lambda: {}, methods=["GET"])
 
     from modules import aikimi_status
+    from modules.aikimi_security.auth import request_has_gradio_auth_async
 
-    def require_aikimi_status_auth(request: Request):
-        if not aikimi_status.request_is_authorized(app, request):
+    async def require_aikimi_status_auth(request: Request):
+        if not await request_has_gradio_auth_async(app, request):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Not authenticated",

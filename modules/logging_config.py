@@ -1,7 +1,29 @@
 import logging
 import os
+import traceback
 
 from tqdm import tqdm
+
+from modules.aikimi_security.redaction import redact_text
+
+
+class RedactingFilter(logging.Filter):
+    """Apply the same credential/path redaction to console logging and prints."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+            if record.exc_info:
+                message = f"{message}\n{''.join(traceback.format_exception(*record.exc_info))}"
+                record.exc_info = None
+                record.exc_text = None
+            record.msg = redact_text(message)
+            record.args = ()
+        except Exception:
+            record.msg = "<log message redacted after formatting failure>"
+            record.args = ()
+            record.exc_info = None
+        return True
 
 
 class TqdmLoggingHandler(logging.Handler):
@@ -34,6 +56,8 @@ def setup_logging(loglevel: str = None):
 
         handler = TqdmLoggingHandler(handler)
         handler.setFormatter(formatter)
+
+    handler.addFilter(RedactingFilter())
 
     logging.basicConfig(level=loglevel, force=True, handlers=[handler])
 

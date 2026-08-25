@@ -121,12 +121,12 @@ def _mode_updates(
     reference_mode = mode == MODE_REFERENCES
     effective_ref_image_size = str(ref_image_size) if reference_mode else "match"
     return (
-        gr.update(visible=mode == MODE_KEYFRAMES),
-        gr.update(visible=reference_mode),
+        gr.update(visible=True if mode == MODE_KEYFRAMES else "hidden"),
+        gr.update(visible=True if reference_mode else "hidden"),
         _mode_help_html(mode),
         gr.update(visible=True, value=effective_ref_image_size)
         if reference_mode
-        else gr.update(visible=False, value=effective_ref_image_size),
+        else gr.update(visible="hidden", value=effective_ref_image_size),
         settings_summary_html(
             aspect,
             quality,
@@ -989,7 +989,7 @@ def _build_ui():
                         )
                         input_validation = gr.HTML(value="", elem_id="h3-input-validation")
 
-                    with gr.Group(visible=False, elem_id="h3-keyframes", elem_classes=["h3-media-panel"]) as keyframe_group:
+                    with gr.Group(visible="hidden", elem_id="h3-keyframes", elem_classes=["h3-media-panel"]) as keyframe_group:
                         gr.Markdown("### キーフレーム\n片方だけでも使えます。両方指定すると、その間の動きを補間します。")
                         with gr.Row():
                             first_frame = gr.Image(
@@ -1005,7 +1005,7 @@ def _build_ui():
                                 elem_id="h3-last-frame",
                             )
 
-                    with gr.Group(visible=False, elem_id="h3-references", elem_classes=["h3-media-panel"]) as reference_group:
+                    with gr.Group(visible="hidden", elem_id="h3-references", elem_classes=["h3-media-panel"]) as reference_group:
                         gr.Markdown(
                             "### 参照素材\n"
                             "画像9枚・動画3本・音声3本、合計12個まで。動画と音声の合計は15秒以内です。"
@@ -1157,7 +1157,7 @@ def _build_ui():
                                     value=initial_ref_image_size,
                                     label="参照画像サイズ",
                                     interactive=False,
-                                    visible=False,
+                                    visible="hidden",
                                     elem_id="h3-ref-image-size",
                                 )
 
