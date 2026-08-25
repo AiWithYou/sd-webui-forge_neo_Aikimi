@@ -18,6 +18,7 @@ class Toprow:
     interrupting = None
     skip = None
     submit = None
+    queue = None
 
     paste = None
     clear_prompt_button = None
@@ -32,6 +33,7 @@ class Toprow:
     ui_styles = None
 
     submit_box = None
+    queue_box = None
 
     def __init__(self, is_img2img, *, is_compact=None, id_part=None):
         self.is_img2img = is_img2img
@@ -75,6 +77,8 @@ class Toprow:
             return
 
         self.submit_box.render()
+        if self.queue_box is not None:
+            self.queue_box.render()
 
     @staticmethod
     def _container_class() -> str:
@@ -116,16 +120,31 @@ class Toprow:
             self.interrupting = gr.Button("Interrupting...", elem_id=f"{self.id_part}_interrupting", elem_classes="generate-box-interrupting", tooltip="Interrupting generation...")
             self.submit = gr.Button("Generate", elem_id=f"{self.id_part}_generate", variant="primary", tooltip="Right click generate forever menu")
 
-            def interrupt_function():
-                if not shared.state.stopping_generation and shared.state.job_count > 1 and shared.opts.interrupt_after_current:
-                    shared.state.stop_generating()
-                    gr.Info("Generation will stop after finishing this image, click again to stop immediately.")
-                else:
-                    shared.state.interrupt()
+        if self.id_part in {"txt2img", "img2img"}:
+            with gr.Row(
+                elem_id=f"{self.id_part}_queue_box",
+                elem_classes=["generate-queue-box"],
+                render=not self.is_compact,
+            ) as queue_box:
+                self.queue_box = queue_box
+                self.queue = gr.Button(
+                    "Add to Queue",
+                    elem_id=f"{self.id_part}_queue",
+                    elem_classes=["generate-queue-button"],
+                    size="sm",
+                    tooltip="Add the current settings as another generation job without interrupting the active job",
+                )
 
-            self.skip.click(fn=shared.state.skip)
-            self.interrupt.click(fn=interrupt_function, _js='function(){ showSubmitInterruptingPlaceholder("' + self.id_part + '"); }')
-            self.interrupting.click(fn=interrupt_function)
+        def interrupt_function():
+            if not shared.state.stopping_generation and shared.state.job_count > 1 and shared.opts.interrupt_after_current:
+                shared.state.stop_generating()
+                gr.Info("Generation will stop after finishing this image, click again to stop immediately.")
+            else:
+                shared.state.interrupt()
+
+        self.skip.click(fn=shared.state.skip)
+        self.interrupt.click(fn=interrupt_function, _js='function(){ showSubmitInterruptingPlaceholder("' + self.id_part + '"); }')
+        self.interrupting.click(fn=interrupt_function)
 
     def create_tools_row(self):
         with gr.Row(elem_id=f"{self.id_part}_tools"):

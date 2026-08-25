@@ -147,10 +147,30 @@ function showRestoreProgressButton(tabname, show) {
     button.style.setProperty("display", show ? "flex" : "none", "important");
 }
 
-function submit() {
-    showSubmitButtons("txt2img", false);
+const submitTasksByTab = new Map();
 
+function startSubmitTask(tabname, id) {
+    let tasks = submitTasksByTab.get(tabname);
+    if (!tasks) {
+        tasks = new Set();
+        submitTasksByTab.set(tabname, tasks);
+    }
+    tasks.add(id);
+    showSubmitButtons(tabname, false);
+}
+
+function finishSubmitTask(tabname, id) {
+    const tasks = submitTasksByTab.get(tabname);
+    if (!tasks) return;
+    tasks.delete(id);
+    if (tasks.size > 0) return;
+    submitTasksByTab.delete(tabname);
+    showSubmitButtons(tabname, true);
+}
+
+function submit() {
     const id = randomId();
+    startSubmitTask("txt2img", id);
     localSet("txt2img_task_id", id);
 
     requestProgress(
@@ -158,7 +178,7 @@ function submit() {
         gradioApp().getElementById("txt2img_gallery_container"),
         gradioApp().getElementById("txt2img_gallery"),
         function () {
-            showSubmitButtons("txt2img", true);
+            finishSubmitTask("txt2img", id);
             localRemove("txt2img_task_id");
             showRestoreProgressButton("txt2img", false);
         },
@@ -176,9 +196,8 @@ function submit_txt2img_upscale() {
 }
 
 function submit_img2img() {
-    showSubmitButtons("img2img", false);
-
     const id = randomId();
+    startSubmitTask("img2img", id);
     localSet("img2img_task_id", id);
 
     requestProgress(
@@ -186,7 +205,7 @@ function submit_img2img() {
         gradioApp().getElementById("img2img_gallery_container"),
         gradioApp().getElementById("img2img_gallery"),
         function () {
-            showSubmitButtons("img2img", true);
+            finishSubmitTask("img2img", id);
             localRemove("img2img_task_id");
             showRestoreProgressButton("img2img", false);
         },
@@ -195,6 +214,32 @@ function submit_img2img() {
     const res = create_submit_args(arguments);
     res[0] = id;
     return res;
+}
+
+function submitQueued(tabname, args) {
+    const id = randomId();
+    startSubmitTask(tabname, id);
+
+    requestProgress(
+        id,
+        gradioApp().getElementById(tabname + "_gallery_container"),
+        gradioApp().getElementById(tabname + "_gallery"),
+        function () {
+            finishSubmitTask(tabname, id);
+        },
+    );
+
+    const res = create_submit_args(args);
+    res[0] = id;
+    return res;
+}
+
+function submit_txt2img_queue() {
+    return submitQueued("txt2img", arguments);
+}
+
+function submit_img2img_queue() {
+    return submitQueued("img2img", arguments);
 }
 
 function submit_extras() {

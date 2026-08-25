@@ -180,6 +180,8 @@ download_sensenova_u15_int8.bat
 
 状態表示は既存の生成progress、Queue、モデルloader、VRAM情報を読み取り、従来の技術ログを置き換えません。`Settings`の`Aikimi Assistant`では、表示のON/OFFに加えて、キャラクターサイズ、画面四隅の表示位置、台詞、アニメーションを個別に変更できます。アニメーションを無効にした場合やOSでモーション低減を有効にした場合は、同じ状態の静止WebPへ自動的に切り替わります。
 
+txt2imgとimg2imgには`Add to Queue`ボタンを配置しました。生成中でも現在の入力値を独立したジョブとして複数回追加でき、既存のFIFO GPU queueで1件ずつ順番に処理されます。待機件数はAikimi Statusで確認可能です。`Interrupt`と`Skip`は実行中のジョブを対象とし、追加済みの待機ジョブはその後も継続します。
+
 APNGビルダー、配布アセット、Chromiumのモーション低減動作は、`.github/workflows/aikimi-assets.yml`でも自動検証します。CIではfixtureを入力にAPNG一式を構築し、その出力と配布ファイルのPNG chunk、duration、loop、透明余白、静止画との一致を確認します。
 
 ### SenseNova U1.5 Studio

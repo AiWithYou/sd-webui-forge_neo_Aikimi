@@ -364,6 +364,21 @@ input[type="checkbox"].input-accordion-checkbox {
     position: relative;
 }
 
+.generate-queue-box {
+    margin-top: 0.35rem;
+}
+
+.gradio-button.generate-queue-button {
+    min-height: 2.35rem;
+    border-color: color-mix(in srgb, var(--button-secondary-border-color) 70%, var(--primary-500) 30%);
+    font-size: 0.82rem;
+    font-weight: 650;
+}
+
+.gradio-button.generate-queue-button:hover {
+    border-color: color-mix(in srgb, var(--button-secondary-border-color) 45%, var(--primary-500) 55%);
+}
+
 .gradio-button.generate-box-skip,
 .gradio-button.generate-box-interrupt,
 .gradio-button.generate-box-interrupting {
