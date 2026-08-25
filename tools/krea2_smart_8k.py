@@ -355,6 +355,12 @@ def get_json(api: str, endpoint: str, timeout: int) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def portable_basename(value: object) -> str:
+    """Return a filename for either Windows or POSIX path text on any host OS."""
+
+    return str(value).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
 def validate_krea2_backend(
     options: dict,
     runtime_status: dict,
@@ -385,22 +391,22 @@ def validate_krea2_backend(
     if not checkpoint:
         raise RuntimeError("Forge did not report a loaded checkpoint")
     if selected_checkpoint and loaded_checkpoint:
-        selected_name = Path(selected_checkpoint).name.casefold()
-        loaded_name = Path(loaded_checkpoint).name.casefold()
+        selected_name = portable_basename(selected_checkpoint).casefold()
+        loaded_name = portable_basename(loaded_checkpoint).casefold()
         if selected_name != loaded_name:
             raise RuntimeError(
                 "selected and loaded Forge checkpoints differ: "
-                f"{Path(selected_checkpoint).name} != {Path(loaded_checkpoint).name}"
+                f"{portable_basename(selected_checkpoint)} != {portable_basename(loaded_checkpoint)}"
             )
     if expected_model_profile not in {"raw", "turbo"}:
         raise ValueError("expected model profile must be raw or turbo")
     normalized_checkpoint = "".join(
-        character for character in Path(checkpoint).name.lower() if character.isalnum()
+        character for character in portable_basename(checkpoint).lower() if character.isalnum()
     )
     if verify_checkpoint_variant and expected_model_profile not in normalized_checkpoint:
         raise RuntimeError(
             f"{expected_model_profile} inference profile requires a checkpoint whose "
-            f"filename identifies that variant: {Path(checkpoint).name}"
+            f"filename identifies that variant: {portable_basename(checkpoint)}"
         )
 
     additional = runtime_status.get("additional_modules") or options.get(
@@ -408,7 +414,7 @@ def validate_krea2_backend(
     ) or []
     if isinstance(additional, str):
         additional = [additional]
-    module_names = [Path(str(value)).name for value in additional]
+    module_names = [portable_basename(value) for value in additional]
     normalized_modules = [
         "".join(character for character in name.lower() if character.isalnum())
         for name in module_names
@@ -418,7 +424,7 @@ def validate_krea2_backend(
     if not any("qwen3vl" in name for name in normalized_modules):
         raise RuntimeError("Krea2 requires a qwen3vl text encoder in Forge additional modules")
     return {
-        "checkpoint": Path(checkpoint).name,
+        "checkpoint": portable_basename(checkpoint),
         "checkpoint_hash": str(
             runtime_status.get("checkpoint_sha256")
             or options.get("sd_checkpoint_hash")

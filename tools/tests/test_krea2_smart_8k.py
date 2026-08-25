@@ -24,6 +24,7 @@ from tools.krea2_smart_8k import (
     generate_native,
     highres_resolution_plan,
     native_detail_prompt,
+    portable_basename,
     raw_resolution_shift,
     redacted_command,
     resolve_inference_profile,
@@ -246,6 +247,10 @@ class Smart8KPlanningTests(unittest.TestCase):
 
 
 class Smart8KBackendTests(unittest.TestCase):
+    def test_portable_basename_normalizes_windows_and_posix_paths(self):
+        self.assertEqual(portable_basename(r"C:\models\turbo.safetensors"), "turbo.safetensors")
+        self.assertEqual(portable_basename("/models/turbo.safetensors"), "turbo.safetensors")
+
     def runtime_status(self, **overrides):
         status = {
             "loaded": True,
