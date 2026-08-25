@@ -24,6 +24,8 @@
         updating: "Updating",
     };
     const VALID_STATES = new Set(Object.keys(STATE_PRIORITY));
+    const VALID_SIZES = new Set(["small", "medium", "large"]);
+    const VALID_POSITIONS = new Set(["bottom-right", "bottom-left", "top-right", "top-left"]);
     const SAFE_ASSET_NAME = /^[a-z0-9][a-z0-9._-]*$/i;
     const ERROR_SELECTORS = ["#html_log_txt2img .error", "#html_log_img2img .error", "#html_log_extras .error"];
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -41,6 +43,11 @@
     let pollingController = null;
     let pollingFailures = 0;
     let enabled = false;
+    let animationEnabled = true;
+    let dialogueEnabled = true;
+    let stillMode = reducedMotion.matches;
+    let selectedSize = "medium";
+    let selectedPosition = "bottom-right";
     let lastRenderedState = null;
     let completedUntil = 0;
     let currentIssue = null;
@@ -143,6 +150,10 @@
         panel = document.createElement("aside");
         panel.id = "aikimi-status";
         panel.dataset.state = "idle";
+        panel.dataset.size = "medium";
+        panel.dataset.position = "bottom-right";
+        panel.dataset.dialogue = "on";
+        panel.dataset.motion = "animated";
         panel.setAttribute("aria-label", "Aikimi Status");
         panel.setAttribute("aria-hidden", "true");
         panel.hidden = true;
@@ -394,7 +405,7 @@
 
         const animatedUrl = versionedAssetUrl(asset.animated);
         const stillUrl = versionedAssetUrl(asset.still);
-        if (reducedMotion.matches) {
+        if (stillMode) {
             return failedAssetUrls.has(stillUrl) ? null : { selected: stillUrl };
         }
         if (!failedAssetUrls.has(animatedUrl)) {
@@ -514,7 +525,9 @@
         setAttribute(
             details.querySelector("summary"),
             "aria-label",
-            `${STATUS_LABELS[state] || state}: ${stateMessage}. ${details.open ? "Close" : "Open"} technical details.`,
+            dialogueEnabled
+                ? `${STATUS_LABELS[state] || state}: ${stateMessage}. ${details.open ? "Close" : "Open"} technical details.`
+                : `${STATUS_LABELS[state] || state}. ${details.open ? "Close" : "Open"} technical details.`,
         );
 
         setText(field("status"), STATUS_LABELS[state] || state);
@@ -686,9 +699,42 @@
         pollingController = null;
     }
 
+    function selectedOption(value, allowed, fallback) {
+        return allowed.has(value) ? value : fallback;
+    }
+
+    function syncPreferences() {
+        const nextAnimationEnabled = opts.aikimi_assistant_animation_enabled !== false;
+        const nextDialogueEnabled = opts.aikimi_assistant_dialogue_enabled !== false;
+        const nextStillMode = reducedMotion.matches || !nextAnimationEnabled;
+        const portraitModeChanged = nextStillMode !== stillMode;
+
+        animationEnabled = nextAnimationEnabled;
+        dialogueEnabled = nextDialogueEnabled;
+        stillMode = nextStillMode;
+        selectedSize = selectedOption(opts.aikimi_assistant_size, VALID_SIZES, "medium");
+        selectedPosition = selectedOption(
+            opts.aikimi_assistant_position,
+            VALID_POSITIONS,
+            "bottom-right",
+        );
+
+        panel.dataset.size = selectedSize;
+        panel.dataset.position = selectedPosition;
+        panel.dataset.dialogue = dialogueEnabled ? "on" : "off";
+        panel.dataset.motion = !animationEnabled ? "disabled" : reducedMotion.matches ? "reduced" : "animated";
+        message.hidden = !dialogueEnabled;
+
+        if (portraitModeChanged) {
+            portraitRequestUrl = null;
+            clearPreloadedImages();
+        }
+    }
+
     function syncVisibility() {
         if (!createPanel()) return;
         enabled = opts.aikimi_assistant_enabled !== false;
+        syncPreferences();
         panel.hidden = !enabled;
         setAttribute(panel, "aria-hidden", enabled ? "false" : "true");
 
@@ -739,8 +785,7 @@
 
     function handleReducedMotionChange() {
         if (!enabled) return;
-        portraitRequestUrl = null;
-        clearPreloadedImages();
+        syncPreferences();
         preloadConfiguredAssets();
         render();
     }

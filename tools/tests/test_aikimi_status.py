@@ -354,6 +354,28 @@ class AikimiStatusTests(unittest.TestCase):
             self.assertNotIn(asset["animated"], assistant_source)
             self.assertNotIn(asset["still"], assistant_source)
 
+    def test_assistant_preferences_are_registered_and_manifest_driven(self):
+        options_source = (ROOT / "modules" / "shared_options.py").read_text(encoding="utf-8")
+        assistant_source = (ROOT / "javascript" / "aikimiStatus.js").read_text(encoding="utf-8")
+        css_source = (ROOT / "style.css").read_text(encoding="utf-8")
+
+        for option in (
+            "aikimi_assistant_size",
+            "aikimi_assistant_position",
+            "aikimi_assistant_dialogue_enabled",
+            "aikimi_assistant_animation_enabled",
+        ):
+            self.assertIn(option, options_source)
+            self.assertIn(option, assistant_source)
+        for value in ("small", "medium", "large"):
+            self.assertIn(f'[data-size="{value}"]', css_source)
+        for value in ("bottom-right", "bottom-left", "top-right", "top-left"):
+            self.assertIn(value, options_source)
+        self.assertIn('data-position$="-left"', css_source)
+        self.assertIn('data-position^="top-"', css_source)
+        self.assertIn("stillMode", assistant_source)
+        self.assertIn("message.hidden = !dialogueEnabled", assistant_source)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "default_state": "idle",
   "preload": [
     "idle",
@@ -10,9 +10,9 @@
     "idle": {
       "animated": "idle.png",
       "still": "idle-still.webp",
-      "frames": 6,
+      "frames": 10,
       "loop": "ping-pong",
-      "durations_ms": [220, 220, 220, 220, 220, 220]
+      "durations_ms": [160, 160, 160, 160, 160, 160, 160, 160, 160, 160]
     },
     "loading_model": {
       "animated": "loading_model.png",
@@ -24,16 +24,16 @@
     "generating": {
       "animated": "generating.png",
       "still": "generating-still.webp",
-      "frames": 6,
+      "frames": 10,
       "loop": "ping-pong",
-      "durations_ms": [120, 120, 120, 120, 120, 120]
+      "durations_ms": [90, 90, 90, 90, 90, 90, 90, 90, 90, 90]
     },
     "completed": {
       "animated": "completed.png",
       "still": "completed-still.webp",
-      "frames": 5,
+      "frames": 7,
       "loop": "once",
-      "durations_ms": [180, 120, 100, 180, 600]
+      "durations_ms": [140, 100, 90, 90, 120, 180, 600]
     },
     "queued": {
       "animated": "queued.png",

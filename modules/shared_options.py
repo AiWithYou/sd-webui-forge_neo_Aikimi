@@ -473,6 +473,24 @@ options_templates.update(
             "aikimi_assistant_enabled": OptionInfo(True, "Show Aikimi").info(
                 "Show the compact Aikimi Status assistant. Technical logs remain available in the existing output panels."
             ),
+            "aikimi_assistant_size": OptionInfo(
+                "medium",
+                "Character size",
+                gr.Dropdown,
+                {"choices": ("small", "medium", "large")},
+            ).info("Desktop portrait size: small 120 px, medium 150 px, large 180 px."),
+            "aikimi_assistant_position": OptionInfo(
+                "bottom-right",
+                "Assistant position",
+                gr.Dropdown,
+                {"choices": ("bottom-right", "bottom-left", "top-right", "top-left")},
+            ),
+            "aikimi_assistant_dialogue_enabled": OptionInfo(True, "Show dialogue").info(
+                "Show Aikimi's short status message. Technical status remains available when disabled."
+            ),
+            "aikimi_assistant_animation_enabled": OptionInfo(True, "Animate Aikimi").info(
+                "Use state animations. The operating system's reduced-motion preference always switches to still images."
+            ),
         },
     )
 )

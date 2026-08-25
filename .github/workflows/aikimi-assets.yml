@@ -1,0 +1,59 @@
+name: Aikimi asset contracts
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/aikimi-assets.yml"
+      - "assets/aikimi/**"
+      - "javascript/aikimiStatus.js"
+      - "modules/shared_options.py"
+      - "style.css"
+      - "tools/build_aikimi_motion_asset.py"
+      - "tools/requirements-aikimi-assets.txt"
+      - "tools/tests/test_aikimi_*.py"
+  push:
+    branches: [neo]
+    paths:
+      - ".github/workflows/aikimi-assets.yml"
+      - "assets/aikimi/**"
+      - "javascript/aikimiStatus.js"
+      - "modules/shared_options.py"
+      - "style.css"
+      - "tools/build_aikimi_motion_asset.py"
+      - "tools/requirements-aikimi-assets.txt"
+      - "tools/tests/test_aikimi_*.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-aikimi-assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: tools/requirements-aikimi-assets.txt
+      - name: Install the isolated asset toolchain
+        run: python -m pip install -r tools/requirements-aikimi-assets.txt
+      - name: Locate Chromium
+        shell: bash
+        run: |
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || true)"
+          test -n "$CHROME_BIN"
+          echo "CHROME_BIN=$CHROME_BIN" >> "$GITHUB_ENV"
+      - name: Build the APNG fixture and test Chromium preferences
+        run: >-
+          python -m unittest -v
+          tools.tests.test_aikimi_motion_builder
+          tools.tests.test_aikimi_chromium
+      - name: Verify deployed APNG and still-image contracts
+        run: >-
+          python -m unittest -v
+          tools.tests.test_aikimi_status.AikimiStatusTests.test_manifest_covers_states_and_references_local_assets
+          tools.tests.test_aikimi_status.AikimiStatusTests.test_legacy_character_sources_remain_available
+          tools.tests.test_aikimi_status.AikimiStatusTests.test_apng_assets_match_declared_motion_contract
