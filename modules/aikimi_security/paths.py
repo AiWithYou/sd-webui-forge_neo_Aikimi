@@ -34,14 +34,54 @@ def _deduplicate(paths: Iterable[Path]) -> list[str]:
     return result
 
 
+def _relative_parts(path: Path, root: Path) -> tuple[str, ...] | None:
+    try:
+        return tuple(part.casefold() for part in path.relative_to(root).parts)
+    except ValueError:
+        return None
+
+
+def _is_javascript_asset(path: Path, script_root: Path, data_root: Path) -> bool:
+    if path.suffix.casefold() not in {".js", ".mjs"}:
+        return False
+    script_parts = _relative_parts(path, script_root)
+    if script_parts is not None and len(script_parts) == 2 and script_parts[0] == "javascript":
+        return True
+    return any(
+        parts is not None
+        and (len(parts) == 4 and parts[0] in {"extensions", "extensions-builtin"} and parts[2] == "javascript")
+        for parts in (_relative_parts(path, root) for root in (script_root, data_root))
+    )
+
+
+def _is_stylesheet_asset(path: Path, script_root: Path, data_root: Path) -> bool:
+    if path == _resolved(script_root / "style.css"):
+        return True
+    return any(
+        parts is not None
+        and len(parts) == 3
+        and parts[0] in {"extensions", "extensions-builtin"}
+        and parts[2] == "style.css"
+        for parts in (_relative_parts(path, root) for root in (script_root, data_root))
+    )
+
+
 def build_gradio_allowed_paths(
     script_path: str | Path,
     data_path: str | Path,
     *,
     canvas_root: str | Path | None = None,
+    javascript_paths: Iterable[str | Path] = (),
+    stylesheet_paths: Iterable[str | Path] = (),
+    notification_audio: str | Path | None = None,
     requested_paths: Iterable[str | Path] = (),
 ) -> list[str]:
-    """Return only managed output/temp directories and exact Canvas assets."""
+    """Return managed output/temp directories and exact UI asset files.
+
+    JavaScript and stylesheet paths must come from the active ``modules.scripts``
+    listings. Only the individual files used by the UI are exposed; their parent
+    repository and extension directories remain outside Gradio's allowlist.
+    """
 
     script_root = _resolved(script_path)
     data_root = _resolved(data_path)
@@ -53,6 +93,46 @@ def build_gradio_allowed_paths(
                 raise UnsafeAllowedPathError(f"The managed {name} path resolves outside its data root.")
             directory_roots.add(candidate)
     exact_files: set[Path] = set()
+
+    for name in ("script.js", "style.css"):
+        candidate = _resolved(script_root / name)
+        if not _within(candidate, script_root):
+            raise UnsafeAllowedPathError(f"The root UI asset {name} resolves outside the repository.")
+        if candidate.is_file():
+            exact_files.add(candidate)
+
+    card_placeholder = _resolved(script_root / "html" / "card-no-preview.jpg")
+    if not _within(card_placeholder, script_root):
+        raise UnsafeAllowedPathError("The card placeholder resolves outside the repository.")
+    if card_placeholder.is_file():
+        exact_files.add(card_placeholder)
+
+    for path in javascript_paths:
+        candidate = _resolved(path)
+        if not _is_javascript_asset(candidate, script_root, data_root):
+            raise UnsafeAllowedPathError(
+                "A Gradio JavaScript asset must be an exact .js or .mjs file from an active UI javascript directory."
+            )
+        if candidate.is_file():
+            exact_files.add(candidate)
+
+    for path in stylesheet_paths:
+        candidate = _resolved(path)
+        if not _is_stylesheet_asset(candidate, script_root, data_root):
+            raise UnsafeAllowedPathError(
+                "A Gradio stylesheet asset must be an exact root or active-extension style.css file."
+            )
+        if candidate.is_file():
+            exact_files.add(candidate)
+
+    if notification_audio is not None:
+        candidate = _resolved(notification_audio)
+        expected = _resolved(script_root / "notification.mp3")
+        if candidate != expected or not _within(candidate, script_root):
+            raise UnsafeAllowedPathError("Gradio may only expose the repository notification.mp3 audio file.")
+        if candidate.is_file():
+            exact_files.add(candidate)
+
     if canvas_root is not None:
         root = _resolved(canvas_root)
         for name in ("canvas.js", "canvas.css"):
@@ -87,8 +167,6 @@ def build_gradio_blocked_paths(script_path: str | Path, data_path: str | Path) -
         "forge_neo_model_paths.yaml",
         "cache",
         "models",
-        "extensions",
-        "extensions-builtin",
         "repositories",
         "venv",
         ".venv",

@@ -7,26 +7,35 @@ on:
       - ".github/**/*.yaml"
       - "**/*.bat"
       - "**/*.ps1"
+      - "extensions-builtin/aikimi-ui/**/*.js"
       - "modules/aikimi_capabilities.py"
       - "modules/aikimi_diagnostics.py"
       - "modules/aikimi_security/**"
       - "modules/gradio_compat.py"
+      - "modules/gradio_extensions.py"
+      - "modules/gradio_frontend_compat.py"
       - "extensions-builtin/forge_legacy_preprocessors/annotator/mmpkg/mmcv/fileio/handlers/yaml_handler.py"
       - "pyproject.toml"
       - "tools/aikimi_setup.py"
       - "tools/run_ci_tests.py"
       - "tools/tests/test_aikimi_setup.py"
       - "tools/tests/test_aikimi_diagnostics.py"
+      - "tools/tests/test_aikimi_tabs.py"
+      - "tools/tests/test_aikimi_tabs_chromium.py"
       - "tools/tests/test_api_public_state.py"
       - "tools/tests/test_gradio_file_security.py"
+      - "tools/tests/test_gradio_file_url_guard.py"
       - "tools/tests/test_legacy_yaml_security.py"
       - "tools/tests/test_gradio_compatibility.py"
+      - "tools/tests/test_gradio_frontend_compat.py"
+      - "tools/tests/test_gradio_frontend_compat_chromium.py"
       - "tools/tests/test_gradio_chromium_smoke.py"
       - "tools/tests/test_remote_auth_middleware.py"
       - "tools/tests/test_run_ci_tests.py"
       - "tools/tests/test_safe_image_fetch.py"
       - "tools/tests/test_security_redaction.py"
       - "tools/tests/test_sysinfo_security.py"
+      - "tools/tests/test_studio_css_boundaries.py"
       - "tools/tests/test_ui_tempdir_security.py"
       - "tools/tests/test_upstream_neo_regressions.py"
   push:
@@ -36,26 +45,35 @@ on:
       - ".github/**/*.yaml"
       - "**/*.bat"
       - "**/*.ps1"
+      - "extensions-builtin/aikimi-ui/**/*.js"
       - "modules/aikimi_capabilities.py"
       - "modules/aikimi_diagnostics.py"
       - "modules/aikimi_security/**"
       - "modules/gradio_compat.py"
+      - "modules/gradio_extensions.py"
+      - "modules/gradio_frontend_compat.py"
       - "extensions-builtin/forge_legacy_preprocessors/annotator/mmpkg/mmcv/fileio/handlers/yaml_handler.py"
       - "pyproject.toml"
       - "tools/aikimi_setup.py"
       - "tools/run_ci_tests.py"
       - "tools/tests/test_aikimi_setup.py"
       - "tools/tests/test_aikimi_diagnostics.py"
+      - "tools/tests/test_aikimi_tabs.py"
+      - "tools/tests/test_aikimi_tabs_chromium.py"
       - "tools/tests/test_api_public_state.py"
       - "tools/tests/test_gradio_file_security.py"
+      - "tools/tests/test_gradio_file_url_guard.py"
       - "tools/tests/test_legacy_yaml_security.py"
       - "tools/tests/test_gradio_compatibility.py"
+      - "tools/tests/test_gradio_frontend_compat.py"
+      - "tools/tests/test_gradio_frontend_compat_chromium.py"
       - "tools/tests/test_gradio_chromium_smoke.py"
       - "tools/tests/test_remote_auth_middleware.py"
       - "tools/tests/test_run_ci_tests.py"
       - "tools/tests/test_safe_image_fetch.py"
       - "tools/tests/test_security_redaction.py"
       - "tools/tests/test_sysinfo_security.py"
+      - "tools/tests/test_studio_css_boundaries.py"
       - "tools/tests/test_ui_tempdir_security.py"
       - "tools/tests/test_upstream_neo_regressions.py"
   workflow_dispatch:
@@ -90,26 +108,38 @@ jobs:
             modules/aikimi_diagnostics.py
             modules/aikimi_security
             modules/gradio_compat.py
+            modules/gradio_extensions.py
+            modules/gradio_frontend_compat.py
             extensions-builtin/forge_legacy_preprocessors/annotator/mmpkg/mmcv/fileio/handlers/yaml_handler.py
             tools/aikimi_setup.py
             tools/run_ci_tests.py
             tools/tests/test_aikimi_setup.py
             tools/tests/test_aikimi_diagnostics.py
+            tools/tests/test_aikimi_tabs.py
+            tools/tests/test_aikimi_tabs_chromium.py
             tools/tests/test_api_public_state.py
             tools/tests/test_gradio_file_security.py
+            tools/tests/test_gradio_file_url_guard.py
             tools/tests/test_legacy_yaml_security.py
             tools/tests/test_gradio_compatibility.py
+            tools/tests/test_gradio_frontend_compat.py
+            tools/tests/test_gradio_frontend_compat_chromium.py
             tools/tests/test_gradio_chromium_smoke.py
             tools/tests/test_remote_auth_middleware.py
             tools/tests/test_run_ci_tests.py
             tools/tests/test_safe_image_fetch.py
             tools/tests/test_security_redaction.py
             tools/tests/test_sysinfo_security.py
+            tools/tests/test_studio_css_boundaries.py
             tools/tests/test_ui_tempdir_security.py
             tools/tests/test_upstream_neo_regressions.py
           )
           python -m ruff check "${files[@]}"
           python -m ruff format --check "${files[@]}"
+      - name: Check Aikimi UI JavaScript syntax
+        run: |
+          node --check extensions-builtin/aikimi-ui/javascript/aikimi_tabs.js
+          node --check extensions-builtin/aikimi-ui/javascript/aikimiStatus.js
       - name: Validate YAML syntax
         shell: bash
         run: |

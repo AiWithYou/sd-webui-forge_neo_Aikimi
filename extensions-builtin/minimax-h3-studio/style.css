@@ -19,7 +19,7 @@
     box-sizing: border-box;
     max-width: 1540px;
     margin: 0 auto;
-    padding: 22px;
+    padding: 10px 18px 20px;
     overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 20px;
@@ -52,21 +52,13 @@
     box-sizing: border-box;
 }
 
-.h3-studio-active #quicksettings {
-    display: none !important;
-}
-
-.h3-studio-active #tabs > .tab-nav {
-    margin-top: 4px;
-}
-
 #h3-studio .h3-hero {
-    display: flex;
+    display: none;
     align-items: center;
     justify-content: space-between;
-    gap: 28px;
-    min-height: 136px;
-    padding: 24px 28px 26px;
+    gap: 12px;
+    min-height: 0;
+    padding: 6px 2px;
     overflow: hidden;
     border: 1px solid var(--h3-line);
     border-radius: 16px 16px 6px 6px;
@@ -120,7 +112,7 @@
     margin: 0;
     color: var(--h3-text);
     font-family: Inter, "Noto Sans JP", system-ui, sans-serif;
-    font-size: clamp(28px, 3.5vw, 48px);
+    font-size: clamp(1.25rem, 2.2vw, 1.6rem);
     font-weight: 680;
     line-height: 1.08;
     letter-spacing: -0.045em;
@@ -168,9 +160,9 @@
     display: flex;
     align-items: center;
     gap: 14px;
-    min-height: 48px;
+    min-height: 44px;
     margin-top: 6px;
-    padding: 8px 12px 8px 16px;
+    padding: 6px 10px 6px 12px;
     overflow: hidden;
     border: 1px solid var(--h3-line);
     border-radius: 6px 6px 14px 14px;
@@ -1116,8 +1108,8 @@
     }
 
     #h3-studio .h3-hero {
-        min-height: 108px;
-        padding: 15px;
+        min-height: 0;
+        padding: 4px 2px;
     }
 
     #h3-studio .h3-hero-mark {
@@ -1125,7 +1117,7 @@
     }
 
     #h3-studio .h3-hero h2 {
-        font-size: 27px;
+        font-size: 1.25rem;
     }
 
     #h3-studio .h3-hero p {
@@ -1282,7 +1274,7 @@
     --h3-focus: #ffd08a;
     width: min(100%, 1500px);
     max-width: 1500px;
-    padding: 16px 18px 24px;
+    padding: 10px 18px 20px;
     overflow: visible;
     border: 0;
     border-radius: 0;
@@ -1293,7 +1285,7 @@
 
 #h3-studio .h3-hero {
     min-height: 0;
-    padding: 0 2px 10px;
+    padding: 0 2px 6px;
     overflow: visible;
     border: 0;
     border-radius: 0;
@@ -1310,7 +1302,7 @@
     margin: 0;
     color: var(--h3-text);
     font-family: inherit;
-    font-size: clamp(1.55rem, 2.4vw, 1.9rem);
+    font-size: clamp(1.25rem, 2.2vw, 1.6rem);
     font-weight: 700;
     line-height: 1.15;
     letter-spacing: -0.025em;
@@ -1318,9 +1310,9 @@
 
 #h3-studio .h3-runtime-card {
     display: block;
-    min-height: 52px;
-    margin: 0 0 9px;
-    padding: 8px 10px 8px 14px;
+    min-height: 44px;
+    margin: 0 0 8px;
+    padding: 6px 10px 6px 12px;
     overflow: visible;
     border: 1px solid var(--h3-line);
     border-radius: 11px;
@@ -1860,11 +1852,11 @@
 
     #h3-studio .h3-hero {
         min-height: 0;
-        padding: 0 2px 10px;
+        padding: 0 2px 4px;
     }
 
     #h3-studio .h3-hero h2 {
-        font-size: 1.45rem;
+        font-size: 1.25rem;
     }
 
     #h3-studio .h3-runtime-card {

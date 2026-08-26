@@ -76,6 +76,7 @@ def webui_worker():
     from modules import (
         progress,
         script_callbacks,
+        scripts,
         shared,
         ui,
         ui_extra_networks,
@@ -107,15 +108,40 @@ def webui_worker():
 
         from modules_forge.forge_canvas.canvas import canvas_head, canvas_js_root_path
 
+        javascript_paths = [
+            script.path
+            for extension in (".js", ".mjs")
+            for script in scripts.list_scripts("javascript", extension)
+        ]
+        stylesheet_paths = scripts.list_files_with_name("style.css")
+        notification_audio = (
+            os.path.join(initialize_util.script_path, "notification.mp3")
+            if shared.opts.notification_audio
+            else None
+        )
+
         allowed_paths = build_gradio_allowed_paths(
             initialize_util.script_path,
             initialize_util.data_path,
             canvas_root=canvas_js_root_path,
+            javascript_paths=javascript_paths,
+            stylesheet_paths=stylesheet_paths,
+            notification_audio=notification_audio,
             requested_paths=cmd_opts.gradio_allowed_path,
         )
         blocked_paths = build_gradio_blocked_paths(
             initialize_util.script_path, initialize_util.data_path
         )
+
+        from modules.gradio_frontend_compat import (
+            build_patched_tabs_asset,
+            install_gradio_tabs_compatibility_route,
+        )
+
+        # Validate the exact third-party asset before Gradio starts listening.
+        # A version/hash mismatch must fail closed instead of exposing the known
+        # Tabs mount storm through the generic assets route.
+        patched_tabs = build_patched_tabs_asset()
 
         app, local_url, share_url = shared.demo.launch(
             share=cmd_opts.share,
@@ -142,6 +168,12 @@ def webui_worker():
         )
 
         startup_timer.record("gradio launch")
+
+        install_gradio_tabs_compatibility_route(app, patched_tabs)
+        print(
+            "Aikimi Gradio compatibility: serving audited tabs patch "
+            f"{patched_tabs.patched_sha256[:12]}."
+        )
 
         # gradio uses a very open CORS policy via app.user_middleware, which makes it possible for
         # an attacker to trick the user into opening a malicious HTML page, which makes a request to the

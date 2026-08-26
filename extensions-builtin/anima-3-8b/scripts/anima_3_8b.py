@@ -44,12 +44,17 @@ class Anima3BScript(scripts.Script):
     def show(self, is_img2img):
         return scripts.AlwaysVisible
 
-    def ui(self, *args, **kwargs):
+    def ui(self, is_img2img: bool, *args, **kwargs):
         choices = list(adapters())
         if not choices:
             choices = ["Anima-3.8B-expanded_adapter.safetensors"]
         lora_choices = [NO_STANDARD_LORA, *standard_anima_loras()]
-        with InputAccordion(False, label="Anima 3.8B (Qwen3.5)") as enabled:
+        tab_name = "img2img" if is_img2img else "txt2img"
+        with InputAccordion(
+            False,
+            label="Anima 3.8B (Qwen3.5)",
+            elem_id=f"aikimi-{tab_name}-anima38",
+        ) as enabled:
             adapter = gr.Dropdown(
                 label="Adapter",
                 choices=choices,

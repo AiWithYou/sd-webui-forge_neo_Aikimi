@@ -1,7 +1,7 @@
 from functools import wraps
 
 import gradio as gr
-from modules import gradio_extensions  # noqa: F401
+from modules import gradio_compat, gradio_extensions  # noqa: F401
 
 
 class FormComponent:
@@ -123,7 +123,7 @@ class InputAccordionImpl(gr.Checkbox):
         kwargs_checkbox = {
             **kwargs,
             "elem_id": f"{self.accordion_id}-checkbox",
-            "visible": False,
+            "visible": gradio_compat.keep_hidden_component_mounted(False),
         }
         super().__init__(value=value, **kwargs_checkbox)
 

@@ -7,7 +7,7 @@ import gradio.blocks
 import gradio.component_meta
 import gradio.events
 
-from modules import gradio_compat, patches, scripts, ui_tempdir
+from modules import patches, scripts, ui_tempdir
 
 
 class GradioDeprecationWarning(DeprecationWarning):
@@ -27,10 +27,6 @@ def add_classes_to_gradio_component(comp: gr.components.Component):
 
 def IOComponent_init(self, *args, **kwargs):
     self.webui_tooltip = kwargs.pop("tooltip", None)
-    if "visible" in kwargs:
-        kwargs["visible"] = gradio_compat.keep_hidden_component_mounted(
-            kwargs["visible"]
-        )
 
     if scripts.scripts_current is not None:
         scripts.scripts_current.before_component(self, **kwargs)
@@ -62,11 +58,6 @@ def Block_get_config(self, *args, **kwargs):
 
 
 def BlockContext_init(self, *args, **kwargs):
-    if "visible" in kwargs:
-        kwargs["visible"] = gradio_compat.keep_hidden_component_mounted(
-            kwargs["visible"]
-        )
-
     if scripts.scripts_current is not None:
         scripts.scripts_current.before_component(self, **kwargs)
 
@@ -94,10 +85,18 @@ def Blocks_get_config_file(self, *args, **kwargs):
     return config
 
 
-original_IOComponent_init = patches.patch(__name__, obj=gr.components.Component, field="__init__", replacement=IOComponent_init)
-original_Block_get_config = patches.patch(__name__, obj=gradio.blocks.Block, field="get_config", replacement=Block_get_config)
-original_BlockContext_init = patches.patch(__name__, obj=gradio.blocks.BlockContext, field="__init__", replacement=BlockContext_init)
-original_Blocks_get_config_file = patches.patch(__name__, obj=gradio.blocks.Blocks, field="get_config_file", replacement=Blocks_get_config_file)
+original_IOComponent_init = patches.patch(
+    __name__, obj=gr.components.Component, field="__init__", replacement=IOComponent_init
+)
+original_Block_get_config = patches.patch(
+    __name__, obj=gradio.blocks.Block, field="get_config", replacement=Block_get_config
+)
+original_BlockContext_init = patches.patch(
+    __name__, obj=gradio.blocks.BlockContext, field="__init__", replacement=BlockContext_init
+)
+original_Blocks_get_config_file = patches.patch(
+    __name__, obj=gradio.blocks.Blocks, field="get_config_file", replacement=Blocks_get_config_file
+)
 
 
 ui_tempdir.install_ui_tempdir_override()
@@ -117,20 +116,6 @@ patches.patch(__file__, gradio.component_meta, "create_or_modify_pyi", gradio_co
 gradio.component_meta.updateable = lambda x: x
 
 
-original_gradio_update = gr.update
-
-
-def gradio_update(*args, **kwargs):
-    if "visible" in kwargs:
-        kwargs["visible"] = gradio_compat.keep_hidden_component_mounted(
-            kwargs["visible"]
-        )
-    return original_gradio_update(*args, **kwargs)
-
-
-gr.update = gradio_update
-
-
 class EventWrapper:
     def __init__(self, replaced_event):
         self.replaced_event = replaced_event
@@ -142,6 +127,8 @@ class EventWrapper:
     def __call__(self, *args, **kwargs):
         if "_js" in kwargs:
             kwargs["js"] = kwargs.pop("_js")
+        if "api_name" not in kwargs and "api_visibility" not in kwargs:
+            kwargs["api_visibility"] = "private"
         return self.replaced_event(*args, **kwargs)
 
     @property
@@ -164,7 +151,9 @@ def repair(grclass):
             if k in allowed_kwargs:
                 fixed_kwargs[k] = v
             else:
-                warnings.warn(f"unexpected argument for {grclass.__name__}: {k}", GradioDeprecationWarning, stacklevel=2)
+                warnings.warn(
+                    f"unexpected argument for {grclass.__name__}: {k}", GradioDeprecationWarning, stacklevel=2
+                )
 
         original(self, *args, **fixed_kwargs)
 

@@ -25,7 +25,6 @@
     };
     const VALID_STATES = new Set(Object.keys(STATE_PRIORITY));
     const VALID_SIZES = new Set(["small", "medium", "large"]);
-    const VALID_POSITIONS = new Set(["bottom-right", "bottom-left", "top-right", "top-left"]);
     const SAFE_ASSET_NAME = /^[a-z0-9][a-z0-9._-]*$/i;
     const ERROR_SELECTORS = ["#html_log_txt2img .error", "#html_log_img2img .error", "#html_log_extras .error"];
     const ACTIVE_POLL_MS = 1500;
@@ -47,15 +46,18 @@
     let pollingController = null;
     let pollingFailures = 0;
     let pollingGeneration = 0;
+    let optionsAvailable = false;
     let enabled = false;
     let animationEnabled = true;
     let dialogueEnabled = true;
     let stillMode = reducedMotion.matches;
     let selectedSize = "medium";
-    let selectedPosition = "bottom-right";
+    let activeFeature = null;
+    let activeContainer = null;
     let lastRenderedState = null;
     let completedUntil = 0;
     let currentIssue = null;
+    let navigationIssue = null;
     let assetIssue = null;
     let portraitLoadIssue = null;
     let portraitRequestUrl = null;
@@ -115,35 +117,37 @@
         return row;
     }
 
-    function createBrandHeader() {
-        const app = gradioApp();
-        if (app.querySelector("#aikimi-brand-header")) return;
-
-        const anchor = app.querySelector("#quicksettings") || app.querySelector("#tabs");
-        if (!anchor?.parentNode) return;
-
-        const header = document.createElement("header");
-        header.id = "aikimi-brand-header";
-        header.setAttribute("aria-label", "Aikimi Neo");
-
-        const mark = document.createElement("span");
-        mark.className = "aikimi-brand-header__mark";
-        mark.setAttribute("aria-hidden", "true");
-        mark.textContent = "✦";
-
-        const copy = document.createElement("span");
-        copy.className = "aikimi-brand-header__copy";
-        const title = document.createElement("strong");
-        title.textContent = "Aikimi Neo";
-        const subtitle = document.createElement("span");
-        subtitle.textContent = "Forge-derived AI generation workspace";
-        copy.append(title, subtitle);
-        header.append(mark, copy);
-        anchor.parentNode.insertBefore(header, anchor);
+    function bindDetailsEvents() {
+        if (!details || details.dataset.aikimiEventsBound === "true") return;
+        details.dataset.aikimiEventsBound = "true";
+        details.addEventListener("toggle", render);
     }
 
-    function createPanel() {
-        if (panel?.isConnected) return panel;
+    function featureLabel(feature) {
+        return {
+            krea2: "Krea2",
+            anima38: "Anima 3.8B",
+            sensenova: "SenseNova",
+            minimax_h3: "MiniMax H3",
+        }[feature] || "Aikimi";
+    }
+
+    function statusIsActive() {
+        return Boolean(
+            enabled &&
+                activeFeature &&
+                activeContainer?.isConnected &&
+                panel?.isConnected &&
+                !panel.hidden,
+        );
+    }
+
+    function createPanel(mountPoint) {
+        if (!mountPoint?.isConnected) return null;
+        if (panel?.isConnected) {
+            if (panel.parentElement !== mountPoint) mountPoint.prepend(panel);
+            return panel;
+        }
 
         const existing = gradioApp().querySelector("#aikimi-status");
         if (existing) {
@@ -153,19 +157,16 @@
             message = panel.querySelector(".aikimi-status__message");
             compactMetrics = panel.querySelector(".aikimi-status__compact-metrics");
             progressValue = panel.querySelector(".aikimi-status__progress-value");
+            bindDetailsEvents();
             bindPortraitEvents();
+            if (panel.parentElement !== mountPoint) mountPoint.prepend(panel);
             return panel;
         }
-
-        const appRoot = gradioApp();
-        const mountPoint = appRoot === document ? document.body : appRoot;
-        if (!mountPoint) return null;
 
         panel = document.createElement("aside");
         panel.id = "aikimi-status";
         panel.dataset.state = "idle";
         panel.dataset.size = "medium";
-        panel.dataset.position = "bottom-right";
         panel.dataset.dialogue = "on";
         panel.dataset.motion = "animated";
         panel.setAttribute("aria-label", "Aikimi Status");
@@ -174,6 +175,7 @@
 
         details = document.createElement("details");
         details.className = "aikimi-status__disclosure";
+        bindDetailsEvents();
 
         const summary = document.createElement("summary");
         summary.className = "aikimi-status__summary";
@@ -193,7 +195,8 @@
 
         const eyebrow = document.createElement("span");
         eyebrow.className = "aikimi-status__eyebrow";
-        eyebrow.textContent = "AIKIMI STATUS";
+        eyebrow.dataset.field = "feature";
+        eyebrow.textContent = "AIKIMI";
 
         message = document.createElement("span");
         message.className = "aikimi-status__message";
@@ -203,7 +206,7 @@
 
         compactMetrics = document.createElement("span");
         compactMetrics.className = "aikimi-status__compact-metrics";
-        compactMetrics.textContent = "Queue — · VRAM —";
+        compactMetrics.textContent = "Runtime — · Backend — · Queue —";
 
         const progressTrack = document.createElement("span");
         progressTrack.className = "aikimi-status__progress";
@@ -247,7 +250,7 @@
         detailPanel.append(detailHeading, metrics);
         details.append(summary, detailPanel);
         panel.appendChild(details);
-        mountPoint.appendChild(panel);
+        mountPoint.prepend(panel);
 
         return panel;
     }
@@ -300,7 +303,7 @@
                 if (!manifestRetryTimer) {
                     manifestRetryTimer = window.setTimeout(function () {
                         manifestRetryTimer = null;
-                        if (enabled) loadManifest().then(render);
+                        if (statusIsActive()) loadManifest().then(render);
                     }, 5000);
                 }
                 render();
@@ -356,6 +359,14 @@
         const candidates = [];
 
         if (currentIssue) candidates.push(stateCandidate(currentIssue.state, { errorDetails: currentIssue.details }));
+        if (navigationIssue) {
+            candidates.push(
+                stateCandidate("warning", {
+                    message: navigationIssue,
+                    errorDetails: navigationIssue,
+                }),
+            );
+        }
 
         const external = highestPublishedCandidate();
         if (external) candidates.push(external);
@@ -455,7 +466,7 @@
     }
 
     function preloadConfiguredAssets() {
-        if (!enabled || !manifest) return;
+        if (!statusIsActive() || !manifest) return;
         for (const state of manifest.preload) preloadStateAsset(state);
     }
 
@@ -492,7 +503,7 @@
     }
 
     function render() {
-        if (!panel || !enabled) return;
+        if (!statusIsActive()) return;
 
         const candidate = deriveCandidate();
         const state = candidate.state;
@@ -519,6 +530,7 @@
         setAttribute(message, "aria-live", isUrgent ? "assertive" : "polite");
 
         if (panel.dataset.state !== state) panel.dataset.state = state;
+        setText(field("feature"), featureLabel(activeFeature));
         if (lastRenderedState !== state) {
             setText(message, stateMessage);
             lastRenderedState = state;
@@ -528,10 +540,12 @@
 
         syncPortrait(portraitDescriptor);
 
-        const compact = [];
-        if (progressPercent != null && ["loading_model", "generating", "updating"].includes(state)) compact.push(`Progress ${progressPercent}%`);
-        compact.push(candidate.state === "queued" && candidate.text ? candidate.text : `Queue ${queueSize}`);
-        compact.push(memory.available ? `VRAM ${formatBytes(memory.used)} / ${formatBytes(memory.total)}` : "VRAM —");
+        const compact = [`Runtime ${STATUS_LABELS[state] || state}`];
+        compact.push(`Backend ${backend.ready ? "Online" : "Unavailable"}`);
+        compact.push(`Queue ${queueSize}`);
+        if (progressPercent != null && ["loading_model", "generating", "updating"].includes(state)) {
+            compact.push(`${progressPercent}%`);
+        }
         setText(compactMetrics, compact.join(" · "));
 
         const progressWidth = progressPercent == null ? 0 : progressPercent;
@@ -652,7 +666,7 @@
     }
 
     function scanOutputErrors() {
-        if (!enabled) return;
+        if (!statusIsActive()) return;
         for (const selector of ERROR_SELECTORS) {
             for (const node of gradioApp().querySelectorAll(selector)) {
                 if (observedErrors.has(node)) continue;
@@ -675,7 +689,7 @@
 
     async function poll() {
         pollingTimer = null;
-        if (!enabled || document.hidden) return;
+        if (!statusIsActive() || document.hidden) return;
 
         const generation = ++pollingGeneration;
         const controller = new AbortController();
@@ -705,7 +719,7 @@
         } finally {
             window.clearTimeout(timeout);
             if (pollingController === controller) pollingController = null;
-            if (generation === pollingGeneration && enabled && !document.hidden) {
+            if (generation === pollingGeneration && statusIsActive() && !document.hidden) {
                 const active = tasks.size > 0 || snapshot?.generation?.active || snapshot?.model?.loading;
                 const baseDelay = active ? ACTIVE_POLL_MS : IDLE_POLL_MS;
                 const delay = pollingFailures
@@ -717,7 +731,7 @@
     }
 
     function schedulePoll(delay = 0) {
-        if (!enabled || document.hidden || pollingTimer || pollingController) return;
+        if (!statusIsActive() || document.hidden || pollingTimer || pollingController) return;
         pollingTimer = window.setTimeout(poll, delay);
     }
 
@@ -743,14 +757,8 @@
         dialogueEnabled = nextDialogueEnabled;
         stillMode = nextStillMode;
         selectedSize = selectedOption(opts.aikimi_assistant_size, VALID_SIZES, "medium");
-        selectedPosition = selectedOption(
-            opts.aikimi_assistant_position,
-            VALID_POSITIONS,
-            "bottom-right",
-        );
 
         panel.dataset.size = selectedSize;
-        panel.dataset.position = selectedPosition;
         panel.dataset.dialogue = dialogueEnabled ? "on" : "off";
         panel.dataset.motion = !animationEnabled ? "disabled" : reducedMotion.matches ? "reduced" : "animated";
         message.hidden = !dialogueEnabled;
@@ -761,24 +769,69 @@
         }
     }
 
-    function syncVisibility() {
-        if (!createPanel()) return;
-        enabled = opts.aikimi_assistant_enabled !== false;
-        syncPreferences();
-        panel.hidden = !enabled;
-        setAttribute(panel, "aria-hidden", enabled ? "false" : "true");
+    function readActiveFeatureContext(event) {
+        const tabs = window.AikimiTabs;
+        const eventFeature = event?.detail?.feature || null;
+        const eventContainer = event?.detail?.container || null;
+        const feature = tabs?.getActiveFeature?.() ?? eventFeature;
+        const container = tabs?.getActiveContainer?.() ?? eventContainer;
+        return {
+            feature: typeof feature === "string" && feature ? feature : null,
+            container: container instanceof Element ? container : null,
+            warning:
+                typeof event?.detail?.warning === "string" && event.detail.warning
+                    ? publicTechnicalDetail(event.detail.warning)
+                    : null,
+        };
+    }
 
-        if (enabled) {
+    function syncFeatureContext(event) {
+        const next = readActiveFeatureContext(event);
+        const changed = next.feature !== activeFeature || next.container !== activeContainer;
+        const featureEvent = event?.type === "aikimi:feature-tab-change";
+        const nextNavigationIssue = next.feature && featureEvent ? next.warning : navigationIssue;
+        const issueChanged = nextNavigationIssue !== navigationIssue;
+        const mountNeedsRepair = Boolean(
+            next.container && (!panel?.isConnected || panel.parentElement !== next.container),
+        );
+        if (!changed && !issueChanged && !mountNeedsRepair) return;
+
+        activeFeature = next.feature;
+        activeContainer = next.container;
+        navigationIssue = next.feature ? nextNavigationIssue : null;
+        if (details && changed) details.open = false;
+        lastRenderedState = null;
+        syncVisibility();
+    }
+
+    function syncVisibility() {
+        if (!optionsAvailable) return;
+        enabled = opts.aikimi_assistant_enabled !== false;
+        const shouldShow = Boolean(enabled && activeFeature && activeContainer?.isConnected);
+
+        if (shouldShow && createPanel(activeContainer)) {
+            syncPreferences();
+            panel.dataset.feature = activeFeature;
+            panel.hidden = false;
+            setAttribute(panel, "aria-hidden", "false");
+
             loadManifest().then(function () {
                 preloadConfiguredAssets();
                 render();
             });
             schedulePoll();
         } else {
+            if (panel) {
+                panel.hidden = true;
+                setAttribute(panel, "aria-hidden", "true");
+            }
             stopPolling();
+        }
+
+        if (!enabled) {
             portraitRequestUrl = null;
-            portrait.removeAttribute("src");
-            portrait.hidden = true;
+            portrait?.removeAttribute("src");
+            if (portrait) portrait.hidden = true;
             clearPreloadedImages();
             tasks.clear();
             published.clear();
@@ -810,11 +863,11 @@
 
     function handleVisibilityChange() {
         if (document.hidden) stopPolling();
-        else if (enabled) schedulePoll();
+        else if (statusIsActive()) schedulePoll();
     }
 
     function handleReducedMotionChange() {
-        if (!enabled) return;
+        if (!statusIsActive()) return;
         syncPreferences();
         preloadConfiguredAssets();
         render();
@@ -836,17 +889,15 @@
     function initialize() {
         if (window.__aikimiStatusInitialized) return;
         window.__aikimiStatusInitialized = true;
-        createBrandHeader();
-        createPanel();
 
         window.addEventListener("webui:task-start", handleTaskStart);
         window.addEventListener("webui:task-progress", handleTaskProgress);
         window.addEventListener("webui:task-error", handleTaskError);
         window.addEventListener("webui:task-end", handleTaskEnd);
-        details.addEventListener("toggle", render);
         document.addEventListener("click", handleDocumentClick, true);
         document.addEventListener("keydown", handleDetailsEscape, true);
         document.addEventListener("visibilitychange", handleVisibilityChange);
+        document.addEventListener("aikimi:feature-tab-change", syncFeatureContext);
         reducedMotion.addEventListener("change", handleReducedMotionChange);
 
         window.AikimiStatus = {
@@ -878,10 +929,22 @@
                 render();
             },
         };
+
+        syncFeatureContext();
+    }
+
+    function handleOptionsAvailable() {
+        optionsAvailable = true;
+        syncVisibility();
+    }
+
+    function handleUiUpdate() {
+        syncFeatureContext();
+        if (statusIsActive()) scanOutputErrors();
     }
 
     onUiLoaded(initialize);
-    onOptionsAvailable(syncVisibility);
-    onOptionsChanged(syncVisibility);
-    onAfterUiUpdate(scanOutputErrors);
+    onOptionsAvailable(handleOptionsAvailable);
+    onOptionsChanged(handleOptionsAvailable);
+    onAfterUiUpdate(handleUiUpdate);
 })();

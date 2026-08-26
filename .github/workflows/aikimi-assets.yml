@@ -5,7 +5,7 @@ on:
     paths:
       - ".github/workflows/aikimi-assets.yml"
       - "assets/aikimi/**"
-      - "javascript/aikimiStatus.js"
+      - "extensions-builtin/aikimi-ui/**"
       - "modules/shared_options.py"
       - "style.css"
       - "tools/build_aikimi_motion_asset.py"
@@ -16,7 +16,7 @@ on:
     paths:
       - ".github/workflows/aikimi-assets.yml"
       - "assets/aikimi/**"
-      - "javascript/aikimiStatus.js"
+      - "extensions-builtin/aikimi-ui/**"
       - "modules/shared_options.py"
       - "style.css"
       - "tools/build_aikimi_motion_asset.py"
@@ -59,6 +59,8 @@ jobs:
           python -m unittest -v
           tools.tests.test_aikimi_motion_builder
           tools.tests.test_aikimi_chromium
+          tools.tests.test_aikimi_tabs
+          tools.tests.test_aikimi_tabs_chromium
       - name: Verify deployed APNG and still-image contracts
         run: >-
           python -m unittest -v

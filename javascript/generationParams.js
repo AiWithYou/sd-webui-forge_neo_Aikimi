@@ -26,7 +26,7 @@ function setupListeners() {
 
 let modalObserver = new MutationObserver(function (mutations) {
     mutations.forEach(function (mutationRecord) {
-        let selectedTab = gradioApp().querySelector("#tabs div button.selected")?.innerText;
+        let selectedTab = get_uiCurrentTab()?.innerText;
         if (mutationRecord.target.style.display === "none" && (selectedTab === "txt2img" || selectedTab === "img2img")) {
             gradioApp()
                 .getElementById(selectedTab + "_generation_info_button")

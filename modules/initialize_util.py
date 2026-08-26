@@ -178,8 +178,11 @@ def configure_opts_onchange():
 def setup_middleware(app):
     from starlette.middleware.gzip import GZipMiddleware
 
+    from modules.aikimi_security.gradio_file_guard import install_gradio_file_url_guard
+
     app.user_middleware.insert(0, starlette.middleware.Middleware(GZipMiddleware, minimum_size=1000))
     configure_cors_middleware(app)
+    install_gradio_file_url_guard(app)
     app.build_middleware_stack()  # rebuild middleware stack on-the-fly
 
 

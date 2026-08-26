@@ -431,13 +431,15 @@ class ControlNetUiGroup:
             )
 
         # advanced options
-        with gr.Column(visible=False) as self.advanced:
+        with gr.Column(
+            visible=gradio_compat.keep_hidden_component_mounted(False)
+        ) as self.advanced:
             self.processor_res = gr.Slider(
                 label="Preprocessor resolution",
                 value=self.default_unit.processor_res,
                 minimum=64,
                 maximum=2048,
-                visible=False,
+                visible=gradio_compat.keep_hidden_component_mounted(False),
                 interactive=True,
                 elem_id=f"{elem_id_tabname}_{tabname}_controlnet_preprocessor_resolution_slider",
             )
@@ -446,7 +448,7 @@ class ControlNetUiGroup:
                 value=self.default_unit.threshold_a,
                 minimum=64,
                 maximum=1024,
-                visible=False,
+                visible=gradio_compat.keep_hidden_component_mounted(False),
                 interactive=True,
                 elem_id=f"{elem_id_tabname}_{tabname}_controlnet_threshold_A_slider",
             )
@@ -455,7 +457,7 @@ class ControlNetUiGroup:
                 value=self.default_unit.threshold_b,
                 minimum=64,
                 maximum=1024,
-                visible=False,
+                visible=gradio_compat.keep_hidden_component_mounted(False),
                 interactive=True,
                 elem_id=f"{elem_id_tabname}_{tabname}_controlnet_threshold_B_slider",
             )
@@ -581,14 +583,25 @@ class ControlNetUiGroup:
             preprocessor = global_state.get_preprocessor(module)
 
             slider_resolution_kwargs = preprocessor.slider_resolution.gradio_update_kwargs.copy()
+            slider_1_kwargs = preprocessor.slider_1.gradio_update_kwargs.copy()
+            slider_2_kwargs = preprocessor.slider_2.gradio_update_kwargs.copy()
 
             if pp:
                 slider_resolution_kwargs["visible"] = False
 
+            for slider_kwargs in (
+                slider_resolution_kwargs,
+                slider_1_kwargs,
+                slider_2_kwargs,
+            ):
+                slider_kwargs["visible"] = gradio_compat.keep_hidden_component_mounted(
+                    slider_kwargs["visible"]
+                )
+
             grs = [
                 gr.update(**slider_resolution_kwargs),
-                gr.update(**preprocessor.slider_1.gradio_update_kwargs.copy()),
-                gr.update(**preprocessor.slider_2.gradio_update_kwargs.copy()),
+                gr.update(**slider_1_kwargs),
+                gr.update(**slider_2_kwargs),
                 gr.update(visible=True),
                 gr.update(visible=not preprocessor.do_not_need_model),
                 gr.update(visible=not preprocessor.do_not_need_model),

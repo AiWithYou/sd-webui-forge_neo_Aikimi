@@ -1,8 +1,11 @@
 import ast
+import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urljoin
 
 from modules.aikimi_security.paths import (
     UnsafeAllowedPathError,
@@ -31,6 +34,11 @@ class GradioFileSecurityTests(unittest.TestCase):
         self.script_root = self.base / "repo"
         self.data_root = self.base / "data"
         self.canvas_root = self.script_root / "modules_forge" / "forge_canvas"
+        self.javascript_root = self.script_root / "javascript"
+        self.extension_root = self.script_root / "extensions-builtin" / "active-ui"
+        self.extra_extension_root = self.data_root / "extensions" / "active-extra-ui"
+        self.inactive_extension_root = self.data_root / "extensions" / "inactive-ui"
+        self.webui_assets_root = self.script_root / "modules" / "web"
         for path in (
             self.script_root,
             self.data_root,
@@ -38,29 +46,123 @@ class GradioFileSecurityTests(unittest.TestCase):
             self.data_root / "outputs",
             self.data_root / "tmp",
             self.canvas_root,
+            self.javascript_root,
+            self.extension_root / "javascript",
+            self.extension_root / "scripts",
+            self.extra_extension_root / "javascript",
+            self.inactive_extension_root / "javascript",
+            self.script_root / "html",
+            self.webui_assets_root / "css",
         ):
             path.mkdir(parents=True, exist_ok=True)
         for name in ("canvas.js", "canvas.css", "canvas.py"):
             (self.canvas_root / name).write_text(name, encoding="utf-8")
 
-    def test_allowed_paths_contain_only_managed_directories_and_exact_canvas_assets(self):
-        result = {
-            Path(path)
-            for path in build_gradio_allowed_paths(
-                self.script_root,
-                self.data_root,
-                canvas_root=self.canvas_root,
-            )
-        }
+        self.root_script = self.script_root / "script.js"
+        self.root_style = self.script_root / "style.css"
+        self.root_javascript = self.javascript_root / "core.js"
+        self.root_module = self.javascript_root / "module.mjs"
+        self.extension_javascript = self.extension_root / "javascript" / "extension.js"
+        self.extension_module = self.extension_root / "javascript" / "extension.mjs"
+        self.extension_style = self.extension_root / "style.css"
+        self.extension_python = self.extension_root / "scripts" / "extension.py"
+        self.extra_extension_javascript = self.extra_extension_root / "javascript" / "extra.js"
+        self.extra_extension_style = self.extra_extension_root / "style.css"
+        self.inactive_extension_javascript = self.inactive_extension_root / "javascript" / "inactive.js"
+        self.notification_audio = self.script_root / "notification.mp3"
+        self.card_placeholder = self.script_root / "html" / "card-no-preview.jpg"
+        self.private_html = self.script_root / "html" / "private.html"
+        self.font_stylesheet = self.webui_assets_root / "css" / "sourcesanspro.css"
+        for path in (
+            self.root_script,
+            self.root_style,
+            self.root_javascript,
+            self.root_module,
+            self.extension_javascript,
+            self.extension_module,
+            self.extension_style,
+            self.extension_python,
+            self.extra_extension_javascript,
+            self.extra_extension_style,
+            self.inactive_extension_javascript,
+            self.notification_audio,
+            self.card_placeholder,
+            self.private_html,
+            self.font_stylesheet,
+        ):
+            path.write_text(path.name, encoding="utf-8")
+
+        self.javascript_paths = (
+            self.root_javascript,
+            self.root_module,
+            self.extension_javascript,
+            self.extension_module,
+            self.extra_extension_javascript,
+        )
+        self.stylesheet_paths = (
+            self.root_style,
+            self.extension_style,
+            self.extra_extension_style,
+        )
+
+    def build_allowed_paths(self):
+        return build_gradio_allowed_paths(
+            self.script_root,
+            self.data_root,
+            canvas_root=self.canvas_root,
+            javascript_paths=self.javascript_paths,
+            stylesheet_paths=self.stylesheet_paths,
+            notification_audio=self.notification_audio,
+        )
+
+    def test_allowed_paths_contain_managed_directories_and_exact_ui_assets(self):
+        result = {Path(path) for path in self.build_allowed_paths()}
 
         self.assertIn((self.script_root / "output").resolve(), result)
         self.assertIn((self.data_root / "outputs").resolve(), result)
         self.assertIn((self.data_root / "tmp").resolve(), result)
         self.assertIn((self.canvas_root / "canvas.js").resolve(), result)
         self.assertIn((self.canvas_root / "canvas.css").resolve(), result)
+        for path in (
+            self.root_script,
+            self.root_style,
+            *self.javascript_paths,
+            self.extension_style,
+            self.extra_extension_style,
+            self.notification_audio,
+            self.card_placeholder,
+        ):
+            self.assertIn(path.resolve(), result)
         self.assertNotIn(self.script_root.resolve(), result)
         self.assertNotIn(self.data_root.resolve(), result)
+        self.assertNotIn(self.javascript_root.resolve(), result)
+        self.assertNotIn(self.extension_root.resolve(), result)
         self.assertNotIn((self.canvas_root / "canvas.py").resolve(), result)
+        self.assertNotIn(self.extension_python.resolve(), result)
+        self.assertNotIn(self.inactive_extension_javascript.resolve(), result)
+        self.assertNotIn(self.private_html.resolve(), result)
+
+    def test_static_asset_inputs_reject_non_ui_files_and_symlink_escapes(self):
+        with self.assertRaises(UnsafeAllowedPathError):
+            build_gradio_allowed_paths(
+                self.script_root,
+                self.data_root,
+                javascript_paths=[self.extension_python],
+            )
+
+        outside = self.base / "secret.js"
+        outside.write_text("secret", encoding="utf-8")
+        escaped = self.javascript_root / "escaped.js"
+        try:
+            escaped.symlink_to(outside)
+        except OSError as exc:
+            self.skipTest(f"symlink creation is unavailable: {exc}")
+        with self.assertRaises(UnsafeAllowedPathError):
+            build_gradio_allowed_paths(
+                self.script_root,
+                self.data_root,
+                javascript_paths=[escaped],
+            )
 
     def test_arbitrary_requested_path_and_symlink_escape_are_rejected(self):
         outside = self.base / "private"
@@ -137,7 +239,6 @@ class GradioFileSecurityTests(unittest.TestCase):
             "ui-config.json",
             "forge_neo_model_paths.yaml",
             "models",
-            "extensions",
             "repositories",
             "venv",
             "logs",
@@ -151,6 +252,8 @@ class GradioFileSecurityTests(unittest.TestCase):
                 self.assertIn((self.data_root / relative).resolve(), result)
         for path in dynamic:
             self.assertIn(path.resolve(), result)
+        self.assertNotIn((self.script_root / "extensions").resolve(), result)
+        self.assertNotIn((self.script_root / "extensions-builtin").resolve(), result)
 
     def test_gradio_async_file_validator_is_not_monkeypatched(self):
         source_path = ROOT / "modules" / "ui_tempdir.py"
@@ -191,17 +294,16 @@ class GradioFileSecurityTests(unittest.TestCase):
 
         config = self.data_root / "config.json"
         git_config = self.data_root / ".git" / "config"
+        model = self.data_root / "models" / "private.safetensors"
         output = self.data_root / "outputs" / "result.txt"
         config.write_text("{}", encoding="utf-8")
         git_config.parent.mkdir(parents=True)
         git_config.write_text("private", encoding="utf-8")
+        model.parent.mkdir(parents=True)
+        model.write_text("model", encoding="utf-8")
         output.write_text("result", encoding="utf-8")
 
-        allowed = build_gradio_allowed_paths(
-            self.script_root,
-            self.data_root,
-            canvas_root=self.canvas_root,
-        )
+        allowed = self.build_allowed_paths()
         blocked = build_gradio_blocked_paths(self.script_root, self.data_root)
         policy = SimpleNamespace(
             allowed_paths=allowed,
@@ -211,15 +313,128 @@ class GradioFileSecurityTests(unittest.TestCase):
         upload_dir = self.base / "uploads"
         upload_dir.mkdir()
 
-        for path in (config, git_config, self.canvas_root / "canvas.py"):
+        for path in (
+            self.script_root,
+            config,
+            git_config,
+            model,
+            self.extension_python,
+            self.inactive_extension_javascript,
+            self.private_html,
+            self.canvas_root / "canvas.py",
+        ):
             with self.subTest(path=path), self.assertRaises(HTTPException) as raised:
                 file_fetch(str(path), request, policy, upload_dir)
             self.assertEqual(raised.exception.status_code, 403)
 
-        for path in (output, self.canvas_root / "canvas.js"):
+        for path in (
+            output,
+            self.canvas_root / "canvas.js",
+            self.root_script,
+            self.root_style,
+            *self.javascript_paths,
+            self.extension_style,
+            self.extra_extension_style,
+            self.notification_audio,
+            self.card_placeholder,
+        ):
             with self.subTest(path=path):
                 response = file_fetch(str(path), request, policy, upload_dir)
                 self.assertEqual(response.status_code, 200)
+
+    def test_gradio_6_html_exact_static_assets_are_fetchable(self):
+        import gradio as gr
+        from fastapi import FastAPI
+        from fastapi.staticfiles import StaticFiles
+        from fastapi.testclient import TestClient
+
+        html_assets = (
+            self.root_script,
+            self.root_style,
+            self.root_javascript,
+            self.root_module,
+            self.extension_javascript,
+            self.extension_module,
+            self.extension_style,
+            self.extra_extension_javascript,
+            self.extra_extension_style,
+            self.canvas_root / "canvas.js",
+            self.canvas_root / "canvas.css",
+        )
+        tags = []
+        for asset in html_assets:
+            url = f"gradio_api/file={asset.as_posix()}?test"
+            if asset.suffix == ".css":
+                tags.append(f'<link rel="stylesheet" href="{url}">')
+            else:
+                tags.append(f'<script src="{url}"></script>')
+
+        with gr.Blocks() as demo:
+            gr.Markdown("static asset regression")
+        host = FastAPI()
+        host.mount(
+            "/aikimi/webui-assets",
+            StaticFiles(directory=self.webui_assets_root),
+            name="webui-assets",
+        )
+        app = gr.mount_gradio_app(
+            host,
+            demo,
+            path="/aikimi",
+            allowed_paths=self.build_allowed_paths(),
+            blocked_paths=build_gradio_blocked_paths(self.script_root, self.data_root),
+            head="".join(tags),
+        )
+
+        with TestClient(app) as client:
+            document = client.get("/aikimi/")
+            self.assertEqual(document.status_code, 200)
+            config_match = re.search(
+                r"window\.gradio_config = (\{.*?\});</script>",
+                document.text,
+                flags=re.DOTALL,
+            )
+            self.assertIsNotNone(config_match, document.text[-2000:])
+            config = json.loads(config_match.group(1))
+            self.assertEqual(config["head"], "".join(tags))
+            urls = re.findall(r'(?:src|href)="(gradio_api/file=[^"]+)"', config["head"])
+            self.assertEqual(len(urls), len(html_assets), document.text[-2000:])
+            for url in urls:
+                with self.subTest(url=url):
+                    response = client.get(urljoin(str(document.url), url))
+                    self.assertEqual(response.status_code, 200, response.text)
+
+            font_css = client.get(urljoin(str(document.url), "webui-assets/css/sourcesanspro.css"))
+            self.assertEqual(font_css.status_code, 200, font_css.text)
+            card = client.get(
+                urljoin(
+                    str(document.url),
+                    f"gradio_api/file={self.card_placeholder.as_posix()}",
+                )
+            )
+            self.assertEqual(card.status_code, 200, card.text)
+            private_html = client.get(
+                urljoin(
+                    str(document.url),
+                    f"gradio_api/file={self.private_html.as_posix()}",
+                )
+            )
+            self.assertEqual(private_html.status_code, 403)
+
+    def test_production_url_builders_and_webui_use_gradio_6_static_routes(self):
+        ui_extensions = (ROOT / "modules" / "ui_gradio_extensions.py").read_text(encoding="utf-8")
+        canvas = (ROOT / "modules_forge" / "forge_canvas" / "canvas.py").read_text(encoding="utf-8")
+        webui = (ROOT / "webui.py").read_text(encoding="utf-8")
+
+        self.assertIn("from gradio.route_utils import API_PREFIX", ui_extensions)
+        self.assertIn("API_PREFIX.lstrip('/')", ui_extensions)
+        self.assertIn("from gradio.route_utils import API_PREFIX", canvas)
+        self.assertNotIn('src="file=', canvas)
+        self.assertNotIn('href="file=', canvas)
+        self.assertIn('scripts.list_scripts("javascript", extension)', webui)
+        self.assertIn('scripts.list_files_with_name("style.css")', webui)
+        root_style = (ROOT / "style.css").read_text(encoding="utf-8")
+        self.assertIn('@import url("../webui-assets/css/sourcesanspro.css")', root_style)
 
 
 if __name__ == "__main__":

@@ -474,25 +474,27 @@ options_templates.update(
 
 options_templates.update(
     options_section(
-        ("aikimi-assistant", "Aikimi Assistant", "ui"),
+        ("aikimi-assistant", "Aikimi inline status", "ui"),
         {
-            "aikimi_assistant_enabled": OptionInfo(True, "Show Aikimi").info(
-                "Show the compact Aikimi Status assistant. Technical logs remain available in the existing output panels."
+            "aikimi_assistant_enabled": OptionInfo(True, "Show status in Aikimi feature tabs").info(
+                "Show the compact status strip only inside the active Aikimi feature. Forge tabs remain unchanged."
             ),
             "aikimi_assistant_size": OptionInfo(
                 "medium",
-                "Character size",
+                "Inline character size",
                 gr.Dropdown,
                 {"choices": ("small", "medium", "large")},
-            ).info("Desktop portrait size: small 120 px, medium 150 px, large 180 px."),
+            ).info("Portrait size: small 40 px, medium 52 px, large 64 px."),
+            # Retain the saved key so upgrades do not discard or reject an existing
+            # config.json. Inline status has no position setting, so do not render it.
             "aikimi_assistant_position": OptionInfo(
                 "bottom-right",
-                "Assistant position",
-                gr.Dropdown,
-                {"choices": ("bottom-right", "bottom-left", "top-right", "top-left")},
+                "Legacy assistant position (unused)",
+                gr.Textbox,
+                {"visible": False},
             ),
-            "aikimi_assistant_dialogue_enabled": OptionInfo(True, "Show dialogue").info(
-                "Show Aikimi's short status message. Technical status remains available when disabled."
+            "aikimi_assistant_dialogue_enabled": OptionInfo(True, "Show short status message").info(
+                "Show Aikimi's short message in the strip. Runtime, backend, queue, and technical details remain available."
             ),
             "aikimi_assistant_animation_enabled": OptionInfo(True, "Animate Aikimi").info(
                 "Use state animations. The operating system's reduced-motion preference always switches to still images."

@@ -4,7 +4,7 @@ SUPPORTED_GRADIO_VERSION = "6.17.3"
 
 
 def keep_hidden_component_mounted(visible):
-    """Work around the Gradio 6.6-6.17 multi-component visibility freeze."""
+    """Explicitly opt into the Gradio 6.6-6.17 visibility workaround."""
 
     return "hidden" if visible is False else visible
 

@@ -28,13 +28,14 @@ function setupExtraNetworksForTab(tabname) {
         });
     }
 
-    let tabnav = gradioApp().querySelector("#" + tabname + "_extra_tabs > div.tab-nav");
+    let this_tab = gradioApp().querySelector("#" + tabname + "_extra_tabs");
+    let tabnav = get_uiTabList(this_tab);
+    if (!tabnav) return;
     let controlsDiv = document.createElement("DIV");
     controlsDiv.classList.add("extra-networks-controls-div");
     tabnav.appendChild(controlsDiv);
     tabnav.insertBefore(controlsDiv, null);
 
-    let this_tab = gradioApp().querySelector("#" + tabname + "_extra_tabs");
     this_tab.querySelectorAll(":scope > [id^='" + tabname + "_']").forEach(function (elem) {
         // tabname_full = {tabname}_{extra_networks_tabname}
         let tabname_full = elem.id;
@@ -787,7 +788,10 @@ function scheduleAfterScriptsCallbacks() {
 onUiLoaded(function () {
     let mutationObserver = new MutationObserver(function (m) {
         let existingSearchfields = gradioApp().querySelectorAll("[id$='_extra_search']").length;
-        let neededSearchfields = gradioApp().querySelectorAll("[id$='_extra_tabs'] > .tab-nav > button").length - 2;
+        let neededSearchfields = Array.from(gradioApp().querySelectorAll("[id$='_extra_tabs']")).reduce(
+            (count, tabs) => count + Math.max(0, get_uiTabButtons(tabs).length - 1),
+            0,
+        );
 
         if (!executedAfterScripts && existingSearchfields >= neededSearchfields) {
             mutationObserver.disconnect();

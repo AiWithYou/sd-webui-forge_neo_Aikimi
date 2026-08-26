@@ -127,16 +127,110 @@ class GradioUiContractTests(unittest.TestCase):
         self.assertEqual(gallery.buttons, [])
         self.assertEqual(upload.file_count, "multiple")
 
-    def test_hidden_components_stay_mounted_for_gradio617_visibility_updates(self):
+    def test_hidden_components_are_only_mounted_with_explicit_opt_in(self):
         import_ui_tempdir()
         with gr.Blocks():
             slider = gr.Slider(visible=False)
             with gr.Column(visible=False) as column:
                 gr.Textbox()
+            mounted_slider = gr.Slider(visible=gradio_compat.keep_hidden_component_mounted(False))
 
-        self.assertEqual(slider.visible, "hidden")
-        self.assertEqual(column.visible, "hidden")
-        self.assertEqual(gr.update(visible=False)["visible"], "hidden")
+        self.assertIs(slider.visible, False)
+        self.assertIs(column.visible, False)
+        self.assertEqual(mounted_slider.visible, "hidden")
+        self.assertIs(gr.update(visible=False)["visible"], False)
+
+    def test_input_accordion_internal_checkbox_stays_mounted(self):
+        import_ui_tempdir()
+        from modules.ui_components import InputAccordionImpl
+
+        with gr.Blocks():
+            accordion_input = InputAccordionImpl(value=False, setup=True, elem_id="test-input-accordion")
+
+        self.assertEqual(accordion_input.visible, "hidden")
+        self.assertEqual(accordion_input.elem_id, "test-input-accordion-checkbox")
+
+    def test_unnamed_ui_events_are_private_without_hiding_named_apis(self):
+        import_ui_tempdir()
+        with gr.Blocks() as demo:
+            first = gr.Button("Internal")
+            second = gr.Button("Named")
+            third = gr.Button("Explicit public")
+            first.click(lambda: None)
+            second.click(lambda: None, api_name="named_contract")
+            third.click(lambda: None, api_visibility="public")
+
+        dependencies = demo.get_config_file()["dependencies"]
+        by_name = {dependency["api_name"]: dependency for dependency in dependencies}
+        unnamed = next(
+            dependency for dependency in dependencies if dependency["api_name"] not in {"named_contract", None}
+        )
+
+        self.assertEqual(unnamed["api_visibility"], "private")
+        self.assertEqual(by_name["named_contract"]["api_visibility"], "public")
+        explicit_public = next(
+            dependency
+            for dependency in dependencies
+            if dependency["api_visibility"] == "public" and dependency["api_name"] != "named_contract"
+        )
+        self.assertEqual(explicit_public["api_visibility"], "public")
+
+    def test_multi_control_visibility_workarounds_are_explicit_and_bounded(self):
+        h3_source = (ROOT / "extensions-builtin" / "minimax-h3-studio" / "scripts" / "minimax_h3_studio.py").read_text(
+            encoding="utf-8"
+        )
+        hyperweave_source = (ROOT / "extensions-builtin" / "hyperweave" / "scripts" / "hyperweave.py").read_text(
+            encoding="utf-8"
+        )
+        controlnet_source = (
+            ROOT
+            / "extensions-builtin"
+            / "sd_forge_controlnet"
+            / "lib_controlnet"
+            / "controlnet_ui"
+            / "controlnet_ui_group.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('visible="hidden", elem_id="h3-keyframes"', h3_source)
+        self.assertIn('visible="hidden", elem_id="h3-references"', h3_source)
+        self.assertGreaterEqual(
+            hyperweave_source.count("gradio_compat.keep_hidden_component_mounted("),
+            6,
+        )
+        self.assertGreaterEqual(
+            controlnet_source.count("gradio_compat.keep_hidden_component_mounted("),
+            5,
+        )
+
+    def test_settings_are_initialized_without_a_full_page_load_replay(self):
+        settings_source = (ROOT / "modules" / "ui_settings.py").read_text(encoding="utf-8")
+
+        self.assertIn("value=fun()", settings_source)
+        self.assertIn("value=opts.dumpjson()", settings_source)
+        self.assertIn('elem_id="settings_json"', settings_source)
+        self.assertIn('visible="hidden"', settings_source)
+        self.assertNotIn("value=lambda: opts.dumpjson()", settings_source)
+        self.assertNotIn("demo.load(", settings_source)
+        self.assertNotIn("get_settings_values", settings_source)
+
+    def test_late_ui_loaded_callbacks_run_immediately(self):
+        source = (ROOT / "script.js").read_text(encoding="utf-8")
+        callback_block = source.split("function onUiLoaded(callback) {", 1)[1].split("\n}", 1)[0]
+
+        self.assertLess(source.index("let executedOnLoaded = false;"), source.index("function onUiLoaded"))
+        self.assertIn("if (executedOnLoaded)", callback_block)
+        self.assertIn("callback();", callback_block)
+
+    def test_options_bootstrap_waits_for_the_hydrated_settings_value(self):
+        source = (ROOT / "javascript" / "ui.js").read_text(encoding="utf-8")
+        bootstrap = source.split("function load_webui_settings", 1)[1].split("onOptionsChanged(function", 1)[0]
+
+        self.assertIn("attempt >= 200", bootstrap)
+        self.assertIn("textarea == null || !textarea.value", bootstrap)
+        self.assertIn("opts = JSON.parse(jsdata)", bootstrap)
+        self.assertIn("catch (_error)", bootstrap)
+        self.assertNotIn("console.error(_error", bootstrap)
+        self.assertIn("onUiLoaded(load_webui_settings);", source)
 
     def test_runtime_import_does_not_generate_type_stubs_in_checkout(self):
         with patch.object(sys, "argv", ["gradio-compatibility-test"]):

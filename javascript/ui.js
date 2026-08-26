@@ -56,14 +56,14 @@ function extract_image_from_gallery(gallery) {
 window.args_to_array = Array.from; // Compatibility with e.g. extensions that may expect this to be around
 
 function switch_to_txt2img() {
-    gradioApp().querySelector("#tabs").querySelectorAll("button")[0].click();
+    get_uiTopTabButton("tab_txt2img")?.click();
 
     return Array.from(arguments);
 }
 
 function switch_to_img2img_tab(no) {
-    gradioApp().querySelector("#tabs").querySelectorAll("button")[1].click();
-    gradioApp().getElementById("mode_img2img").querySelectorAll("button")[no].click();
+    get_uiTopTabButton("tab_img2img")?.click();
+    get_uiTabButtons(gradioApp().getElementById("mode_img2img"))[no]?.click();
 }
 
 function switch_to_img2img() {
@@ -87,15 +87,18 @@ function switch_to_inpaint_sketch() {
 }
 
 function switch_to_extras() {
-    gradioApp().querySelector("#tabs").querySelectorAll("button")[2].click();
+    get_uiTopTabButton("tab_extras")?.click();
 
     return Array.from(arguments);
 }
 
 function get_tab_index(tabId) {
-    const buttons = gradioApp().getElementById(tabId).querySelector("div").querySelectorAll("button");
+    const buttons = get_uiTabButtons(gradioApp().getElementById(tabId));
     for (let i = 0; i < buttons.length; i++) {
-        if (buttons[i].classList.contains("selected")) {
+        if (
+            buttons[i].classList.contains("selected") ||
+            buttons[i].getAttribute("aria-selected") === "true"
+        ) {
             return i;
         }
     }
@@ -307,29 +310,48 @@ function restoreProgressImg2img() {
  * Configure the width and height elements on `tabname` to accept
  * pasting of resolutions in the form of "width x height".
  */
+const resolutionPasteBindings = new Map();
+
 function setupResolutionPasting(tabname) {
     const width = gradioApp().querySelector(`#${tabname}_width input[type=number]`);
     const height = gradioApp().querySelector(`#${tabname}_height input[type=number]`);
-    for (const el of [width, height]) {
-        el.addEventListener("paste", function (event) {
-            const pasteData = event.clipboardData.getData("text/plain");
-            const parsed = pasteData.match(/^\s*(\d+)\D+(\d+)\s*$/);
-            if (parsed) {
-                width.value = parsed[1];
-                height.value = parsed[2];
-                updateInput(width);
-                updateInput(height);
-                event.preventDefault();
-            }
-        });
+    if (!width || !height) return false;
+
+    const existing = resolutionPasteBindings.get(tabname);
+    if (existing?.width === width && existing.height === height) return true;
+    if (existing) {
+        existing.width.removeEventListener("paste", existing.handler);
+        existing.height.removeEventListener("paste", existing.handler);
     }
+
+    const handler = function (event) {
+        const pasteData = event.clipboardData?.getData("text/plain") || "";
+        const parsed = pasteData.match(/^\s*(\d+)\D+(\d+)\s*$/);
+        if (parsed) {
+            width.value = parsed[1];
+            height.value = parsed[2];
+            updateInput(width);
+            updateInput(height);
+            event.preventDefault();
+        }
+    };
+    width.addEventListener("paste", handler);
+    height.addEventListener("paste", handler);
+    width.dataset.forgeResolutionPasteBound = "true";
+    height.dataset.forgeResolutionPasteBound = "true";
+    resolutionPasteBindings.set(tabname, { width, height, handler });
+    return true;
 }
 
 /**
  * Allow the user to click on the Style name in order to deselect it just like Gradio 3
  */
+const styleDeselectionTargets = new WeakSet();
+
 function restoreStyleDeselection(tabname) {
     const dropdown = document.getElementById(`${tabname}_styles`);
+    if (!dropdown) return false;
+    if (styleDeselectionTargets.has(dropdown)) return true;
     dropdown.addEventListener("click", (e) => {
         const remove = e.target.closest("div.token-remove");
         if (remove) return;
@@ -340,16 +362,78 @@ function restoreStyleDeselection(tabname) {
             e.stopPropagation();
         }
     });
+    styleDeselectionTargets.add(dropdown);
+    dropdown.dataset.forgeStyleDeselectionBound = "true";
+    return true;
 }
 
-onUiLoaded(function () {
-    showRestoreProgressButton("txt2img", localGet("txt2img_task_id"));
-    showRestoreProgressButton("img2img", localGet("img2img_task_id"));
-    setupResolutionPasting("txt2img");
-    setupResolutionPasting("img2img");
-    restoreStyleDeselection("txt2img");
-    restoreStyleDeselection("img2img");
-    load_webui_settings();
+onUiLoaded(load_webui_settings);
+
+const generationTabSetupReady = { txt2img: false, img2img: false };
+let generationTabSetupTimer = null;
+let generationTabSetupAttempts = 0;
+const GENERATION_TAB_SETUP_MAX_ATTEMPTS = 40;
+
+function setupGenerationTabInteractions(tabname) {
+    showRestoreProgressButton(tabname, localGet(`${tabname}_task_id`));
+    const resolutionReady = setupResolutionPasting(tabname);
+    const stylesReady = restoreStyleDeselection(tabname);
+    generationTabSetupReady[tabname] = resolutionReady && stylesReady;
+    return generationTabSetupReady[tabname];
+}
+
+function generationTabsAreReady() {
+    return generationTabSetupReady.txt2img && generationTabSetupReady.img2img;
+}
+
+function generationTabMountIsPending() {
+    return ["txt2img", "img2img"].some(function (tabname) {
+        if (generationTabSetupReady[tabname]) return false;
+        return Boolean(
+            gradioApp().getElementById(`${tabname}_width`) ||
+            gradioApp().getElementById(`${tabname}_height`) ||
+            document.getElementById(`${tabname}_styles`) ||
+            get_uiCurrentTab()?.getAttribute("aria-controls") === `tab_${tabname}`
+        );
+    });
+}
+
+function requestGenerationTabSetup() {
+    if (generationTabsAreReady()) return;
+    generationTabSetupAttempts = GENERATION_TAB_SETUP_MAX_ATTEMPTS;
+    if (generationTabSetupTimer !== null) return;
+
+    function retry() {
+        generationTabSetupTimer = null;
+        for (const tabname of ["txt2img", "img2img"]) {
+            if (!generationTabSetupReady[tabname]) setupGenerationTabInteractions(tabname);
+        }
+        if (generationTabsAreReady()) return;
+        generationTabSetupAttempts -= 1;
+        if (generationTabSetupAttempts <= 0 || !generationTabMountIsPending()) return;
+        generationTabSetupTimer = window.setTimeout(retry, 50);
+    }
+    generationTabSetupTimer = window.setTimeout(retry, 0);
+}
+
+function generationTabMutationMayMountTarget(mutationRecords) {
+    if (generationTabsAreReady()) return false;
+    return Array.from(mutationRecords || []).some(function (record) {
+        return Array.from(record.addedNodes || []).some(function (node) {
+            if (node.nodeType !== Node.ELEMENT_NODE) return false;
+            return ["txt2img", "img2img"].some(function (tabname) {
+                const ids = [`${tabname}_width`, `${tabname}_height`, `${tabname}_styles`];
+                return ids.includes(node.id) ||
+                    Boolean(node.querySelector?.(ids.map((id) => `#${id}`).join(", ")));
+            });
+        });
+    });
+}
+
+onUiLoaded(requestGenerationTabSetup);
+onUiTabChange(requestGenerationTabSetup);
+onUiUpdate(function (mutationRecords) {
+    if (generationTabMutationMayMountTarget(mutationRecords)) requestGenerationTabSetup();
 });
 
 function modelmerger() {
@@ -375,16 +459,34 @@ function confirm_clear_prompt(prompt, negative_prompt) {
     return [prompt, negative_prompt];
 }
 
-function load_webui_settings() {
+function load_webui_settings(attempt = 0) {
+    const retry = function () {
+        if (attempt >= 200) {
+            console.error("WebUI settings did not become available within 10 seconds.");
+            return;
+        }
+        setTimeout(function () {
+            load_webui_settings(attempt + 1);
+        }, 50);
+    };
     const json_elem = gradioApp().getElementById("settings_json");
     if (json_elem == null) {
-        setTimeout(load_webui_settings, 50);
+        retry();
         return;
     }
 
     const textarea = json_elem.querySelector("textarea");
+    if (textarea == null || !textarea.value) {
+        retry();
+        return;
+    }
     const jsdata = textarea.value;
-    opts = JSON.parse(jsdata);
+    try {
+        opts = JSON.parse(jsdata);
+    } catch (_error) {
+        retry();
+        return;
+    }
 
     executeCallbacks(optionsAvailableCallbacks); // global optionsAvailableCallbacks
     executeCallbacks(optionsChangedCallbacks); // global optionsChangedCallbacks

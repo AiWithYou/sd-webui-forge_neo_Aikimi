@@ -1,14 +1,23 @@
 function inputAccordionChecked(id, checked) {
     let accordion = gradioApp().getElementById(id);
+    if (!accordion) return false;
+    if (!accordion.visibleCheckbox && !setupAccordion(accordion)) return false;
     accordion.visibleCheckbox.checked = checked;
     accordion.onVisibleCheckboxChange();
+    return true;
 }
 
 function setupAccordion(accordion) {
+    if (!accordion) return false;
+    if (accordion.visibleCheckbox && typeof accordion.onVisibleCheckboxChange === "function") {
+        return true;
+    }
+
     let labelWrap = accordion.querySelector(".label-wrap");
     let gradioCheckbox = gradioApp().querySelector("#" + accordion.id + "-checkbox input");
     let extra = gradioApp().querySelector("#" + accordion.id + "-extra");
-    let span = labelWrap.querySelector("span");
+    let span = labelWrap?.querySelector("span");
+    if (!labelWrap || !gradioCheckbox || !span) return false;
     let linked = true;
 
     let isOpen = function () {
@@ -62,10 +71,19 @@ function setupAccordion(accordion) {
         event.stopPropagation();
     });
     visibleCheckbox.addEventListener("input", accordion.onVisibleCheckboxChange);
+    accordion.dataset.inputAccordionReady = "true";
+    return true;
 }
 
-onUiLoaded(function () {
+function setupInputAccordions() {
     for (let accordion of gradioApp().querySelectorAll(".input-accordion")) {
         setupAccordion(accordion);
+    }
+}
+
+onUiLoaded(setupInputAccordions);
+onUiUpdate(function () {
+    if (gradioApp().querySelector('.input-accordion:not([data-input-accordion-ready="true"])')) {
+        setupInputAccordions();
     }
 });

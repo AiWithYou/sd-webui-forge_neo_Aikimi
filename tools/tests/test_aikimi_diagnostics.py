@@ -221,7 +221,7 @@ class AikimiDiagnosticsTests(unittest.TestCase):
 
     def test_settings_contains_refreshable_diagnostics_tab(self):
         source = (ROOT / "modules" / "ui_settings.py").read_text(encoding="utf-8")
-        style = (ROOT / "style.css").read_text(encoding="utf-8")
+        style = (ROOT / "extensions-builtin" / "aikimi-ui" / "style.css").read_text(encoding="utf-8")
 
         self.assertIn('gr.TabItem("Diagnostics"', source)
         self.assertIn("aikimi_diagnostics.render_diagnostics_html", source)

@@ -244,8 +244,6 @@ class UiSettings:
 
                 self.search_input = gr.Textbox(value="", elem_id="settings_search", max_lines=1, placeholder="Search...", show_label=False)
 
-                self.text_settings = gr.Textbox(elem_id="settings_json", value=lambda: opts.dumpjson(), visible=False)
-
             def call_func_and_return_text(func, text):
                 def handler():
                     t = timer.Timer()
@@ -326,6 +324,15 @@ class UiSettings:
                 for _i, k, _item in sorted(self.quicksettings_list, key=lambda x: self.quicksettings_names.get(x[1], x[0])):
                     component = create_setting_component(k, is_quicksettings=True)
                     self.component_dict[k] = component
+
+        # Keep the small options bootstrap mounted outside the lazy Settings tab.
+        # The UI reads this single value to populate the global `opts` object;
+        # settings changes continue to update the same component explicitly.
+        self.text_settings = gr.Textbox(
+            elem_id="settings_json",
+            value=opts.dumpjson(),
+            visible="hidden",
+        )
         return quicksettings_row
 
     def add_functionality(self, demo):
@@ -375,14 +382,8 @@ class UiSettings:
             show_progress=False,
         )
 
-        component_keys = [k for k in opts.data_labels.keys() if k in self.component_dict]
-
-        def get_settings_values():
-            return [get_value_for_setting(key) for key in component_keys]
-
-        demo.load(
-            fn=get_settings_values,
-            inputs=[],
-            outputs=[self.component_dict[k] for k in component_keys],
-            queue=False,
-        )
+        # Settings controls are constructed from the current options and component
+        # arguments in create_setting_component(). Re-sending every setting on page
+        # load is redundant and makes Gradio 6 walk the complete component tree once
+        # per output. Reload UI remains the explicit way to pick up external config
+        # edits made after the interface was built.

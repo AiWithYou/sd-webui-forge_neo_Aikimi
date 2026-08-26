@@ -11,10 +11,55 @@ function gradioApp() {
 }
 
 /**
+ * Get the direct tab list rendered for a Gradio Tabs container.
+ *
+ * Gradio 6 wraps the tab list in `.tab-wrapper`; older Gradio releases put
+ * `.tab-nav` directly below the Tabs container. Keeping this lookup scoped to
+ * the direct tab list avoids matching Gradio's hidden mirror/scroll buttons.
+ */
+function get_uiTabList(tabs) {
+    if (!tabs) return null;
+    return tabs.querySelector(
+        ':scope > .tab-wrapper > .tab-container[role="tablist"], :scope > .tab-nav[role="tablist"], :scope > .tab-nav',
+    );
+}
+
+/**
+ * Get only the native tab buttons owned by a Gradio Tabs container.
+ */
+function get_uiTabButtons(tabs) {
+    const tabList = get_uiTabList(tabs);
+    if (!tabList) return [];
+    return Array.from(tabList.children).filter((element) => element.tagName === "BUTTON");
+}
+
+/**
+ * Resolve a tab button by the panel it controls, with an index fallback for
+ * legacy Gradio markup that did not expose `aria-controls`.
+ */
+function get_uiTabButton(tabs, panelId) {
+    const buttons = get_uiTabButtons(tabs);
+    const controlled = buttons.find((button) => button.getAttribute("aria-controls") === panelId);
+    if (controlled) return controlled;
+
+    const panels = Array.from(tabs?.children || []).filter(
+        (element) => element.classList?.contains("tabitem") && element.id,
+    );
+    const panelIndex = panels.findIndex((panel) => panel.id === panelId);
+    return panelIndex >= 0 ? buttons[panelIndex] || null : null;
+}
+
+function get_uiTopTabButton(panelId) {
+    return get_uiTabButton(gradioApp().querySelector("#tabs"), panelId);
+}
+
+/**
  * Get the currently selected top-level UI tab button (e.g. the button that says "Extras").
  */
 function get_uiCurrentTab() {
-    return gradioApp().querySelector("#tabs > .tab-nav > button.selected");
+    return get_uiTabButtons(gradioApp().querySelector("#tabs")).find(
+        (button) => button.classList.contains("selected") || button.getAttribute("aria-selected") === "true",
+    ) || null;
 }
 
 /**
@@ -31,6 +76,7 @@ const uiTabChangeCallbacks = [];
 const optionsChangedCallbacks = [];
 const optionsAvailableCallbacks = [];
 let uiCurrentTab = null;
+let executedOnLoaded = false;
 
 /**
  * Register callback to be called at each UI update.
@@ -57,6 +103,10 @@ function onAfterUiUpdate(callback) {
  * The callback receives no arguments.
  */
 function onUiLoaded(callback) {
+    if (executedOnLoaded) {
+        callback();
+        return;
+    }
     uiLoadedCallbacks.push(callback);
 }
 
@@ -115,8 +165,6 @@ function scheduleAfterUiUpdateCallbacks() {
         executeCallbacks(uiAfterUpdateCallbacks);
     }, 250);
 }
-
-let executedOnLoaded = false;
 
 document.addEventListener("DOMContentLoaded", function () {
     const mutationObserver = new MutationObserver(function (m) {

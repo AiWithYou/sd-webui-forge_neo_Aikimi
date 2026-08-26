@@ -1,20 +1,22 @@
 import ast
-from fractions import Fraction
 import hashlib
 import json
-from pathlib import Path
 import struct
-from types import SimpleNamespace
 import unittest
 import zlib
+from fractions import Fraction
+from pathlib import Path
+from types import SimpleNamespace
 
 from PIL import Image
 
 from modules import aikimi_status
 
-
 ROOT = Path(__file__).resolve().parents[2]
 ASSET_ROOT = ROOT / "assets" / "aikimi"
+AIKIMI_UI_ROOT = ROOT / "extensions-builtin" / "aikimi-ui"
+ASSISTANT_SOURCE = AIKIMI_UI_ROOT / "javascript" / "aikimiStatus.js"
+ASSISTANT_CSS = AIKIMI_UI_ROOT / "style.css"
 EXPECTED_STATES = {
     "idle",
     "loading_model",
@@ -299,9 +301,7 @@ class AikimiStatusTests(unittest.TestCase):
             for node in ast.walk(constructor)
             if isinstance(node, ast.Assign)
             for target in node.targets
-            if isinstance(target, ast.Attribute)
-            and isinstance(target.value, ast.Name)
-            and target.value.id == "self"
+            if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == "self"
         }
 
         self.assertIn("forge_loading", assigned_attributes)
@@ -311,20 +311,14 @@ class AikimiStatusTests(unittest.TestCase):
     def test_model_loading_flag_is_cleared_by_outer_finally(self):
         tree = ast.parse((ROOT / "modules" / "sd_models.py").read_text(encoding="utf-8"))
         reload_function = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name == "forge_model_reload"
+            node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "forge_model_reload"
         )
         tracking_try = next(node for node in reload_function.body if isinstance(node, ast.Try))
         final_assignments = [
             node
             for node in ast.walk(ast.Module(body=tracking_try.finalbody, type_ignores=[]))
             if isinstance(node, ast.Assign)
-            and any(
-                isinstance(target, ast.Attribute)
-                and target.attr == "forge_loading"
-                for target in node.targets
-            )
+            and any(isinstance(target, ast.Attribute) and target.attr == "forge_loading" for target in node.targets)
         ]
 
         self.assertEqual(len(final_assignments), 1)
@@ -332,7 +326,7 @@ class AikimiStatusTests(unittest.TestCase):
 
     def test_frontend_subscribes_without_replacing_progress_api(self):
         progress_source = (ROOT / "javascript" / "progressbar.js").read_text(encoding="utf-8")
-        assistant_source = (ROOT / "javascript" / "aikimiStatus.js").read_text(encoding="utf-8")
+        assistant_source = ASSISTANT_SOURCE.read_text(encoding="utf-8")
 
         for event_name in (
             "webui:task-start",
@@ -354,6 +348,16 @@ class AikimiStatusTests(unittest.TestCase):
         self.assertIn("pollingGeneration", assistant_source)
         self.assertIn("window.__aikimiStatusInitialized", assistant_source)
         self.assertIn("publicTechnicalDetail", assistant_source)
+        self.assertIn("window.AikimiTabs", assistant_source)
+        self.assertIn('"aikimi:feature-tab-change"', assistant_source)
+        self.assertIn("navigationIssue", assistant_source)
+        self.assertIn("message: navigationIssue", assistant_source)
+        self.assertIn("errorDetails: navigationIssue", assistant_source)
+        self.assertIn("statusIsActive()", assistant_source)
+        self.assertIn("if (statusIsActive()) scanOutputErrors();", assistant_source)
+        self.assertIn("activeContainer", assistant_source)
+        self.assertNotIn("createBrandHeader", assistant_source)
+        self.assertNotIn("aikimi_assistant_position", assistant_source)
         self.assertNotIn("aikimi-working", (ROOT / "style.css").read_text(encoding="utf-8"))
 
         manifest = json.loads((ASSET_ROOT / "manifest.json").read_text(encoding="utf-8"))
@@ -363,12 +367,12 @@ class AikimiStatusTests(unittest.TestCase):
 
     def test_assistant_preferences_are_registered_and_manifest_driven(self):
         options_source = (ROOT / "modules" / "shared_options.py").read_text(encoding="utf-8")
-        assistant_source = (ROOT / "javascript" / "aikimiStatus.js").read_text(encoding="utf-8")
-        css_source = (ROOT / "style.css").read_text(encoding="utf-8")
+        assistant_source = ASSISTANT_SOURCE.read_text(encoding="utf-8")
+        css_source = ASSISTANT_CSS.read_text(encoding="utf-8")
+        root_css_source = (ROOT / "style.css").read_text(encoding="utf-8")
 
         for option in (
             "aikimi_assistant_size",
-            "aikimi_assistant_position",
             "aikimi_assistant_dialogue_enabled",
             "aikimi_assistant_animation_enabled",
         ):
@@ -376,10 +380,31 @@ class AikimiStatusTests(unittest.TestCase):
             self.assertIn(option, assistant_source)
         for value in ("small", "medium", "large"):
             self.assertIn(f'[data-size="{value}"]', css_source)
-        for value in ("bottom-right", "bottom-left", "top-right", "top-left"):
-            self.assertIn(value, options_source)
-        self.assertIn('data-position$="-left"', css_source)
-        self.assertIn('data-position^="top-"', css_source)
+        self.assertIn('"aikimi_assistant_position"', options_source)
+        self.assertIn('{"visible": False}', options_source)
+        self.assertNotIn("data-position", css_source)
+        self.assertNotIn("position: fixed", css_source)
+        self.assertNotIn("#aikimi-status", root_css_source)
+        self.assertNotIn(".aikimi-diagnostics", root_css_source)
+        self.assertNotIn(".aikimi-about", root_css_source)
+        self.assertIn("--aikimi-character-size: 40px", css_source)
+        self.assertIn("--aikimi-character-size: 52px", css_source)
+        self.assertIn("--aikimi-character-size: 64px", css_source)
+        self.assertIn("max-height: 64px", css_source)
+        self.assertIn("#aikimi-status .aikimi-status__summary", css_source)
+        self.assertIn("var(--body-text-color) 72%", css_source)
+        self.assertIn('#aikimi-feature-nav[data-active-feature="krea2"]', css_source)
+        self.assertIn('button[aria-controls="tab_img2img"]', css_source)
+        self.assertIn("var(--button-secondary-background-fill", css_source)
+        self.assertIn("box-shadow: none", css_source)
+        self.assertNotIn('content: "  ▾"', css_source)
+        self.assertNotIn('content: "  ▴"', css_source)
+        self.assertIn("@media (forced-colors: active)", css_source)
+        self.assertIn("border-color: CanvasText", css_source)
+        self.assertIn("outline-color: Highlight", css_source)
+        self.assertIn('warning: "Warning"', assistant_source)
+        self.assertIn('error: "Error"', assistant_source)
+        self.assertIn('out_of_memory: "Out of memory"', assistant_source)
         self.assertIn("stillMode", assistant_source)
         self.assertIn("message.hidden = !dialogueEnabled", assistant_source)
 

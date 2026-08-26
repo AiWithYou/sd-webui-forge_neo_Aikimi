@@ -1,16 +1,15 @@
 import html
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
 import unittest
-
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlparse
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -53,15 +52,15 @@ class AikimiFixtureHandler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_fixture(parsed.query)
             return
-        if parsed.path == "/javascript/aikimiStatus.js":
+        if parsed.path == "/extensions-builtin/aikimi-ui/javascript/aikimiStatus.js":
             self.send_bytes(
-                (ROOT / "javascript" / "aikimiStatus.js").read_bytes(),
+                (ROOT / "extensions-builtin" / "aikimi-ui" / "javascript" / "aikimiStatus.js").read_bytes(),
                 "text/javascript; charset=utf-8",
             )
             return
-        if parsed.path == "/style.css":
+        if parsed.path == "/extensions-builtin/aikimi-ui/style.css":
             self.send_bytes(
-                (ROOT / "style.css").read_bytes(),
+                (ROOT / "extensions-builtin" / "aikimi-ui" / "style.css").read_bytes(),
                 "text/css; charset=utf-8",
             )
             return
@@ -94,33 +93,87 @@ class AikimiFixtureHandler(BaseHTTPRequestHandler):
     def send_fixture(self, query):
         values = parse_qs(query)
         size = values.get("size", ["medium"])[0]
-        position = values.get("position", ["bottom-right"])[0]
+        feature = values.get("feature", ["krea2"])[0]
+        warning = values.get("warning", [None])[0]
+        clear_warning = values.get("clear_warning", ["0"])[0] == "1"
         dialogue = values.get("dialogue", ["1"])[0] != "0"
         animation = values.get("animation", ["1"])[0] != "0"
         options = {
             "aikimi_assistant_enabled": True,
             "aikimi_assistant_size": size,
-            "aikimi_assistant_position": position,
+            "aikimi_assistant_position": "bottom-left",
             "aikimi_assistant_dialogue_enabled": dialogue,
             "aikimi_assistant_animation_enabled": animation,
         }
         document = f"""<!doctype html>
-<html><head><meta charset="utf-8"><link rel="stylesheet" href="/style.css"></head>
-<body><div id="tabs"></div><pre id="result">pending</pre>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="/extensions-builtin/aikimi-ui/style.css"></head>
+<body><div id="tabs"><div id="aikimi-feature"></div><div id="forge-feature"></div></div><pre id="result">pending</pre>
 <script>
 window.opts = {json.dumps(options)};
 window.gradioApp = () => document;
+window.fixtureFeature = {json.dumps(feature)};
+window.fixtureWarning = {json.dumps(warning)};
+window.fixtureClearWarning = {json.dumps(clear_warning)};
+window.fixtureWarningObserved = false;
+window.fixtureRequests = [];
+window.fixtureFetch = window.fetch;
+window.fetch = (...args) => {{
+    window.fixtureRequests.push(String(args[0]));
+    return window.fixtureFetch(...args);
+}};
+window.AikimiTabs = {{
+    getActiveFeature: () => window.fixtureFeature === "none" ? null : window.fixtureFeature,
+    getActiveContainer: () => window.fixtureFeature === "none" ? null : document.querySelector("#aikimi-feature")
+}};
 window.onUiLoaded = (callback) => setTimeout(callback, 0);
 window.onOptionsAvailable = (callback) => setTimeout(callback, 5);
 window.onOptionsChanged = () => {{}};
 window.onAfterUiUpdate = () => {{}};
 </script>
-<script src="/javascript/aikimiStatus.js"></script>
+<script src="/extensions-builtin/aikimi-ui/javascript/aikimiStatus.js"></script>
 <script>
+if (window.fixtureWarning) {{
+    new MutationObserver((mutations) => {{
+        if (mutations.some((mutation) => mutation.target?.dataset?.state === "warning")) {{
+            window.fixtureWarningObserved = true;
+        }}
+    }}).observe(document.documentElement, {{
+        attributes: true,
+        attributeFilter: ["data-state"],
+        subtree: true
+    }});
+    setTimeout(() => document.dispatchEvent(new CustomEvent("aikimi:feature-tab-change", {{
+        detail: {{
+            feature: window.fixtureFeature,
+            container: document.querySelector("#aikimi-feature"),
+            ready: false,
+            warning: window.fixtureWarning
+        }}
+    }})), 15);
+    if (window.fixtureClearWarning) {{
+        setTimeout(() => document.dispatchEvent(new CustomEvent("aikimi:feature-tab-change", {{
+            detail: {{
+                feature: window.fixtureFeature,
+                container: document.querySelector("#aikimi-feature"),
+                ready: true,
+                warning: null
+            }}
+        }})), 110);
+    }}
+}}
 (function report(attempt) {{
     const panel = document.querySelector("#aikimi-status");
     const portrait = panel?.querySelector(".aikimi-status__portrait");
-    if ((!portrait?.currentSrc || !portrait.naturalWidth) && attempt < 120) {{
+    const expectsPanel = window.fixtureFeature !== "none";
+    if (expectsPanel && (!portrait?.currentSrc || !portrait.naturalWidth) && attempt < 120) {{
+        setTimeout(() => report(attempt + 1), 50);
+        return;
+    }}
+    if (!expectsPanel && attempt < 10) {{
+        setTimeout(() => report(attempt + 1), 50);
+        return;
+    }}
+    if (window.fixtureWarning && attempt < 4) {{
         setTimeout(() => report(attempt + 1), 50);
         return;
     }}
@@ -130,13 +183,22 @@ window.onAfterUiUpdate = () => {{}};
     result.dataset.ready = "true";
     result.textContent = JSON.stringify({{
         reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
+        panelPresent: Boolean(panel),
+        state: panel?.dataset.state || "",
+        message: message?.textContent || "",
+        technical: panel?.querySelector('[data-field="error"]')?.textContent || "",
+        warningObserved: window.fixtureWarningObserved,
         src: portrait?.currentSrc || "",
         size: panel?.dataset.size,
-        position: panel?.dataset.position,
         dialogue: panel?.dataset.dialogue,
         motion: panel?.dataset.motion,
         messageHidden: Boolean(message?.hidden),
-        characterWidth: Math.round(portraitWrap?.getBoundingClientRect().width || 0)
+        messageDisplay: message ? getComputedStyle(message).display : "",
+        messageWidth: Math.round(message?.getBoundingClientRect().width || 0),
+        characterWidth: Math.round(portraitWrap?.getBoundingClientRect().width || 0),
+        summaryHeight: Math.round(panel?.querySelector("summary")?.getBoundingClientRect().height || 0),
+        parentId: panel?.parentElement?.id || "",
+        statusRequests: window.fixtureRequests.filter((url) => url.includes("/internal/aikimi-status")).length
     }});
 }})(0);
 </script></body></html>"""
@@ -160,7 +222,7 @@ class AikimiChromiumTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join(timeout=5)
 
-    def render_fixture(self, query="", reduced_motion=False):
+    def render_fixture(self, query="", reduced_motion=False, window_size="1280,900"):
         url = self.base_url + (f"?{query}" if query else "")
         with tempfile.TemporaryDirectory(prefix="aikimi-chrome-") as profile:
             command = [
@@ -170,7 +232,7 @@ class AikimiChromiumTests(unittest.TestCase):
                 "--disable-extensions",
                 "--no-first-run",
                 "--no-default-browser-check",
-                "--window-size=1280,900",
+                f"--window-size={window_size}",
                 f"--user-data-dir={profile}",
                 "--virtual-time-budget=7000",
                 "--dump-dom",
@@ -188,9 +250,7 @@ class AikimiChromiumTests(unittest.TestCase):
                 check=False,
             )
         self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
-        match = re.search(
-            r'<pre id="result"[^>]*>(.*?)</pre>', completed.stdout, re.DOTALL
-        )
+        match = re.search(r'<pre id="result"[^>]*>(.*?)</pre>', completed.stdout, re.DOTALL)
         self.assertIsNotNone(match, completed.stdout[-2000:])
         self.assertIn('data-ready="true"', match.group(0))
         return json.loads(html.unescape(match.group(1)))
@@ -208,25 +268,55 @@ class AikimiChromiumTests(unittest.TestCase):
         self.assertFalse(result["reduced"])
         self.assertEqual(urlparse(result["src"]).path, "/aikimi-assets/idle.png")
         self.assertEqual(result["size"], "medium")
-        self.assertEqual(result["position"], "bottom-right")
         self.assertEqual(result["dialogue"], "on")
         self.assertEqual(result["motion"], "animated")
         self.assertFalse(result["messageHidden"])
-        self.assertEqual(result["characterWidth"], 150)
+        self.assertEqual(result["characterWidth"], 52)
+        self.assertLessEqual(result["summaryHeight"], 64)
+        self.assertEqual(result["parentId"], "aikimi-feature")
 
     def test_user_preferences_apply_in_chromium(self):
-        result = self.render_fixture(
-            "size=large&position=bottom-left&dialogue=0&animation=0"
-        )
+        result = self.render_fixture("size=large&dialogue=0&animation=0")
 
         self.assertFalse(result["reduced"])
         self.assertEqual(urlparse(result["src"]).path, "/aikimi-assets/idle-still.webp")
         self.assertEqual(result["size"], "large")
-        self.assertEqual(result["position"], "bottom-left")
         self.assertEqual(result["dialogue"], "off")
         self.assertEqual(result["motion"], "disabled")
         self.assertTrue(result["messageHidden"])
-        self.assertEqual(result["characterWidth"], 180)
+        self.assertEqual(result["characterWidth"], 64)
+
+    def test_normal_forge_tab_does_not_mount_or_poll_status(self):
+        result = self.render_fixture("feature=none")
+
+        self.assertFalse(result["panelPresent"])
+        self.assertEqual(result["statusRequests"], 0)
+
+    def test_narrow_layout_keeps_the_strip_compact(self):
+        result = self.render_fixture(window_size="480,800")
+
+        self.assertTrue(result["panelPresent"])
+        self.assertLessEqual(result["summaryHeight"], 64)
+        self.assertEqual(result["messageDisplay"], "block")
+        self.assertEqual(result["messageWidth"], 1)
+
+    def test_navigation_warning_is_visible_and_redacted(self):
+        result = self.render_fixture(urlencode({"warning": r"C:\private\model token=abc123456789"}))
+
+        self.assertTrue(result["warningObserved"], result)
+        self.assertEqual(result["state"], "warning")
+        self.assertIn("<local-path>", result["message"])
+        self.assertIn("token=<redacted>", result["technical"])
+        self.assertNotIn("abc123456789", result["message"])
+        self.assertNotIn("abc123456789", result["technical"])
+
+    def test_successful_feature_event_clears_navigation_warning(self):
+        result = self.render_fixture(urlencode({"warning": "Runtime unavailable", "clear_warning": "1"}))
+
+        self.assertTrue(result["warningObserved"], result)
+        self.assertEqual(result["state"], "idle")
+        self.assertNotEqual(result["message"], "Runtime unavailable")
+        self.assertEqual(result["technical"], "None")
 
 
 if __name__ == "__main__":

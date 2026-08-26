@@ -5,7 +5,11 @@ on:
     paths:
       - "**/*.bat"
       - "**/*.ps1"
+      - "extensions-builtin/aikimi-ui/**"
+      - "extensions-builtin/anima-3-8b/**"
+      - "extensions-builtin/hyperweave/**"
       - "extensions-builtin/minimax-h3-studio/**"
+      - "extensions-builtin/sd_forge_controlnet/**"
       - "extensions-builtin/sensenova-u15-studio/**"
       - "javascript/**"
       - "modules/aikimi_capabilities.py"
@@ -19,20 +23,29 @@ on:
       - "modules/launch_utils.py"
       - "modules/options.py"
       - "modules/shared_cmd_options.py"
+      - "modules/shared_options.py"
       - "modules/sysinfo.py"
       - "modules/ui*.py"
       - "modules/ui_tempdir.py"
       - "modules/ui_settings.py"
       - "modules_forge/minimax_h3_bridge.py"
       - "modules_forge/sensenova_u15_bridge.py"
+      - "modules_forge/forge_canvas/canvas.py"
       - "requirements.txt"
       - "style.css"
+      - "webui.py"
       - "tools/tests/test_aikimi_diagnostics.py"
       - "tools/tests/test_aikimi_status.py"
+      - "tools/tests/test_aikimi_tabs.py"
+      - "tools/tests/test_aikimi_tabs_chromium.py"
+      - "tools/tests/test_anima38_extension.py"
       - "tools/tests/test_api_public_state.py"
       - "tools/tests/test_api_script_args.py"
       - "tools/tests/test_gradio_compatibility.py"
+      - "tools/tests/test_gradio_frontend_compat.py"
+      - "tools/tests/test_gradio_frontend_compat_chromium.py"
       - "tools/tests/test_gradio_file_security.py"
+      - "tools/tests/test_gradio_file_url_guard.py"
       - "tools/tests/test_legacy_yaml_security.py"
       - "tools/tests/test_launch_utils_environment.py"
       - "tools/tests/test_minimax_h3_studio.py"
@@ -40,6 +53,7 @@ on:
       - "tools/tests/test_safe_image_fetch.py"
       - "tools/tests/test_security_redaction.py"
       - "tools/tests/test_sensenova_u15_studio.py"
+      - "tools/tests/test_studio_css_boundaries.py"
       - "tools/tests/test_sysinfo_security.py"
       - "tools/tests/test_ui_tempdir_security.py"
       - "tools/tests/test_workflow_ui.py"
@@ -49,7 +63,11 @@ on:
     paths:
       - "**/*.bat"
       - "**/*.ps1"
+      - "extensions-builtin/aikimi-ui/**"
+      - "extensions-builtin/anima-3-8b/**"
+      - "extensions-builtin/hyperweave/**"
       - "extensions-builtin/minimax-h3-studio/**"
+      - "extensions-builtin/sd_forge_controlnet/**"
       - "extensions-builtin/sensenova-u15-studio/**"
       - "javascript/**"
       - "modules/aikimi_capabilities.py"
@@ -63,20 +81,29 @@ on:
       - "modules/launch_utils.py"
       - "modules/options.py"
       - "modules/shared_cmd_options.py"
+      - "modules/shared_options.py"
       - "modules/sysinfo.py"
       - "modules/ui*.py"
       - "modules/ui_tempdir.py"
       - "modules/ui_settings.py"
       - "modules_forge/minimax_h3_bridge.py"
       - "modules_forge/sensenova_u15_bridge.py"
+      - "modules_forge/forge_canvas/canvas.py"
       - "requirements.txt"
       - "style.css"
+      - "webui.py"
       - "tools/tests/test_aikimi_diagnostics.py"
       - "tools/tests/test_aikimi_status.py"
+      - "tools/tests/test_aikimi_tabs.py"
+      - "tools/tests/test_aikimi_tabs_chromium.py"
+      - "tools/tests/test_anima38_extension.py"
       - "tools/tests/test_api_public_state.py"
       - "tools/tests/test_api_script_args.py"
       - "tools/tests/test_gradio_compatibility.py"
+      - "tools/tests/test_gradio_frontend_compat.py"
+      - "tools/tests/test_gradio_frontend_compat_chromium.py"
       - "tools/tests/test_gradio_file_security.py"
+      - "tools/tests/test_gradio_file_url_guard.py"
       - "tools/tests/test_legacy_yaml_security.py"
       - "tools/tests/test_launch_utils_environment.py"
       - "tools/tests/test_minimax_h3_studio.py"
@@ -84,6 +111,7 @@ on:
       - "tools/tests/test_safe_image_fetch.py"
       - "tools/tests/test_security_redaction.py"
       - "tools/tests/test_sensenova_u15_studio.py"
+      - "tools/tests/test_studio_css_boundaries.py"
       - "tools/tests/test_sysinfo_security.py"
       - "tools/tests/test_ui_tempdir_security.py"
       - "tools/tests/test_workflow_ui.py"
@@ -140,10 +168,16 @@ jobs:
           --preload modules.shared
           --module tools.tests.test_aikimi_diagnostics
           --module tools.tests.test_aikimi_status
+          --module tools.tests.test_aikimi_tabs
+          --module tools.tests.test_aikimi_tabs_chromium
+          --module tools.tests.test_anima38_extension
           --module tools.tests.test_api_public_state
           --module tools.tests.test_api_script_args
           --module tools.tests.test_gradio_compatibility
+          --module tools.tests.test_gradio_frontend_compat
+          --module tools.tests.test_gradio_frontend_compat_chromium
           --module tools.tests.test_gradio_file_security
+          --module tools.tests.test_gradio_file_url_guard
           --module tools.tests.test_legacy_yaml_security
           --module tools.tests.test_launch_utils_environment
           --module tools.tests.test_minimax_h3_studio
@@ -152,6 +186,7 @@ jobs:
           --module tools.tests.test_safe_image_fetch
           --module tools.tests.test_security_redaction
           --module tools.tests.test_sensenova_u15_studio
+          --module tools.tests.test_studio_css_boundaries
           --module tools.tests.test_sysinfo_security
           --module tools.tests.test_ui_tempdir_security
           --module tools.tests.test_workflow_ui

@@ -12,7 +12,7 @@ import gradio as gr
 from PIL import Image
 
 import modules.scripts as scripts
-from modules import devices, images, processing
+from modules import devices, gradio_compat, images, processing
 from modules.api import api
 from modules.shared import opts, state
 from modules_forge.workflow_ui import (
@@ -245,9 +245,21 @@ def _workflow_summary_html(
 def _target_visibility_updates(target_mode):
     selected_target = str(target_mode)
     return (
-        gr.update(visible=selected_target == TargetMode.CUSTOM_LONG_EDGE.value),
-        gr.update(visible=selected_target == TargetMode.CUSTOM_SIZE.value),
-        gr.update(visible=selected_target == TargetMode.CUSTOM_SIZE.value),
+        gr.update(
+            visible=gradio_compat.keep_hidden_component_mounted(
+                selected_target == TargetMode.CUSTOM_LONG_EDGE.value
+            )
+        ),
+        gr.update(
+            visible=gradio_compat.keep_hidden_component_mounted(
+                selected_target == TargetMode.CUSTOM_SIZE.value
+            )
+        ),
+        gr.update(
+            visible=gradio_compat.keep_hidden_component_mounted(
+                selected_target == TargetMode.CUSTOM_SIZE.value
+            )
+        ),
     )
 
 
@@ -416,7 +428,7 @@ class HyperWeaveScript(scripts.Script):
                 maximum=16384,
                 step=8,
                 value=4096,
-                visible=False,
+                visible=gradio_compat.keep_hidden_component_mounted(False),
                 elem_id=self.elem_id("custom_long_edge"),
             )
         with gr.Row(elem_classes=["neo-workflow-grid-2"]):
@@ -426,7 +438,7 @@ class HyperWeaveScript(scripts.Script):
                 maximum=16384,
                 step=8,
                 value=0,
-                visible=False,
+                visible=gradio_compat.keep_hidden_component_mounted(False),
                 elem_id=self.elem_id("custom_width"),
             )
             custom_height = gr.Slider(
@@ -435,7 +447,7 @@ class HyperWeaveScript(scripts.Script):
                 maximum=16384,
                 step=8,
                 value=0,
-                visible=False,
+                visible=gradio_compat.keep_hidden_component_mounted(False),
                 elem_id=self.elem_id("custom_height"),
             )
         with gr.Row(elem_classes=["neo-workflow-grid-2"]):
