@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import tempfile
 import time
@@ -89,8 +90,10 @@ def cdp_page(chromium: str, url: str):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
+            start_new_session=os.name != "nt",
         )
         websocket = None
+        page = None
         try:
             deadline = time.monotonic() + 10
             while True:
@@ -120,18 +123,31 @@ def cdp_page(chromium: str, url: str):
             page.send("Page.navigate", {"url": url})
             yield page
         finally:
+            if page is not None:
+                try:
+                    page.send("Browser.close", timeout=2)
+                except (OSError, RuntimeError, TimeoutError):
+                    pass
             if websocket is not None:
                 try:
                     websocket.close()
                 except OSError:
                     pass
             if process.poll() is None:
-                process.terminate()
+                if os.name == "nt":
+                    process.terminate()
+                else:
+                    os.killpg(process.pid, signal.SIGTERM)
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    if os.name == "nt":
+                        process.kill()
+                    else:
+                        os.killpg(process.pid, signal.SIGKILL)
                     process.wait(timeout=5)
+            # Chrome may finish writing its profile after the browser process exits.
+            time.sleep(0.25)
 
 
 class GradioFrontendCompatibilityChromiumTests(unittest.TestCase):
