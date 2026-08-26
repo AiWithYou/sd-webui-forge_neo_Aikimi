@@ -551,8 +551,7 @@ def rotate_half(x):
 def apply_rotary_pos_emb(x, cos, sin, unsqueeze_dim=1):
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
-    x_embed = (x * cos) + (rotate_half(x) * sin)
-    return x_embed
+    return torch.addcmul(x * cos, rotate_half(x), sin)
 
 
 class RotaryEmbedding(nn.Module):
@@ -650,7 +649,7 @@ class TransformerBlock(nn.Module):
         self.norm_mlp = nn.LayerNorm(model_dim) if layer_norm else nn.RMSNorm(model_dim, eps=1e-6)
         self.mlp = nn.Sequential(nn.Linear(model_dim, int(model_dim * mlp_ratio)), nn.GELU(), nn.Linear(int(model_dim * mlp_ratio), model_dim))
 
-    def forward(self, x, context, target_attention_mask=None, source_attention_mask=None, position_embeddings=None, position_embeddings_context=None):
+    def forward(self, x: torch.Tensor, context, target_attention_mask=None, source_attention_mask=None, position_embeddings=None, position_embeddings_context=None):
         if self.use_self_attn:
             normed = self.norm_self_attn(x)
             attn_out = self.self_attn(normed, mask=target_attention_mask, position_embeddings=position_embeddings, position_embeddings_context=position_embeddings)

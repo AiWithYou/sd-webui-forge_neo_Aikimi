@@ -28,6 +28,7 @@ on:
       - "tools/tests/test_security_redaction.py"
       - "tools/tests/test_sysinfo_security.py"
       - "tools/tests/test_ui_tempdir_security.py"
+      - "tools/tests/test_upstream_neo_regressions.py"
   push:
     branches: [neo]
     paths:
@@ -56,6 +57,7 @@ on:
       - "tools/tests/test_security_redaction.py"
       - "tools/tests/test_sysinfo_security.py"
       - "tools/tests/test_ui_tempdir_security.py"
+      - "tools/tests/test_upstream_neo_regressions.py"
   workflow_dispatch:
 
 permissions:
@@ -104,6 +106,7 @@ jobs:
             tools/tests/test_security_redaction.py
             tools/tests/test_sysinfo_security.py
             tools/tests/test_ui_tempdir_security.py
+            tools/tests/test_upstream_neo_regressions.py
           )
           python -m ruff check "${files[@]}"
           python -m ruff format --check "${files[@]}"
