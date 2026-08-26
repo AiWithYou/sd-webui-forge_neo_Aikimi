@@ -442,12 +442,12 @@ RTX 3090 24GBでも、SenseNova U1.5とAnima 3.8Bは実用的に動かせます�
 
 これらをまとめて初めて、日常的に使える生成環境になります。
 
-実装は[Forge NeoW](https://github.com/AiWithYou/sd-webui-forge-classic_neoW)の`neo`ブランチに反映しています。
+実装は[Aikimi Neo](https://github.com/AiWithYou/sd-webui-forge_neo_Aikimi)の`neo`ブランチに反映しています。
 
 主要commitは次の2つです。
 
-- [SenseNovaとAnimaの推論最適化](https://github.com/AiWithYou/sd-webui-forge-classic_neoW/commit/012785c040610506a038722a58b46c40ca2c67ec)
-- [Anima 3.8Bの通常LoRA選択対応](https://github.com/AiWithYou/sd-webui-forge-classic_neoW/commit/ad49ad0072731dc47c74ba4e49c0e76f7f8a1f52)
+- [SenseNovaとAnimaの推論最適化](https://github.com/AiWithYou/sd-webui-forge_neo_Aikimi/commit/012785c040610506a038722a58b46c40ca2c67ec)
+- [Anima 3.8Bの通常LoRA選択対応](https://github.com/AiWithYou/sd-webui-forge_neo_Aikimi/commit/ad49ad0072731dc47c74ba4e49c0e76f7f8a1f52)
 
 ## 関連リンク
 

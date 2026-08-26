@@ -76,12 +76,20 @@ Browser
 - Browser入力: API schema、OptionInfo policy、path policyによる検証
 - API経由の設定変更: `restrict_api`と型の検査
 - URL画像入力: safe fetch policyによるscheme、DNS、redirect、size、Content-Typeの確認
-- Gradio公開path: 管理されたoutput、temporary、static assetへの限定
+- Gradio公開path: 管理されたoutput、temporaryと、activeな静的assetの個別fileへの限定
 - SenseNova: Forge UI、bridge、専用workerの責務分離
 - MiniMax H3: loopback ComfyUIと選択runtime identityの検査
 - model installer: 固定revision、size、SHA-256の確認後に正式名へ移動
 
 管理されたoutput、temporary、Canvas assetがsymlinkやjunctionを経由して管理root外へ解決される場合は、起動を停止します。外部保存先を使う場合でも、WebUIの公開pathへ任意directoryを追加せず、生成後の別工程で移動してください。
+
+### Gradio 6の静的asset
+
+Gradio 6へ埋め込むJavaScriptとCSSは、現在のmount pathを保持できる相対URL `gradio_api/file=`から取得します。静的UI資産についてはparent directoryを`allowed_paths`へ加えず、起動時に使う個別fileだけを列挙します。対象はrootの`script.js`と`style.css`、activeなroot／extensionの`.js`と`.mjs`、active extensionの`style.css`、Forge Canvasの`canvas.js`と`canvas.css`、有効時の`notification.mp3`、card placeholderです。outputとtemporaryは、従来どおり管理directory単位で許可します。
+
+extensionのPython、任意HTML、設定file、model、inactive extensionのasset、許可root外へ解決されるsymlinkは公開しません。`extensions`、`extensions-builtin`、`javascript`などのdirectory自体も静的assetのallowlistへ入りません。rootまたはsubpathへmountした実Gradio appを使い、許可したfileが取得でき、その他がHTTP 403になることを回帰テストで確認します。
+
+Gradio 6.17.3のfile routeへ外部URLを渡した場合は、redirectやproxyを行いません。現行とdeprecatedのrouteを認証後にも再検査し、HTTP、HTTPS、protocol-relative、userinfo、複数回encodeされたURLをtarget非表示のHTTP 403で拒否します。local exact assetの配信だけを維持します。
 
 ## API
 

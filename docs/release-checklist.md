@@ -87,6 +87,18 @@ findingがある場合は、単語だけを置換せず、対象文全体を書�
 
 - [ ] Local SafeでWebUIとAPIを起動した
 - [ ] browserから`127.0.0.1`だけで開ける
+- [ ] Forge由来の上部タブとQuick Settingsが常に表示される
+- [ ] Aikimiの4入口が`#tabs`直前の小型1行にあり、Gradio所有tablistのchild、順序、label、ARIAを変更しない
+- [ ] `Krea2`がForge `img2img`の`Krea2 2-Stage Upscale`へ直接移動する
+- [ ] `Anima`がForge `txt2img`のAnima 3.8B設定欄を展開する
+- [ ] `SenseNova`と`MiniMax H3`が専用タブを直接開く
+- [ ] 通常のForgeタブに全画面共通Aikimi headerや固定status overlayが表示されない
+- [ ] ちびあいきみがAikimi機能内だけに表示され、通常のForgeタブではpollingを停止する
+- [ ] Aikimiタブをkeyboardで選択でき、ARIA上で同じpanelに二つのselected tabが生じない
+- [ ] UI再読込後もtab、event listener、status要素が重複しない
+- [ ] Gradio Tabs compat assetの元と置換後SHA-256、exact route、root／subpath、ETagを確認した
+- [ ] 現行とdeprecatedのGradio file routeが外部URLをLocationなしのHTTP 403で拒否する
+- [ ] 実ブラウザーconsoleにlazy mount由来の未処理errorがない
 - [ ] DiagnosticsのReady／Warning／Blockedと修復案を確認した
 - [ ] capabilities APIが現在のmodel状態を返す
 - [ ] remote modeが認証なしで失敗する

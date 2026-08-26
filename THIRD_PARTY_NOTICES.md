@@ -9,6 +9,7 @@
 | AUTOMATIC1111 Stable Diffusion WebUI | WebUI基盤 | ルート[LICENSE](LICENSE)とupstream notice |
 | Stable Diffusion WebUI Forge | Forge backend | ルート[LICENSE](LICENSE)とupstream notice |
 | Stable Diffusion WebUI Forge - Neo | 現在のupstream | ルート[LICENSE](LICENSE)とupstream notice |
+| Gradio 6.17.3 | WebUI frontend／backend | Apache-2.0。Aikimiは、PR #13509で修正された6.17.3のTabs reactive stormに対し、overflow計測を停止し、初期tab一覧をbatch同期する限定compat workaroundを利用。監査済みのversion、filename、SHA-256をすべて確認できた場合だけ、site-packagesを変更せず配信時に置換 |
 | ComfyUI由来package | workflowとmodel処理 | [modules_forge/packages/comfy/LICENSE](modules_forge/packages/comfy/LICENSE) |
 | GGUF package | GGUF読込 | [modules_forge/packages/gguf/LICENSE](modules_forge/packages/gguf/LICENSE) |
 | built-in ControlNet／IP-Adapter | built-in extension | 各extension directoryの`LICENSE` |

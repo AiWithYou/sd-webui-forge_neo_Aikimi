@@ -34,6 +34,9 @@ cd sd-webui-forge_neo_Aikimi
 - GPU不要testを通すために、実機能を無効化しないでください。
 - vendored codeやthird-party codeを変更する場合は、由来、固定revision、licenseを残してください。
 - 日本語文書を変更した場合は、文書全体にstyle guardを実行してください。
+- Forge由来の上部タブ、Quick Settings、`txt2img`、`img2img`、`Extras`、`Settings`は、Aikimi固有CSSから隠したり移動したりしないでください。
+- Aikimi固有のナビゲーション、ちびあいきみ、status表示は`extensions-builtin/aikimi-ui`へ置き、Forge本体への変更面積を抑えてください。
+- Krea2とAnimaのaliasは既存Forge controlを再利用します。生成設定、queue、model状態を別のUI stateへ複製しないでください。
 
 ## ローカル検証
 
@@ -71,7 +74,7 @@ git remote add upstream https://github.com/Haoming02/sd-webui-forge-classic.git
 git fetch upstream neo
 ```
 
-同期基準を更新する場合は、upstream commit SHAをREADMEへ記録してください。自動rebaseや未確認の一括mergeで、Aikimi固有のsecurity guard、BnB/NF4/GGUF互換、built-in workflowを落とさないでください。
+同期基準を更新する場合は、upstream commit SHAをREADMEへ記録してください。自動rebaseや未確認の一括mergeで、Aikimi固有のsecurity guard、BnB/NF4/GGUF互換、built-in workflowを落とさないでください。`extensions-builtin/aikimi-ui`のfeature key、alias遷移先、SenseNovaとMiniMax H3のtab IDも確認します。
 
 ## Pull Request
 
