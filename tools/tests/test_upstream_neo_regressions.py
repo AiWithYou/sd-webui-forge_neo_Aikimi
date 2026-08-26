@@ -8,7 +8,7 @@ from unittest import mock
 import torch
 from PIL import Image
 
-from backend.nn import anima
+from backend.nn import anima, vae
 from backend.nn.vae import (
     AutoencoderKLFlux2,
     DiagonalGaussianDistribution,
@@ -204,6 +204,34 @@ class UpstreamNeoVaeTests(unittest.TestCase):
             actual = model.decode(latent)
 
         torch.testing.assert_close(actual, expected)
+
+    def test_flux2_denormalization_avoids_addcmul_on_cpu(self):
+        for dtype in (torch.float16, torch.bfloat16, torch.float32):
+            with self.subTest(dtype=dtype):
+                latent = torch.tensor([[[[1.0, -2.0]]]], dtype=dtype)
+                scale = torch.tensor([[[[2.0]]]], dtype=dtype)
+                mean = torch.tensor([[[[0.5]]]], dtype=dtype)
+
+                with mock.patch.object(
+                    vae.torch,
+                    "addcmul",
+                    side_effect=AssertionError("CPU tensors must use the multiply-add path"),
+                ):
+                    actual = vae._flux2_denormalize(latent, mean, scale)
+
+                self.assertTrue(torch.equal(actual, latent * scale + mean))
+
+    def test_flux2_denormalization_keeps_addcmul_for_accelerators(self):
+        latent = SimpleNamespace(device=SimpleNamespace(type="cuda"))
+        scale = object()
+        mean = object()
+        expected = object()
+
+        with mock.patch.object(vae.torch, "addcmul", return_value=expected) as addcmul:
+            actual = vae._flux2_denormalize(latent, mean, scale)
+
+        addcmul.assert_called_once_with(mean, latent, scale)
+        self.assertIs(actual, expected)
 
 
 class UpstreamNeoUpscalerTests(unittest.TestCase):

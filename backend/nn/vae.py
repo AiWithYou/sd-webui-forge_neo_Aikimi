@@ -37,6 +37,16 @@ class DiagonalGaussianDistribution:
         return self.mean
 
 
+def _flux2_denormalize(latent: torch.Tensor, mean: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    """Undo Flux2 latent normalization without penalizing CPU inference."""
+    if latent.device.type == "cpu":
+        # CPU addcmul kernels regress for these broadcasted channel statistics;
+        # accelerators still benefit from the fused operation.
+        return latent * scale + mean
+
+    return torch.addcmul(mean, latent, scale)
+
+
 class Upsample(nn.Module):
     def __init__(self, in_channels, with_conv):
         super().__init__()
@@ -371,7 +381,7 @@ class AutoencoderKLFlux2(IntegratedAutoencoderKL):
         z = self.preprocess_decode(z)
         s = torch.sqrt(memory_management.cast_to(self.bn.running_var.view(1, -1, 1, 1), dtype=z.dtype, device=z.device) + self.bn_eps)
         m = memory_management.cast_to(self.bn.running_mean.view(1, -1, 1, 1), dtype=z.dtype, device=z.device)
-        z = torch.addcmul(m, z, s)
+        z = _flux2_denormalize(z, m, s)
         z = rearrange(
             z,
             "... (c pi pj) i j -> ... c (i pi) (j pj)",
