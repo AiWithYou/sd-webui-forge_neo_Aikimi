@@ -32,6 +32,7 @@ on:
       - "modules_forge/sensenova_u15_bridge.py"
       - "modules_forge/forge_canvas/canvas.py"
       - "requirements.txt"
+      - "tools/requirements-test.txt"
       - "style.css"
       - "webui.py"
       - "tools/tests/test_aikimi_diagnostics.py"
@@ -90,6 +91,7 @@ on:
       - "modules_forge/sensenova_u15_bridge.py"
       - "modules_forge/forge_canvas/canvas.py"
       - "requirements.txt"
+      - "tools/requirements-test.txt"
       - "style.css"
       - "webui.py"
       - "tools/tests/test_aikimi_diagnostics.py"
@@ -145,7 +147,9 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            tools/requirements-test.txt
       - name: Update pip to the audited patch release
         run: python -m pip install --disable-pip-version-check pip==26.2.1
       - name: Install the pinned CPU PyTorch build
@@ -155,6 +159,8 @@ jobs:
           torch==2.11.0 torchvision==0.26.0
       - name: Install runtime requirements
         run: python -m pip install -r requirements.txt
+      - name: Install browser test requirements
+        run: python -m pip install -r tools/requirements-test.txt
       - name: Import the security and built-in workflow modules
         run: >-
           python -c

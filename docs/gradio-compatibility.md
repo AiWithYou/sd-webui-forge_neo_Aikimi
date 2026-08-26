@@ -94,6 +94,7 @@ GradioまたはFastAPI関連の固定版を変更する場合は、少なくと�
 
 ```powershell
 uv pip install --dry-run --python .\venv\Scripts\python.exe -r requirements.txt
+uv pip install --python .\venv\Scripts\python.exe -r tools\requirements-test.txt
 .\venv\Scripts\python.exe -m pip check
 .\venv\Scripts\python.exe -m unittest discover -s tools\tests -p "test_*.py" -q
 ```

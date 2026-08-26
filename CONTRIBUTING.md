@@ -43,6 +43,7 @@ cd sd-webui-forge_neo_Aikimi
 CPU、offline、外部モデルdownloadなしのtest runnerは次です。
 
 ```powershell
+uv pip install --python .\venv\Scripts\python.exe -r tools\requirements-test.txt
 .\venv\Scripts\python.exe .\tools\run_ci_tests.py --verbosity 1
 ```
 

@@ -41,7 +41,9 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            tools/requirements-test.txt
       - name: Update pip to the audited patch release
         run: python -m pip install --disable-pip-version-check pip==26.2.1
       - name: Install the pinned CPU PyTorch build
@@ -51,6 +53,8 @@ jobs:
           torch==2.11.0 torchvision==0.26.0
       - name: Install runtime requirements
         run: python -m pip install -r requirements.txt
+      - name: Install browser test requirements
+        run: python -m pip install -r tools/requirements-test.txt
       - name: Locate Chromium
         shell: bash
         run: |

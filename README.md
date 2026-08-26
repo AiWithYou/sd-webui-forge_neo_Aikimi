@@ -200,6 +200,7 @@ git fetch upstream neo
 通常のCI相当testは、CPU、offline、外部model downloadなしで動きます。
 
 ```powershell
+uv pip install --python .\venv\Scripts\python.exe -r tools\requirements-test.txt
 .\venv\Scripts\python.exe .\tools\run_ci_tests.py --verbosity 1
 ```
 

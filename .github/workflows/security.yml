@@ -105,3 +105,8 @@ jobs:
         with:
           inputs: tools/requirements-aikimi-assets.txt
           vulnerability-service: PyPI
+      - name: Resolve and audit the browser test toolchain
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
+        with:
+          inputs: tools/requirements-test.txt
+          vulnerability-service: PyPI
