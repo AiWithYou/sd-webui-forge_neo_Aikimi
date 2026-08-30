@@ -1,11 +1,15 @@
 import ast
 import base64
+import socket
 import tempfile
 import unittest
 import warnings
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
+import gradio as gr
+import httpx
 from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
 from starlette.middleware.cors import CORSMiddleware
@@ -14,6 +18,7 @@ from starlette.websockets import WebSocketDisconnect
 from modules.aikimi_security.auth import (
     AuthenticationConfigError,
     RemoteAuthenticationMiddleware,
+    RemoteAuthPolicy,
     install_remote_auth_middleware,
 )
 
@@ -128,6 +133,70 @@ class RemoteAuthMiddlewareTests(unittest.TestCase):
             for method, path in DIRECT_ROUTES:
                 with self.subTest(method=method, path=path):
                     self.assertEqual(client.request(method, path).status_code, 200)
+
+    def test_prelaunch_startup_event_exception_is_loopback_only(self):
+        app = SimpleNamespace(startup_events_triggered=False, auth=None, auth_dependency=None)
+        policy = RemoteAuthPolicy(app, (), api_only=False)
+        base_scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/gradio_api/startup-events",
+        }
+
+        self.assertTrue(policy.is_public_bootstrap_request({**base_scope, "client": ("127.0.0.1", 53000)}))
+        self.assertFalse(policy.is_public_bootstrap_request({**base_scope, "client": ("203.0.113.10", 53000)}))
+        app.startup_events_triggered = True
+        self.assertFalse(policy.is_public_bootstrap_request({**base_scope, "client": ("127.0.0.1", 53000)}))
+
+    def test_remote_boundary_is_active_before_gradio_auto_launch(self):
+        from gradio.routes import App
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+
+        prepared_app = App()
+        remote_options = options(
+            remote=True,
+            api_only=False,
+            api_auth="api-user:api-pass",
+        )
+        self.assertTrue(install_remote_auth_middleware(prepared_app, remote_options))
+        observed: list[tuple[int, str | None]] = []
+        startup_after_launch: list[int] = []
+
+        def probe_before_launch_returns(local_url: str) -> bool:
+            response = httpx.get(local_url.rstrip("/") + "/config", follow_redirects=False, timeout=5)
+            observed.append((response.status_code, response.headers.get("www-authenticate")))
+            return True
+
+        with gr.Blocks(analytics_enabled=False) as demo:
+            gr.Markdown("remote pre-listener auth boundary")
+
+        try:
+            with patch("webbrowser.open", side_effect=probe_before_launch_returns):
+                app, local_url, _ = demo.launch(
+                    server_name="127.0.0.1",
+                    server_port=port,
+                    prevent_thread_lock=True,
+                    quiet=True,
+                    inbrowser=True,
+                    auth=[("web-user", "web-pass")],
+                    _app=prepared_app,
+                )
+            startup_after_launch.append(
+                httpx.get(
+                    local_url.rstrip("/") + "/gradio_api/startup-events",
+                    follow_redirects=False,
+                    timeout=5,
+                ).status_code
+            )
+        finally:
+            demo.close()
+
+        self.assertIs(app, prepared_app)
+        self.assertEqual(observed, [(401, None)])
+        self.assertEqual(startup_after_launch, [401])
 
     def test_remote_api_only_requires_basic_auth_for_every_route(self):
         app = FastAPI()

@@ -12,6 +12,7 @@ from modules.aikimi_security.paths import (
     build_gradio_allowed_paths,
     build_gradio_blocked_paths,
 )
+from modules.gradio_file_url import gradio_file_url
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -35,7 +36,7 @@ class GradioFileSecurityTests(unittest.TestCase):
         self.data_root = self.base / "data"
         self.canvas_root = self.script_root / "modules_forge" / "forge_canvas"
         self.javascript_root = self.script_root / "javascript"
-        self.extension_root = self.script_root / "extensions-builtin" / "active-ui"
+        self.extension_root = self.script_root / "extensions-builtin" / "active #日本%ui"
         self.extra_extension_root = self.data_root / "extensions" / "active-extra-ui"
         self.inactive_extension_root = self.data_root / "extensions" / "inactive-ui"
         self.webui_assets_root = self.script_root / "modules" / "web"
@@ -141,6 +142,54 @@ class GradioFileSecurityTests(unittest.TestCase):
         self.assertNotIn(self.extension_python.resolve(), result)
         self.assertNotIn(self.inactive_extension_javascript.resolve(), result)
         self.assertNotIn(self.private_html.resolve(), result)
+
+    def test_fresh_managed_directories_are_created_before_first_output(self):
+        script_root = self.base / "fresh-repository"
+        data_root = self.base / "fresh-data"
+        script_root.mkdir()
+        data_root.mkdir()
+
+        allowed = build_gradio_allowed_paths(script_root, data_root)
+        first_output = data_root / "output" / "first-generation.png"
+        first_output.write_bytes(b"first")
+
+        from gradio.routes import file_fetch
+
+        policy = SimpleNamespace(allowed_paths=allowed, blocked_paths=[])
+        upload_dir = data_root / "upload"
+        upload_dir.mkdir()
+        response = file_fetch(str(first_output), SimpleNamespace(headers={}), policy, upload_dir)
+
+        self.assertEqual(response.status_code, 200)
+        for name in ("output", "outputs", "tmp"):
+            managed = (data_root / name).resolve()
+            self.assertTrue(managed.is_dir())
+            self.assertIn(str(managed), allowed)
+            self.assertFalse((script_root / name).exists())
+
+    def test_user_stylesheet_is_an_exact_allowed_asset(self):
+        user_stylesheet = self.data_root / "user.css"
+        user_stylesheet.write_text("body { color: canvastext; }", encoding="utf-8")
+
+        allowed = self.build_allowed_paths()
+
+        from gradio.routes import file_fetch
+
+        policy = SimpleNamespace(allowed_paths=allowed, blocked_paths=[])
+        upload_dir = self.data_root / "upload-user-css"
+        upload_dir.mkdir()
+        response = file_fetch(str(user_stylesheet), SimpleNamespace(headers={}), policy, upload_dir)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(str(user_stylesheet.resolve()), allowed)
+
+    def test_gradio_file_url_encodes_windows_safe_url_delimiters_and_unicode(self):
+        url = gradio_file_url(self.extension_javascript, cache_key="revision #1")
+
+        self.assertNotIn("#", url)
+        self.assertNotIn(" ", url)
+        self.assertNotIn("日本", url)
+        self.assertIn("active%20%23%E6%97%A5%E6%9C%AC%25ui", url)
+        self.assertTrue(url.endswith("?revision%20%231"), url)
 
     def test_static_asset_inputs_reject_non_ui_files_and_symlink_escapes(self):
         with self.assertRaises(UnsafeAllowedPathError):
@@ -363,7 +412,7 @@ class GradioFileSecurityTests(unittest.TestCase):
         )
         tags = []
         for asset in html_assets:
-            url = f"gradio_api/file={asset.as_posix()}?test"
+            url = gradio_file_url(asset, cache_key="test")
             if asset.suffix == ".css":
                 tags.append(f'<link rel="stylesheet" href="{url}">')
             else:
@@ -426,9 +475,10 @@ class GradioFileSecurityTests(unittest.TestCase):
         canvas = (ROOT / "modules_forge" / "forge_canvas" / "canvas.py").read_text(encoding="utf-8")
         webui = (ROOT / "webui.py").read_text(encoding="utf-8")
 
-        self.assertIn("from gradio.route_utils import API_PREFIX", ui_extensions)
-        self.assertIn("API_PREFIX.lstrip('/')", ui_extensions)
-        self.assertIn("from gradio.route_utils import API_PREFIX", canvas)
+        self.assertIn("from modules.gradio_file_url import gradio_file_url", ui_extensions)
+        self.assertIn("gradio_file_url(util.truncate_path(fn)", ui_extensions)
+        self.assertIn("if os.path.isfile(user_css):", ui_extensions)
+        self.assertIn("from modules.gradio_file_url import gradio_file_url", canvas)
         self.assertNotIn('src="file=', canvas)
         self.assertNotIn('href="file=', canvas)
         self.assertIn('scripts.list_scripts("javascript", extension)', webui)

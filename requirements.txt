@@ -35,6 +35,7 @@ pyyaml==6.0.3
 rich==14.3.4
 safetensors==0.8.0
 scikit-image==0.25.2
+scipy==1.18.0
 # PyTorch 2.11 requires setuptools<82. This pin fixes the older advisories;
 # PYSEC-2026-3447 remains tracked until the CUDA/PyTorch stack can move.
 setuptools==81.0.0

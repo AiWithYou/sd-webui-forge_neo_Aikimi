@@ -228,6 +228,18 @@ class RemoteAuthPolicy:
 
         method = str(scope.get("method", "GET")).upper()
         path = str(scope.get("path", ""))
+        client = scope.get("client")
+        client_host = client[0] if isinstance(client, (tuple, list)) and client else None
+        from modules.aikimi_security.remote_access import is_loopback_host
+
+        if (
+            method == "GET"
+            and path == "/gradio_api/startup-events"
+            and client_host is not None
+            and is_loopback_host(client_host)
+            and not getattr(self._gradio_app, "startup_events_triggered", False)
+        ):
+            return True
         if (method, path) in _PUBLIC_WEB_EXACT_ROUTES:
             return True
         return method in {"GET", "HEAD"} and path.startswith(_PUBLIC_WEB_STATIC_PREFIXES)
@@ -305,8 +317,9 @@ def install_remote_auth_middleware(app, options: Any) -> bool:
             insert_at = index + 1
             break
     app.user_middleware.insert(insert_at, Middleware(RemoteAuthenticationMiddleware, policy=policy))
-    # Gradio starts its ASGI app before Forge registers custom routes, so replace
-    # an already-built stack to make the boundary effective for those routes too.
-    app.middleware_stack = app.build_middleware_stack()
+    # A prepared Gradio app has no stack yet; keep it unbuilt so Gradio can add
+    # its own middleware before listening. Running apps are rebuilt immediately.
+    if app.middleware_stack is not None:
+        app.middleware_stack = app.build_middleware_stack()
     setattr(app, _AUTH_INSTALLED_ATTRIBUTE, True)
     return True

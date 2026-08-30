@@ -12,6 +12,7 @@ on:
       - "extensions-builtin/sd_forge_controlnet/**"
       - "extensions-builtin/sensenova-u15-studio/**"
       - "javascript/**"
+      - "launch.py"
       - "modules/aikimi_capabilities.py"
       - "modules/aikimi_diagnostics.py"
       - "modules/aikimi_status.py"
@@ -30,11 +31,14 @@ on:
       - "modules/ui_settings.py"
       - "modules_forge/minimax_h3_bridge.py"
       - "modules_forge/sensenova_u15_bridge.py"
-      - "modules_forge/forge_canvas/canvas.py"
+      - "modules_forge/forge_canvas/**"
       - "requirements.txt"
       - "tools/requirements-test.txt"
+      - "tools/run_ci_tests.py"
       - "style.css"
+      - "script.js"
       - "webui.py"
+      - "tools/tests/chromium_helpers.py"
       - "tools/tests/test_aikimi_diagnostics.py"
       - "tools/tests/test_aikimi_status.py"
       - "tools/tests/test_aikimi_tabs.py"
@@ -42,15 +46,19 @@ on:
       - "tools/tests/test_anima38_extension.py"
       - "tools/tests/test_api_public_state.py"
       - "tools/tests/test_api_script_args.py"
+      - "tools/tests/test_chromium_helpers.py"
+      - "tools/tests/test_ci_workflow_boundaries.py"
       - "tools/tests/test_gradio_compatibility.py"
       - "tools/tests/test_gradio_frontend_compat.py"
       - "tools/tests/test_gradio_frontend_compat_chromium.py"
+      - "tools/tests/test_gradio_chromium_smoke.py"
       - "tools/tests/test_gradio_file_security.py"
       - "tools/tests/test_gradio_file_url_guard.py"
       - "tools/tests/test_legacy_yaml_security.py"
       - "tools/tests/test_launch_utils_environment.py"
       - "tools/tests/test_minimax_h3_studio.py"
       - "tools/tests/test_remote_auth_middleware.py"
+      - "tools/tests/test_run_ci_tests.py"
       - "tools/tests/test_safe_image_fetch.py"
       - "tools/tests/test_security_redaction.py"
       - "tools/tests/test_sensenova_u15_studio.py"
@@ -71,6 +79,7 @@ on:
       - "extensions-builtin/sd_forge_controlnet/**"
       - "extensions-builtin/sensenova-u15-studio/**"
       - "javascript/**"
+      - "launch.py"
       - "modules/aikimi_capabilities.py"
       - "modules/aikimi_diagnostics.py"
       - "modules/aikimi_status.py"
@@ -89,11 +98,14 @@ on:
       - "modules/ui_settings.py"
       - "modules_forge/minimax_h3_bridge.py"
       - "modules_forge/sensenova_u15_bridge.py"
-      - "modules_forge/forge_canvas/canvas.py"
+      - "modules_forge/forge_canvas/**"
       - "requirements.txt"
       - "tools/requirements-test.txt"
+      - "tools/run_ci_tests.py"
       - "style.css"
+      - "script.js"
       - "webui.py"
+      - "tools/tests/chromium_helpers.py"
       - "tools/tests/test_aikimi_diagnostics.py"
       - "tools/tests/test_aikimi_status.py"
       - "tools/tests/test_aikimi_tabs.py"
@@ -101,15 +113,19 @@ on:
       - "tools/tests/test_anima38_extension.py"
       - "tools/tests/test_api_public_state.py"
       - "tools/tests/test_api_script_args.py"
+      - "tools/tests/test_chromium_helpers.py"
+      - "tools/tests/test_ci_workflow_boundaries.py"
       - "tools/tests/test_gradio_compatibility.py"
       - "tools/tests/test_gradio_frontend_compat.py"
       - "tools/tests/test_gradio_frontend_compat_chromium.py"
+      - "tools/tests/test_gradio_chromium_smoke.py"
       - "tools/tests/test_gradio_file_security.py"
       - "tools/tests/test_gradio_file_url_guard.py"
       - "tools/tests/test_legacy_yaml_security.py"
       - "tools/tests/test_launch_utils_environment.py"
       - "tools/tests/test_minimax_h3_studio.py"
       - "tools/tests/test_remote_auth_middleware.py"
+      - "tools/tests/test_run_ci_tests.py"
       - "tools/tests/test_safe_image_fetch.py"
       - "tools/tests/test_security_redaction.py"
       - "tools/tests/test_sensenova_u15_studio.py"
@@ -161,6 +177,23 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Install browser test requirements
         run: python -m pip install -r tools/requirements-test.txt
+      - name: Locate Chromium
+        shell: pwsh
+        run: |
+          $candidates = @(
+              (Get-Command chrome.exe -ErrorAction SilentlyContinue).Source,
+              "C:\Program Files\Google\Chrome\Application\chrome.exe",
+              "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
+          )
+          $chromeBin = $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+          if (-not $chromeBin) {
+              throw "Chrome or Chromium is required for the Windows smoke tests."
+          }
+          [IO.File]::AppendAllText(
+              $env:GITHUB_ENV,
+              "CHROME_BIN=$chromeBin`n",
+              [Text.UTF8Encoding]::new($false)
+          )
       - name: Import the security and built-in workflow modules
         run: >-
           python -c
@@ -179,9 +212,12 @@ jobs:
           --module tools.tests.test_anima38_extension
           --module tools.tests.test_api_public_state
           --module tools.tests.test_api_script_args
+          --module tools.tests.test_chromium_helpers
+          --module tools.tests.test_ci_workflow_boundaries
           --module tools.tests.test_gradio_compatibility
           --module tools.tests.test_gradio_frontend_compat
           --module tools.tests.test_gradio_frontend_compat_chromium
+          --module tools.tests.test_gradio_chromium_smoke
           --module tools.tests.test_gradio_file_security
           --module tools.tests.test_gradio_file_url_guard
           --module tools.tests.test_legacy_yaml_security
@@ -196,3 +232,95 @@ jobs:
           --module tools.tests.test_sysinfo_security
           --module tools.tests.test_ui_tempdir_security
           --module tools.tests.test_workflow_ui
+      - name: Start the real UI and run the full Chromium smoke
+        shell: pwsh
+        run: |
+          $listener = [System.Net.Sockets.TcpListener]::new(
+              [System.Net.IPAddress]::Loopback,
+              0
+          )
+          $listener.Start()
+          $smokePort = $listener.LocalEndpoint.Port
+          $listener.Stop()
+
+          $serverStdout = Join-Path $env:RUNNER_TEMP "aikimi-full-ui.stdout.log"
+          $serverStderr = Join-Path $env:RUNNER_TEMP "aikimi-full-ui.stderr.log"
+          $env:SD_WEBUI_RESTARTING = "1"
+          $pythonPath = (Get-Command python.exe).Source
+          $serverArguments = @(
+              "launch.py",
+              "--skip-prepare-environment",
+              "--skip-python-version-check",
+              "--skip-torch-cuda-test",
+              "--ui-debug-mode",
+              "--disable-extra-extensions",
+              "--cpu",
+              "--port",
+              "$smokePort"
+          )
+          $serverProcess = Start-Process `
+              -FilePath $pythonPath `
+              -ArgumentList $serverArguments `
+              -PassThru `
+              -WindowStyle Hidden `
+              -RedirectStandardOutput $serverStdout `
+              -RedirectStandardError $serverStderr
+          try {
+              $deadline = [DateTime]::UtcNow.AddMinutes(3)
+              $ready = $false
+              while ([DateTime]::UtcNow -lt $deadline) {
+                  if ($serverProcess.HasExited) {
+                      break
+                  }
+                  try {
+                      $response = Invoke-WebRequest `
+                          -Uri "http://127.0.0.1:$smokePort/config" `
+                          -UseBasicParsing `
+                          -TimeoutSec 2
+                      if ($response.StatusCode -eq 200) {
+                          $ready = $true
+                          break
+                      }
+                  } catch {
+                      Start-Sleep -Milliseconds 500
+                  }
+              }
+              if (-not $ready) {
+                  Get-Content -LiteralPath $serverStdout -Tail 200 -ErrorAction SilentlyContinue
+                  Get-Content -LiteralPath $serverStderr -Tail 200 -ErrorAction SilentlyContinue
+                  throw "The full UI did not become ready on port $smokePort."
+              }
+
+              $env:AIKIMI_FULL_UI_URL = "http://127.0.0.1:$smokePort"
+              python tools/run_ci_tests.py --verbosity 2 `
+                  --preload modules.shared `
+                  --module tools.tests.test_gradio_chromium_smoke.GradioFullUiChromiumTests
+              if ($LASTEXITCODE -ne 0) {
+                  throw "The full UI Chromium smoke failed with exit code $LASTEXITCODE."
+              }
+          } finally {
+              if (-not $serverProcess.HasExited) {
+                  $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
+                  & $taskkill /PID $serverProcess.Id /T /F | Out-Null
+                  $serverProcess.WaitForExit(10000)
+              }
+              $portReleased = $false
+              for ($attempt = 0; $attempt -lt 20; $attempt++) {
+                  $cleanupListener = [System.Net.Sockets.TcpListener]::new(
+                      [System.Net.IPAddress]::Loopback,
+                      $smokePort
+                  )
+                  try {
+                      $cleanupListener.Start()
+                      $portReleased = $true
+                      break
+                  } catch {
+                      Start-Sleep -Milliseconds 250
+                  } finally {
+                      $cleanupListener.Stop()
+                  }
+              }
+              if (-not $portReleased) {
+                  throw "The full UI process did not release port $smokePort."
+              }
+          }

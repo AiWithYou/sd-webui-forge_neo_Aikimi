@@ -2,8 +2,6 @@ import html
 import json
 import os
 import re
-import shutil
-import socket
 import subprocess
 import tempfile
 import threading
@@ -19,6 +17,7 @@ from websockets.sync.client import connect
 
 from modules import gradio_compat
 from modules.ui_components import InputAccordion
+from tools.tests.chromium_helpers import close_chromium, find_chromium, reserve_local_port
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,26 +25,6 @@ ROOT = Path(__file__).resolve().parents[2]
 def inline_javascript(path):
     source = path.read_text(encoding="utf-8").replace("</script", r"<\/script")
     return f"<script>\n{source}\n</script>"
-
-
-def find_chromium():
-    candidates = [
-        os.environ.get("CHROME_BIN"),
-        shutil.which("google-chrome"),
-        shutil.which("chromium"),
-        Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
-        Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
-    ]
-    for candidate in candidates:
-        if candidate and Path(candidate).is_file():
-            return str(Path(candidate))
-    return None
-
-
-def reserve_local_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("127.0.0.1", 0))
-        return listener.getsockname()[1]
 
 
 def probe_navigation_with_cdp(chromium, url, *, blocked_urls=(), timeout=60):
@@ -73,8 +52,10 @@ def probe_navigation_with_cdp(chromium, url, *, blocked_urls=(), timeout=60):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
+            start_new_session=os.name != "nt",
         )
         websocket = None
+        close_browser = None
         try:
             deadline = started + timeout
             while True:
@@ -123,6 +104,11 @@ def probe_navigation_with_cdp(chromium, url, *, blocked_urls=(), timeout=60):
                         if "error" in message:
                             raise RuntimeError(message["error"])
                         return message.get("result", {})
+
+            def request_browser_close():
+                return send("Browser.close", response_timeout=2)
+
+            close_browser = request_browser_close
 
             send("Network.enable")
             if blocked_urls:
@@ -177,18 +163,11 @@ def probe_navigation_with_cdp(chromium, url, *, blocked_urls=(), timeout=60):
             state["elapsed_seconds"] = time.monotonic() - started
             return state
         finally:
-            if websocket is not None:
-                try:
-                    websocket.close()
-                except OSError:
-                    pass
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
+            close_chromium(
+                process,
+                websocket=websocket,
+                close_browser=close_browser,
+            )
 
 
 VISIBILITY_PROBE = """
@@ -1066,7 +1045,7 @@ class GradioFullUiChromiumTests(unittest.TestCase):
 
         cls.chromium = find_chromium()
         if not cls.chromium:
-            raise unittest.SkipTest("Chrome or Chromium is not installed")
+            raise RuntimeError("Chrome or Chromium is required when AIKIMI_FULL_UI_URL is set")
 
     def test_full_config_keeps_lazy_components_unmounted(self):
         with urlopen(urljoin(self.url, "config"), timeout=10) as response:  # noqa: S310

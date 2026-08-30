@@ -183,7 +183,7 @@ def setup_middleware(app):
     app.user_middleware.insert(0, starlette.middleware.Middleware(GZipMiddleware, minimum_size=1000))
     configure_cors_middleware(app)
     install_gradio_file_url_guard(app)
-    app.build_middleware_stack()  # rebuild middleware stack on-the-fly
+    app.middleware_stack = app.build_middleware_stack()  # rebuild middleware stack on-the-fly
 
 
 def configure_cors_middleware(app):

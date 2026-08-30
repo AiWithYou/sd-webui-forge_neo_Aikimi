@@ -39,9 +39,9 @@ from io import BytesIO
 import gradio as gr
 import numpy as np
 from gradio.context import Context
-from gradio.route_utils import API_PREFIX
 from PIL import Image
 
+from modules.gradio_file_url import gradio_file_url
 from modules.shared import opts
 
 DEBUG_MODE = False
@@ -50,14 +50,14 @@ canvas_js_root_path = os.path.dirname(__file__)
 
 def web_js(file_name):
     full_path = os.path.join(canvas_js_root_path, file_name)
-    route = API_PREFIX.lstrip("/")
-    return f'<script src="{route}/file={full_path}?{os.path.getmtime(full_path)}"></script>\n'
+    url = gradio_file_url(full_path, cache_key=os.path.getmtime(full_path))
+    return f'<script src="{url}"></script>\n'
 
 
 def web_css(file_name):
     full_path = os.path.join(canvas_js_root_path, file_name)
-    route = API_PREFIX.lstrip("/")
-    return f'<link rel="stylesheet" href="{route}/file={full_path}?{os.path.getmtime(full_path)}">\n'
+    url = gradio_file_url(full_path, cache_key=os.path.getmtime(full_path))
+    return f'<link rel="stylesheet" href="{url}">\n'
 
 
 canvas_html = open(os.path.join(canvas_js_root_path, "canvas.html"), encoding="utf-8").read()

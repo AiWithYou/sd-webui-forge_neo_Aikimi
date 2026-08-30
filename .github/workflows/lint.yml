@@ -14,15 +14,20 @@ on:
       - "modules/gradio_compat.py"
       - "modules/gradio_extensions.py"
       - "modules/gradio_frontend_compat.py"
+      - "modules/gradio_file_url.py"
+      - "modules/gradio_runtime.py"
       - "extensions-builtin/forge_legacy_preprocessors/annotator/mmpkg/mmcv/fileio/handlers/yaml_handler.py"
       - "pyproject.toml"
       - "tools/aikimi_setup.py"
       - "tools/run_ci_tests.py"
+      - "tools/tests/chromium_helpers.py"
       - "tools/tests/test_aikimi_setup.py"
       - "tools/tests/test_aikimi_diagnostics.py"
       - "tools/tests/test_aikimi_tabs.py"
       - "tools/tests/test_aikimi_tabs_chromium.py"
       - "tools/tests/test_api_public_state.py"
+      - "tools/tests/test_chromium_helpers.py"
+      - "tools/tests/test_ci_workflow_boundaries.py"
       - "tools/tests/test_gradio_file_security.py"
       - "tools/tests/test_gradio_file_url_guard.py"
       - "tools/tests/test_legacy_yaml_security.py"
@@ -52,15 +57,20 @@ on:
       - "modules/gradio_compat.py"
       - "modules/gradio_extensions.py"
       - "modules/gradio_frontend_compat.py"
+      - "modules/gradio_file_url.py"
+      - "modules/gradio_runtime.py"
       - "extensions-builtin/forge_legacy_preprocessors/annotator/mmpkg/mmcv/fileio/handlers/yaml_handler.py"
       - "pyproject.toml"
       - "tools/aikimi_setup.py"
       - "tools/run_ci_tests.py"
+      - "tools/tests/chromium_helpers.py"
       - "tools/tests/test_aikimi_setup.py"
       - "tools/tests/test_aikimi_diagnostics.py"
       - "tools/tests/test_aikimi_tabs.py"
       - "tools/tests/test_aikimi_tabs_chromium.py"
       - "tools/tests/test_api_public_state.py"
+      - "tools/tests/test_chromium_helpers.py"
+      - "tools/tests/test_ci_workflow_boundaries.py"
       - "tools/tests/test_gradio_file_security.py"
       - "tools/tests/test_gradio_file_url_guard.py"
       - "tools/tests/test_legacy_yaml_security.py"
@@ -110,14 +120,19 @@ jobs:
             modules/gradio_compat.py
             modules/gradio_extensions.py
             modules/gradio_frontend_compat.py
+            modules/gradio_file_url.py
+            modules/gradio_runtime.py
             extensions-builtin/forge_legacy_preprocessors/annotator/mmpkg/mmcv/fileio/handlers/yaml_handler.py
             tools/aikimi_setup.py
             tools/run_ci_tests.py
+            tools/tests/chromium_helpers.py
             tools/tests/test_aikimi_setup.py
             tools/tests/test_aikimi_diagnostics.py
             tools/tests/test_aikimi_tabs.py
             tools/tests/test_aikimi_tabs_chromium.py
             tools/tests/test_api_public_state.py
+            tools/tests/test_chromium_helpers.py
+            tools/tests/test_ci_workflow_boundaries.py
             tools/tests/test_gradio_file_security.py
             tools/tests/test_gradio_file_url_guard.py
             tools/tests/test_legacy_yaml_security.py
@@ -136,6 +151,8 @@ jobs:
           )
           python -m ruff check "${files[@]}"
           python -m ruff format --check "${files[@]}"
+      - name: Verify CI path and execution boundaries
+        run: python -m unittest -v tools.tests.test_ci_workflow_boundaries
       - name: Check Aikimi UI JavaScript syntax
         run: |
           node --check extensions-builtin/aikimi-ui/javascript/aikimi_tabs.js

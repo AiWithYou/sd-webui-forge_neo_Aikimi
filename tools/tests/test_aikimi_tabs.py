@@ -142,10 +142,17 @@ class AikimiTabsTests(unittest.TestCase):
     def test_ui_lifecycle_hooks_are_idempotent(self):
         self.assertIn("window.AikimiTabs?.apiVersion === API_VERSION", self.javascript)
         self.assertIn("onUiLoaded(function ()", self.javascript)
-        self.assertIn("onUiUpdate(repairExternalNavigationOnUiUpdate)", self.javascript)
+        self.assertIn("onUiUpdate(handleUiUpdate)", self.javascript)
+        self.assertIn("scheduleAliasReconciliation()", self.javascript)
         self.assertIn("repairCount >= REPAIR_LIMIT", self.javascript)
         self.assertIn("record.target === row || row?.contains(record.target)", self.javascript)
         self.assertIn("onUiTabChange(syncFromSelectedNativeTab)", self.javascript)
+
+    def test_alias_state_is_reconciled_with_real_forge_controls(self):
+        self.assertIn("function aliasStateMatches(feature)", self.javascript)
+        self.assertIn("scriptInput?.value === KREA2_SCRIPT", self.javascript)
+        self.assertIn("visibleCheckbox?.checked", self.javascript)
+        self.assertIn("setActiveFeature(null, null)", self.javascript)
 
     def test_gradio_owned_tablist_is_never_mutated(self):
         native_lookup = self.javascript[

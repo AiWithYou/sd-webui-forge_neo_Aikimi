@@ -41,6 +41,22 @@ def _relative_parts(path: Path, root: Path) -> tuple[str, ...] | None:
         return None
 
 
+def _create_managed_directory(root: Path, name: str) -> Path:
+    requested = root / name
+    candidate = _resolved(requested)
+    if not _within(candidate, root):
+        raise UnsafeAllowedPathError(f"The managed {name} path resolves outside its data root.")
+
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise UnsafeAllowedPathError(f"The managed {name} directory could not be prepared.") from error
+    created = _resolved(requested)
+    if created != candidate or not created.is_dir() or not _within(created, root):
+        raise UnsafeAllowedPathError(f"The managed {name} path changed while it was being prepared.")
+    return created
+
+
 def _is_javascript_asset(path: Path, script_root: Path, data_root: Path) -> bool:
     if path.suffix.casefold() not in {".js", ".mjs"}:
         return False
@@ -85,13 +101,14 @@ def build_gradio_allowed_paths(
 
     script_root = _resolved(script_path)
     data_root = _resolved(data_path)
-    directory_roots: set[Path] = set()
-    for root in (script_root, data_root):
+    directory_roots = {_create_managed_directory(data_root, name) for name in ("output", "outputs", "tmp")}
+    if script_root != data_root:
         for name in ("output", "outputs", "tmp"):
-            candidate = _resolved(root / name)
-            if not _within(candidate, root):
-                raise UnsafeAllowedPathError(f"The managed {name} path resolves outside its data root.")
-            directory_roots.add(candidate)
+            candidate = _resolved(script_root / name)
+            if not _within(candidate, script_root):
+                raise UnsafeAllowedPathError(f"The legacy managed {name} path resolves outside the repository.")
+            if candidate.is_dir():
+                directory_roots.add(candidate)
     exact_files: set[Path] = set()
 
     for name in ("script.js", "style.css"):
@@ -100,6 +117,12 @@ def build_gradio_allowed_paths(
             raise UnsafeAllowedPathError(f"The root UI asset {name} resolves outside the repository.")
         if candidate.is_file():
             exact_files.add(candidate)
+
+    user_stylesheet = _resolved(data_root / "user.css")
+    if not _within(user_stylesheet, data_root):
+        raise UnsafeAllowedPathError("The user.css stylesheet resolves outside the data directory.")
+    if user_stylesheet.is_file():
+        exact_files.add(user_stylesheet)
 
     card_placeholder = _resolved(script_root / "html" / "card-no-preview.jpg")
     if not _within(card_placeholder, script_root):
@@ -147,7 +170,7 @@ def build_gradio_allowed_paths(
             continue
         raise UnsafeAllowedPathError("--gradio-allowed-path may only select a managed output or temporary path.")
 
-    existing_directories = sorted((path for path in directory_roots if path.is_dir()), key=lambda item: str(item))
+    existing_directories = sorted(directory_roots, key=lambda item: str(item))
     existing_files = sorted((path for path in exact_files if path.is_file()), key=lambda item: str(item))
     return _deduplicate([*existing_directories, *existing_files])
 

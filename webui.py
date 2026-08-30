@@ -4,14 +4,16 @@ if __name__ == "__main__":
 
 import os
 import time
+import webbrowser
 from threading import Thread
 
 from fastapi import Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
-from modules import initialize, initialize_util, timer
+from modules import gradio_runtime, initialize, initialize_util, timer
 from modules.aikimi_security.auth import install_remote_auth_middleware
+from modules.aikimi_security.gradio_file_guard import install_gradio_file_url_guard
 from modules.aikimi_security.paths import build_gradio_allowed_paths, build_gradio_blocked_paths
 from modules.aikimi_security.redaction import safe_error_message
 from modules_forge.initialization import initialize_forge
@@ -134,73 +136,110 @@ def webui_worker():
         )
 
         from modules.gradio_frontend_compat import (
+            GradioFrontendCompatibilityError,
             build_patched_tabs_asset,
-            install_gradio_tabs_compatibility_route,
+            create_gradio_compatibility_app,
         )
 
         # Validate the exact third-party asset before Gradio starts listening.
         # A version/hash mismatch must fail closed instead of exposing the known
         # Tabs mount storm through the generic assets route.
         patched_tabs = build_patched_tabs_asset()
-
-        app, local_url, share_url = shared.demo.launch(
-            share=cmd_opts.share,
-            server_name=initialize_util.gradio_server_name(),
-            server_port=cmd_opts.port,
-            ssl_keyfile=cmd_opts.tls_keyfile,
-            ssl_certfile=cmd_opts.tls_certfile,
-            ssl_verify=cmd_opts.disable_tls_verify,
+        app_kwargs = {
+            "docs_url": "/docs",
+            "redoc_url": "/redoc",
+            "exception_handlers": {Exception: _handle_exception},
+        }
+        prepared_app = create_gradio_compatibility_app(
+            patched_tabs,
+            app_kwargs=app_kwargs,
             debug=cmd_opts.gradio_debug,
-            auth=gradio_auth_creds,
-            inbrowser=auto_launch_browser,
-            prevent_thread_lock=True,
-            favicon_path=os.path.join(os.path.dirname(__file__), "assets", "aikimi", "favicon.png"),
-            allowed_paths=allowed_paths,
-            blocked_paths=blocked_paths,
-            app_kwargs={
-                "docs_url": "/docs",
-                "redoc_url": "/redoc",
-                "exception_handlers": {Exception: _handle_exception},
-            },
-            root_path=f"/{cmd_opts.subpath}" if cmd_opts.subpath else "",
-            theme=shared.gradio_theme,
-            head=canvas_head,
         )
+        install_gradio_file_url_guard(prepared_app)
+        install_remote_auth_middleware(prepared_app, cmd_opts)
+        tunnel_baseline = gradio_runtime.tunnel_snapshot()
 
-        startup_timer.record("gradio launch")
+        previous_gradio_debug = os.environ.get("GRADIO_DEBUG")
+        os.environ["GRADIO_DEBUG"] = "0"
+        try:
+            try:
+                app, local_url, share_url = shared.demo.launch(
+                    share=cmd_opts.share,
+                    server_name=initialize_util.gradio_server_name(),
+                    server_port=cmd_opts.port,
+                    ssl_keyfile=cmd_opts.tls_keyfile,
+                    ssl_certfile=cmd_opts.tls_certfile,
+                    ssl_verify=cmd_opts.disable_tls_verify,
+                    debug=False,
+                    auth=gradio_auth_creds,
+                    inbrowser=False,
+                    show_error=cmd_opts.gradio_debug,
+                    prevent_thread_lock=True,
+                    favicon_path=os.path.join(os.path.dirname(__file__), "assets", "aikimi", "favicon.png"),
+                    allowed_paths=allowed_paths,
+                    blocked_paths=blocked_paths,
+                    app_kwargs=app_kwargs,
+                    root_path=f"/{cmd_opts.subpath}" if cmd_opts.subpath else "",
+                    # Gradio 6.17.3 does not stop its Node SSR proxy from Blocks.close().
+                    # Forge owns the Python listener lifecycle, so keep one process tree.
+                    ssr_mode=False,
+                    theme=shared.gradio_theme,
+                    head=canvas_head,
+                    _app=prepared_app,
+                )
+            except Exception:
+                gradio_runtime.close_gradio_runtime(shared.demo, tunnel_baseline)
+                raise
+        finally:
+            if previous_gradio_debug is None:
+                os.environ.pop("GRADIO_DEBUG", None)
+            else:
+                os.environ["GRADIO_DEBUG"] = previous_gradio_debug
 
-        install_gradio_tabs_compatibility_route(app, patched_tabs)
-        print(
-            "Aikimi Gradio compatibility: serving audited tabs patch "
-            f"{patched_tabs.patched_sha256[:12]}."
-        )
+        try:
+            startup_timer.record("gradio launch")
+            if app is not prepared_app:
+                raise GradioFrontendCompatibilityError(
+                    "Gradio did not preserve the preconfigured compatibility app; the server was stopped."
+                )
+            print(
+                "Aikimi Gradio compatibility: serving audited tabs patch "
+                f"{patched_tabs.patched_sha256[:12]}."
+            )
 
-        # gradio uses a very open CORS policy via app.user_middleware, which makes it possible for
-        # an attacker to trick the user into opening a malicious HTML page, which makes a request to the
-        # running web ui and do whatever the attacker wants, including installing an extension and
-        # running its code. We disable this here. Suggested by RyotaK.
-        app.user_middleware = [
-            x for x in app.user_middleware if "cors" not in x.cls.__name__.casefold()
-        ]
+            # gradio uses a very open CORS policy via app.user_middleware, which makes it possible for
+            # an attacker to trick the user into opening a malicious HTML page, which makes a request to the
+            # running web ui and do whatever the attacker wants, including installing an extension and
+            # running its code. We disable this here. Suggested by RyotaK.
+            app.user_middleware = [
+                x for x in app.user_middleware if "cors" not in x.cls.__name__.casefold()
+            ]
 
-        initialize_util.setup_middleware(app)
-        install_remote_auth_middleware(app, cmd_opts)
+            initialize_util.setup_middleware(app)
+            install_remote_auth_middleware(app, cmd_opts)
 
-        progress.setup_progress_api(app)
-        ui.setup_ui_api(app)
+            progress.setup_progress_api(app)
+            ui.setup_ui_api(app)
 
-        if launch_api:
-            create_api(app)
+            if launch_api:
+                create_api(app)
 
-        ui_extra_networks.add_pages_to_demo(app)
+            ui_extra_networks.add_pages_to_demo(app)
 
-        startup_timer.record("add APIs")
+            startup_timer.record("add APIs")
 
-        with startup_timer.subcategory("app_started_callback"):
-            script_callbacks.app_started_callback(shared.demo, app)
+            with startup_timer.subcategory("app_started_callback"):
+                script_callbacks.app_started_callback(shared.demo, app)
 
-        timer.startup_record = startup_timer.dump()
-        print(f"Startup time: {startup_timer.summary()}.")
+            if auto_launch_browser:
+                browser_url = share_url if cmd_opts.share and share_url else local_url
+                webbrowser.open(browser_url)
+
+            timer.startup_record = startup_timer.dump()
+            print(f"Startup time: {startup_timer.summary()}.")
+        except Exception:
+            gradio_runtime.close_gradio_runtime(shared.demo, tunnel_baseline)
+            raise
 
         try:
             while True:
@@ -213,18 +252,21 @@ def webui_worker():
         except KeyboardInterrupt:
             print("Caught KeyboardInterrupt, stopping...")
             server_command = "stop"
+        except Exception:
+            gradio_runtime.close_gradio_runtime(shared.demo, tunnel_baseline)
+            raise
 
         if server_command == "stop":
             print("Stopping server...")
             # If we catch a keyboard interrupt, we want to stop the server and exit.
-            shared.demo.close()
+            gradio_runtime.close_gradio_runtime(shared.demo, tunnel_baseline)
             break
 
         # disable auto launch webui in browser for subsequent UI Reload
         os.environ.setdefault("SD_WEBUI_RESTARTING", "1")
 
         print("Restarting UI...")
-        shared.demo.close()
+        gradio_runtime.close_gradio_runtime(shared.demo, tunnel_baseline)
         time.sleep(0.5)
         startup_timer.reset()
         script_callbacks.app_reload_callback()

@@ -51,6 +51,7 @@
     let activatingFeature = null;
     let activationSequence = 0;
     let setupTimer = null;
+    let reconcileTimer = null;
     let repairCount = 0;
 
     function appRoot() {
@@ -433,6 +434,33 @@
         return Boolean(config && nativeButtonFor(config.containerId) === selected);
     }
 
+    function aliasStateMatches(feature) {
+        if (feature === "krea2") {
+            const modeButton = tabListFor(appRoot().querySelector("#mode_img2img"))
+                ?.querySelector(":scope > button:first-child");
+            const scriptInput = appRoot().querySelector("#img2img_script_container #script_list input");
+            const panel = appRoot().querySelector("#script_krea2_2stage_upscale_quick_4k");
+            const normalModeSelected = Boolean(
+                modeButton &&
+                (modeButton.classList.contains("selected") || modeButton.getAttribute("aria-selected") === "true"),
+            );
+            return normalModeSelected && scriptInput?.value === KREA2_SCRIPT && panel?.offsetParent !== null;
+        }
+        if (feature === "anima38") {
+            const accordion = appRoot().querySelector("#aikimi-txt2img-anima38");
+            const visibleCheckbox = appRoot().querySelector("#aikimi-txt2img-anima38-visible-checkbox");
+            const hiddenCheckbox = appRoot().querySelector(
+                "#aikimi-txt2img-anima38-checkbox input[type='checkbox']",
+            );
+            return Boolean(
+                accordion?.querySelector(".label-wrap")?.classList.contains("open") &&
+                visibleCheckbox?.checked &&
+                hiddenCheckbox?.checked,
+            );
+        }
+        return false;
+    }
+
     function redispatchWhenContainerMounts(feature) {
         if (featureContainer(feature)) return;
         void waitFor(function () {
@@ -462,10 +490,29 @@
             FEATURES[activeFeature]?.kind === "alias" &&
             selectedButtonMatches(activeFeature, selected)
         ) {
-            syncFeatureButtonState(activeFeature);
+            if (aliasStateMatches(activeFeature)) {
+                syncFeatureButtonState(activeFeature);
+            } else {
+                setActiveFeature(null, null);
+            }
             return;
         }
         if (activeFeature !== null) setActiveFeature(null, null);
+    }
+
+    function scheduleAliasReconciliation() {
+        if (
+            reconcileTimer !== null ||
+            activatingFeature ||
+            !activeFeature ||
+            FEATURES[activeFeature]?.kind !== "alias"
+        ) {
+            return;
+        }
+        reconcileTimer = window.setTimeout(function () {
+            reconcileTimer = null;
+            syncFromSelectedNativeTab();
+        }, 0);
     }
 
     function setup() {
@@ -514,6 +561,11 @@
         if (!relevant || repairCount >= REPAIR_LIMIT) return;
         repairCount += 1;
         scheduleSetup();
+    }
+
+    function handleUiUpdate(mutationRecords) {
+        repairExternalNavigationOnUiUpdate(mutationRecords);
+        scheduleAliasReconciliation();
     }
 
     function topNavButtonFromTarget(target) {
@@ -581,9 +633,12 @@
     });
 
     document.addEventListener("click", handleNativeTabClick);
+    document.addEventListener("click", scheduleAliasReconciliation);
+    document.addEventListener("input", scheduleAliasReconciliation);
+    document.addEventListener("change", scheduleAliasReconciliation);
     onUiLoaded(function () {
         setupWithRetry();
     });
-    onUiUpdate(repairExternalNavigationOnUiUpdate);
+    onUiUpdate(handleUiUpdate);
     onUiTabChange(syncFromSelectedNativeTab);
 })();

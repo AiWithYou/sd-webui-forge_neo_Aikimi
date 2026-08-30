@@ -105,6 +105,7 @@ def install_gradio_file_url_guard(app: Any) -> bool:
     if getattr(app, _GUARD_INSTALLED_ATTRIBUTE, False):
         return False
     app.user_middleware.append(Middleware(GradioExternalFileURLGuardMiddleware, gradio_app=app))
-    app.middleware_stack = app.build_middleware_stack()
+    if app.middleware_stack is not None:
+        app.middleware_stack = app.build_middleware_stack()
     setattr(app, _GUARD_INSTALLED_ATTRIBUTE, True)
     return True

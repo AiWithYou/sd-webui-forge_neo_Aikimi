@@ -85,6 +85,19 @@ def Blocks_get_config_file(self, *args, **kwargs):
     return config
 
 
+def BlocksConfig_set_event_trigger(self, *args, **kwargs):
+    bound = blocks_config_set_event_trigger_signature.bind_partial(self, *args, **kwargs)
+    if "api_name" not in bound.arguments and "api_visibility" not in bound.arguments:
+        kwargs["api_visibility"] = "private"
+    return original_BlocksConfig_set_event_trigger(self, *args, **kwargs)
+
+
+def Blocks_init(self, *args, **kwargs):
+    result = original_Blocks_init(self, *args, **kwargs)
+    self.load = EventWrapper(self.load)
+    return result
+
+
 original_IOComponent_init = patches.patch(
     __name__, obj=gr.components.Component, field="__init__", replacement=IOComponent_init
 )
@@ -97,6 +110,11 @@ original_BlockContext_init = patches.patch(
 original_Blocks_get_config_file = patches.patch(
     __name__, obj=gradio.blocks.Blocks, field="get_config_file", replacement=Blocks_get_config_file
 )
+original_BlocksConfig_set_event_trigger = patches.patch(
+    __name__, obj=gradio.blocks.BlocksConfig, field="set_event_trigger", replacement=BlocksConfig_set_event_trigger
+)
+blocks_config_set_event_trigger_signature = inspect.signature(original_BlocksConfig_set_event_trigger)
+original_Blocks_init = patches.patch(__name__, obj=gradio.blocks.Blocks, field="__init__", replacement=Blocks_init)
 
 
 ui_tempdir.install_ui_tempdir_override()
@@ -116,6 +134,14 @@ patches.patch(__file__, gradio.component_meta, "create_or_modify_pyi", gradio_co
 gradio.component_meta.updateable = lambda x: x
 
 
+def _prepare_event_kwargs(kwargs):
+    if "_js" in kwargs:
+        kwargs["js"] = kwargs.pop("_js")
+    if "api_name" not in kwargs and "api_visibility" not in kwargs:
+        kwargs["api_visibility"] = "private"
+    return kwargs
+
+
 class EventWrapper:
     def __init__(self, replaced_event):
         self.replaced_event = replaced_event
@@ -125,15 +151,23 @@ class EventWrapper:
         self.real_self = getattr(replaced_event, "__self__", None)
 
     def __call__(self, *args, **kwargs):
-        if "_js" in kwargs:
-            kwargs["js"] = kwargs.pop("_js")
-        if "api_name" not in kwargs and "api_visibility" not in kwargs:
-            kwargs["api_visibility"] = "private"
-        return self.replaced_event(*args, **kwargs)
+        return self.replaced_event(*args, **_prepare_event_kwargs(kwargs))
 
     @property
     def __self__(self):
         return self.real_self
+
+
+original_gradio_on = gr.on
+
+
+@wraps(original_gradio_on)
+def gradio_on(*args, **kwargs):
+    return original_gradio_on(*args, **_prepare_event_kwargs(kwargs))
+
+
+gr.on = gradio_on
+gradio.events.on = gradio_on
 
 
 def repair(grclass):
@@ -175,15 +209,14 @@ for component in set(gr.components.__all__ + gr.layouts.__all__):
 class Dependency(gradio.events.Dependency):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        original_then = self.then
+        for event_name in ("then", "success", "failure"):
+            original_event = getattr(self, event_name)
 
-        @wraps(original_then)
-        def then(*xargs, _js=None, **xkwargs):
-            if _js:
-                xkwargs["js"] = _js
-            return original_then(*xargs, **xkwargs)
+            @wraps(original_event)
+            def chained_event(*xargs, _event=original_event, **xkwargs):
+                return _event(*xargs, **_prepare_event_kwargs(xkwargs))
 
-        self.then = then
+            setattr(self, event_name, chained_event)
 
 
 gradio.events.Dependency = Dependency

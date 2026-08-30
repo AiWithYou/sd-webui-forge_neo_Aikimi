@@ -1,18 +1,20 @@
 import importlib.metadata
 import inspect
+import socket
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import gradio as gr
 import gradio.processing_utils
 from packaging.requirements import Requirement
 from PIL import Image
 
-from modules import gradio_compat
+from modules import gradio_compat, gradio_runtime
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -107,6 +109,75 @@ class GradioFileHandlingTests(unittest.TestCase):
             self.assertEqual(output.suffix, ".png")
 
 
+class FakeTunnelProcess:
+    def __init__(self) -> None:
+        self.returncode = None
+        self.killed = False
+        self.wait_count = 0
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout):
+        self.wait_count += 1
+        if self.wait_count == 1:
+            raise subprocess.TimeoutExpired("frpc", timeout)
+        self.returncode = -1
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -1
+
+
+class FakeTunnel:
+    def __init__(self, local_port: int) -> None:
+        self.local_port = local_port
+        self.proc = FakeTunnelProcess()
+        self.terminated = False
+
+    def kill(self):
+        self.terminated = True
+
+
+class GradioRuntimeCleanupTests(unittest.TestCase):
+    def test_close_removes_only_new_share_tunnels_and_waits_for_process(self):
+        existing = FakeTunnel(7000)
+        owned = FakeTunnel(7860)
+        unrelated = FakeTunnel(9000)
+        demo = SimpleNamespace(close=Mock(), server_port=7860)
+
+        with patch.object(gradio_runtime, "CURRENT_TUNNELS", [existing, owned, unrelated]):
+            gradio_runtime.close_gradio_runtime(demo, {id(existing)})
+
+            demo.close.assert_called_once_with()
+            self.assertFalse(existing.terminated)
+            self.assertTrue(owned.terminated)
+            self.assertFalse(unrelated.terminated)
+            self.assertTrue(owned.proc.killed)
+            self.assertEqual(gradio_runtime.CURRENT_TUNNELS, [existing, unrelated])
+
+    def test_close_releases_a_real_local_gradio_listener(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+
+        with gr.Blocks(analytics_enabled=False) as demo:
+            gr.Markdown("runtime cleanup")
+        baseline = gradio_runtime.tunnel_snapshot()
+        demo.launch(
+            server_name="127.0.0.1",
+            server_port=port,
+            prevent_thread_lock=True,
+            quiet=True,
+            ssr_mode=False,
+        )
+        gradio_runtime.close_gradio_runtime(demo, baseline)
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as rebound:
+            rebound.bind(("127.0.0.1", port))
+
+
 class GradioUiContractTests(unittest.TestCase):
     def test_gradio6_launch_keeps_security_and_app_level_parameters(self):
         parameters = inspect.signature(gr.Blocks.launch).parameters
@@ -156,11 +227,20 @@ class GradioUiContractTests(unittest.TestCase):
             first = gr.Button("Internal")
             second = gr.Button("Named")
             third = gr.Button("Explicit public")
-            first.click(lambda: None)
+            callable_html = gr.HTML(value=lambda: "callable initial value")
+            chained = first.click(lambda: None)
             second.click(lambda: None, api_name="named_contract")
             third.click(lambda: None, api_visibility="public")
+            chained_then = chained.then(lambda: None)
+            chained_success = chained.success(lambda: None)
+            chained_failure = chained.failure(lambda: None)
+            load_event = demo.load(lambda: None)
+            combined_load_event = gr.on(fn=lambda: None)
+            named_chain = chained.then(lambda: None, api_name="named_chain_contract")
+            explicit_public_load = demo.load(lambda: None, api_visibility="public")
 
         dependencies = demo.get_config_file()["dependencies"]
+        by_id = {dependency["id"]: dependency for dependency in dependencies}
         by_name = {dependency["api_name"]: dependency for dependency in dependencies}
         unnamed = next(
             dependency for dependency in dependencies if dependency["api_name"] not in {"named_contract", None}
@@ -174,6 +254,14 @@ class GradioUiContractTests(unittest.TestCase):
             if dependency["api_visibility"] == "public" and dependency["api_name"] != "named_contract"
         )
         self.assertEqual(explicit_public["api_visibility"], "public")
+        for dependency in (chained_then, chained_success, chained_failure, load_event, combined_load_event):
+            self.assertEqual(by_id[dependency["id"]]["api_visibility"], "private")
+        self.assertEqual(by_id[named_chain["id"]]["api_visibility"], "public")
+        self.assertEqual(by_id[explicit_public_load["id"]]["api_visibility"], "public")
+        callable_dependency = next(
+            dependency for dependency in dependencies if callable_html._id in dependency["outputs"]
+        )
+        self.assertEqual(callable_dependency["api_visibility"], "private")
 
     def test_multi_control_visibility_workarounds_are_explicit_and_bounded(self):
         h3_source = (ROOT / "extensions-builtin" / "minimax-h3-studio" / "scripts" / "minimax_h3_studio.py").read_text(

@@ -2,14 +2,14 @@ import json
 import os
 
 import gradio as gr
-from gradio.route_utils import API_PREFIX
 
 from modules import localization, scripts, shared, util
+from modules.gradio_file_url import gradio_file_url
 from modules.paths import data_path, script_path
 
 
 def webpath(fn):
-    return f"{API_PREFIX.lstrip('/')}/file={util.truncate_path(fn)}?{os.path.getmtime(fn)}"
+    return gradio_file_url(util.truncate_path(fn), cache_key=os.path.getmtime(fn))
 
 
 def javascript_html():
@@ -52,7 +52,7 @@ def css_html():
         head += stylesheet(cssfile)
 
     user_css = os.path.join(data_path, "user.css")
-    if os.path.exists(user_css):
+    if os.path.isfile(user_css):
         head += stylesheet(user_css)
 
     from modules.shared_gradio_themes import resolve_var

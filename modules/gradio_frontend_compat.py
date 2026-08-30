@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import gradio
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import ORJSONResponse
 from fastapi.routing import APIRoute
+from gradio.routes import App
 
 SUPPORTED_VERSION = "6.17.3"
 TABS_ASSET_NAME = "Walkthrough.svelte_svelte_type_style_lang-DBgsQkoF.js"
@@ -184,3 +188,18 @@ def install_gradio_tabs_compatibility_route(
     )
     app.router.routes.insert(0, route)
     return asset
+
+
+def create_gradio_compatibility_app(
+    asset: PatchedFrontendAsset,
+    *,
+    app_kwargs: Mapping[str, Any] | None = None,
+    debug: bool = False,
+) -> App:
+    """Prepare Gradio's FastAPI app with the exact route before a listener starts."""
+
+    prepared_kwargs = dict(app_kwargs or {})
+    prepared_kwargs.setdefault("default_response_class", ORJSONResponse)
+    prepared_app = App(debug=debug, **prepared_kwargs)
+    install_gradio_tabs_compatibility_route(prepared_app, asset)
+    return prepared_app

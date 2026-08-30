@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import subprocess
 import tempfile
 import time
@@ -14,7 +13,7 @@ import gradio as gr
 from websockets.sync.client import connect
 
 from modules import gradio_frontend_compat
-from tools.tests.test_gradio_chromium_smoke import find_chromium, reserve_local_port
+from tools.tests.chromium_helpers import close_chromium, find_chromium, reserve_local_port
 
 
 def _wait_expression(selector: str, condition: str, timeout_ms: int = 15_000) -> str:
@@ -123,31 +122,11 @@ def cdp_page(chromium: str, url: str):
             page.send("Page.navigate", {"url": url})
             yield page
         finally:
-            if page is not None:
-                try:
-                    page.send("Browser.close", timeout=2)
-                except (OSError, RuntimeError, TimeoutError):
-                    pass
-            if websocket is not None:
-                try:
-                    websocket.close()
-                except OSError:
-                    pass
-            if process.poll() is None:
-                if os.name == "nt":
-                    process.terminate()
-                else:
-                    os.killpg(process.pid, signal.SIGTERM)
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    if os.name == "nt":
-                        process.kill()
-                    else:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    process.wait(timeout=5)
-            # Chrome may finish writing its profile after the browser process exits.
-            time.sleep(0.25)
+            close_chromium(
+                process,
+                websocket=websocket,
+                close_browser=(lambda: page.send("Browser.close", timeout=2)) if page is not None else None,
+            )
 
 
 class GradioFrontendCompatibilityChromiumTests(unittest.TestCase):
@@ -215,6 +194,7 @@ class GradioFrontendCompatibilityChromiumTests(unittest.TestCase):
                 '.tab-wrapper > .tab-container[role="tablist"] > button { flex: 0 0 auto; }'
             ),
         )
+        cls.addClassCleanup(cls.demo.close)
         gradio_frontend_compat.install_gradio_tabs_compatibility_route(app)
         cls.url = f"http://127.0.0.1:{cls.port}/"
 
@@ -238,12 +218,8 @@ class GradioFrontendCompatibilityChromiumTests(unittest.TestCase):
             prevent_thread_lock=True,
             quiet=True,
         )
+        cls.addClassCleanup(cls.unpatched_demo.close)
         cls.unpatched_url = f"http://127.0.0.1:{cls.unpatched_port}/"
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.demo.close()
-        cls.unpatched_demo.close()
 
     def test_49_tabs_mount_switch_keyboard_and_reload_stay_responsive(self):
         with cdp_page(self.chromium, self.url) as page:
