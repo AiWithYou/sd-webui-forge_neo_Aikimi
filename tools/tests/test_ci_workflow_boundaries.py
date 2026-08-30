@@ -45,6 +45,8 @@ class CiWorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("Chrome or Chromium is required for the Windows smoke tests.", workflow)
         self.assertIn("GradioFullUiChromiumTests", workflow)
         self.assertIn("taskkill.exe", workflow)
+        self.assertIn("The full UI process tree did not exit after taskkill.", workflow)
+        self.assertIn("$global:LASTEXITCODE = 0", workflow)
         self.assertIn('$env:SD_WEBUI_RESTARTING = "1"', workflow)
         self.assertIn("The full UI process did not release port", workflow)
 
