@@ -52,6 +52,18 @@ class ChromiumCleanupTests(unittest.TestCase):
 
         return patch.object(chromium_helpers.subprocess, "run", side_effect=complete)
 
+    def test_port_release_probe_distinguishes_a_listener_from_a_closed_port(self):
+        with chromium_helpers.socket.socket(
+            chromium_helpers.socket.AF_INET,
+            chromium_helpers.socket.SOCK_STREAM,
+        ) as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            self.assertFalse(chromium_helpers._wait_for_port_release(port, timeout=0))
+
+        self.assertTrue(chromium_helpers._wait_for_port_release(port, timeout=0))
+
     def test_connection_closed_during_browser_close_still_closes_socket_and_process_tree(self):
         process = FakeProcess()
         websocket = FakeWebSocket()

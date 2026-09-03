@@ -49,12 +49,9 @@ def _wait_for_exit(process: subprocess.Popen[Any], timeout: float) -> bool:
 def _wait_for_port_release(port: int, timeout: float = 2.0) -> bool:
     deadline = time.monotonic() + timeout
     while True:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-            try:
-                listener.bind(("127.0.0.1", port))
-            except OSError:
-                pass
-            else:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.2)
+            if probe.connect_ex(("127.0.0.1", port)) != 0:
                 return True
         if time.monotonic() >= deadline:
             return False

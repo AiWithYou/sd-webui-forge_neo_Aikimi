@@ -113,9 +113,12 @@ def probe_navigation_with_cdp(chromium, url, *, blocked_urls=(), timeout=60):
             send("Network.enable")
             if blocked_urls:
                 send("Network.setBlockedURLs", {"urls": list(blocked_urls)})
-            send("Page.navigate", {"url": url})
+            send(
+                "Page.navigate",
+                {"url": url},
+                response_timeout=max(5, deadline - time.monotonic()),
+            )
 
-            wait_seconds = max(1, deadline - time.monotonic())
             expression = """
                 new Promise((resolve) => {
                     const started = performance.now();
@@ -150,15 +153,30 @@ def probe_navigation_with_cdp(chromium, url, *, blocked_urls=(), timeout=60):
                     check();
                 })
             """
-            evaluation = send(
-                "Runtime.evaluate",
-                {
-                    "expression": expression,
-                    "awaitPromise": True,
-                    "returnByValue": True,
-                },
-                response_timeout=wait_seconds,
-            )
+            while True:
+                wait_seconds = max(1, deadline - time.monotonic())
+                try:
+                    evaluation = send(
+                        "Runtime.evaluate",
+                        {
+                            "expression": expression,
+                            "awaitPromise": True,
+                            "returnByValue": True,
+                        },
+                        response_timeout=wait_seconds,
+                    )
+                    break
+                except RuntimeError as error:
+                    navigation_race = any(
+                        message in str(error)
+                        for message in (
+                            "Inspected target navigated or closed",
+                            "Execution context was destroyed",
+                        )
+                    )
+                    if not navigation_race or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
             state = evaluation["result"]["value"]
             state["elapsed_seconds"] = time.monotonic() - started
             return state
