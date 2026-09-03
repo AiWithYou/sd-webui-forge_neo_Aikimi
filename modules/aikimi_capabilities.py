@@ -46,22 +46,18 @@ _KREA2_FILES = (
 
 _ANIMA38_FILES = (
     _FileContract(
-        "Stable-diffusion/Anima-3.8B-int8-convrot.safetensors",
-        4_238_326_342,
-        ("anima38_main_attention_mlp_v1", "net.blocks.51.mlp.layer2.weight"),
+        "Stable-diffusion/Anima-3.8B-v1.1-int8-convrot.safetensors",
+        5_543_364_574,
+        (
+            "anima38_v11_main_attention_mlp_v1",
+            "net.anima_v2_connector.semantic_resampler.query_tokens",
+            "net.blocks.51.mlp.layer2.weight",
+        ),
     ),
     _FileContract(
         "text_encoder/qwen35_4b.safetensors",
         4_779_016_600,
         ("embed_tokens.weight", "layers.31.input_layernorm.weight"),
-    ),
-    _FileContract(
-        "text_encoder/Anima-3.8B-expanded_adapter.safetensors",
-        88_131_712,
-        (
-            "anima_progressive_qwen35_cross_adapter_v1",
-            "semantic_attentions.0.q_proj.weight",
-        ),
     ),
     _FileContract("text_encoder/qwen_3_06b_base.safetensors", 1_192_135_096),
     _FileContract(
@@ -170,7 +166,7 @@ def _anima38_check(paths: DiagnosticPaths) -> DiagnosticCheck:
             "anima38",
             "Anima 3.8B",
             CheckState.READY,
-            "The 52-block checkpoint, Qwen encoders, adapter, VAE, and integrity record were detected.",
+            "The v1.1 52-block bundle, Semantic Connector v2, Qwen encoders, VAE, and integrity record were detected.",
             "No action is required. Re-run installer verification after moving model files.",
             available=True,
         )
@@ -180,7 +176,7 @@ def _anima38_check(paths: DiagnosticPaths) -> DiagnosticCheck:
             "Anima 3.8B",
             CheckState.WARNING,
             f"Anima support is partially installed ({verified}/{len(_ANIMA38_FILES)} files; integrity record {'present' if sidecar_valid else 'missing'}).",
-            "Run download_anima38_int8_convrot_models.bat to verify or repair the supported file set.",
+            "Run download_anima38_v11_int8_convrot_models.bat to verify or repair the supported file set.",
             available=False,
         )
     return DiagnosticCheck(
@@ -188,7 +184,7 @@ def _anima38_check(paths: DiagnosticPaths) -> DiagnosticCheck:
         "Anima 3.8B",
         CheckState.BLOCKED,
         "The supported Anima 3.8B model set was not detected.",
-        "Run download_anima38_int8_convrot_models.bat and review all upstream model licenses.",
+        "Run download_anima38_v11_int8_convrot_models.bat and review all upstream model licenses.",
         available=False,
     )
 

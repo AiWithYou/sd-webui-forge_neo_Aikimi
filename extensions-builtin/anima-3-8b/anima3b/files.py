@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -10,7 +11,13 @@ from modules_forge.anima_lora import (
     has_anima_lora_signature,
 )
 
+logger = logging.getLogger(__name__)
+
 ARCHITECTURE = "anima_progressive_qwen35_cross_adapter_v1"
+V2_ARCHITECTURE = "anima_qwen35_quality_anchored_semantic_connector_v2"
+BUNDLE_ARCHITECTURE = "anima_3_8b_semantic_connector_v2_bundle"
+BUNDLE_FORMAT = "1"
+CONNECTOR_PREFIX = "net.anima_v2_connector."
 
 
 def forge_root() -> Path:
@@ -24,7 +31,7 @@ def text_encoder_roots() -> list[Path]:
 
         roots.extend(Path(path).parent for path in module_list.values())
     except Exception:
-        pass
+        logger.debug("Falling back to the local text encoder directory.", exc_info=True)
     return list(dict.fromkeys(path.resolve() for path in roots if path.is_dir()))
 
 
@@ -38,7 +45,7 @@ def lora_roots() -> list[Path]:
             *(Path(path) for path in shared.cmd_opts.lora_dirs),
         ]
     except Exception:
-        pass
+        logger.debug("Falling back to the local LoRA directory.", exc_info=True)
     return list(dict.fromkeys(path.resolve() for path in roots if path.is_dir()))
 
 
@@ -50,6 +57,20 @@ def qwen35_models() -> dict[str, str]:
             if any(marker in path.name.lower() for marker in markers):
                 found.setdefault(path.name, str(path))
     return dict(sorted(found.items()))
+
+
+def bundle_metadata(path: str | os.PathLike) -> dict[str, str] | None:
+    try:
+        with safe_open(path, framework="pt", device="cpu") as checkpoint:
+            metadata = checkpoint.metadata() or {}
+    except (OSError, ValueError, SafetensorError):
+        return None
+    if (
+        metadata.get("architecture") != BUNDLE_ARCHITECTURE
+        or metadata.get("anima_v2_bundle_format") != BUNDLE_FORMAT
+    ):
+        return None
+    return metadata
 
 
 def adapters() -> dict[str, str]:

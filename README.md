@@ -104,7 +104,7 @@ python .\tools\aikimi_setup.py repair anima38 --dry-run
 | profile | 最終配置または一時peak | 注意 |
 |---|---:|---|
 | Krea2 | 約17.68 GiB | checkpoint、Qwen3-VL、VAE |
-| Anima 3.8B | 既存batの一時peak約15.47 GiB | 共通encoderとVAEも新規導入するCLIは約16.82 GiB |
+| Anima 3.8B v1.1 | v1.1用batの一時peak約17.82 GiB | 共通encoderとVAEも新規導入するCLIは約19.16 GiB |
 | SenseNova U1.5 | 最終約17.28 GiB | 既存並列PowerShell installerの一時peakは約33.79 GiB |
 
 filesystemと更新用の余裕を追加してください。Anima変換にはCUDA device 0と準備済みForge venvが必要です。
@@ -113,9 +113,12 @@ filesystemと更新用の余裕を追加してください。Anima変換にはCU
 
 ```text
 download_krea2_int8_convrot_models.bat
+download_anima38_v11_int8_convrot_models.bat
 download_anima38_int8_convrot_models.bat
 download_sensenova_u15_int8.bat
 ```
+
+Animaの旧ファイル名はv1用です。新規導入ではv1.1用batまたは統一CLIを使います。
 
 詳しい固定値、repair、licenseは[Model installation](docs/model-installation.md)を参照してください。
 
@@ -125,7 +128,7 @@ download_sensenova_u15_int8.bat
 |---|---|---|
 | Forge画像生成 | Forge Neo | upstream機能。checkpointごとの条件に従います。 |
 | Krea2 INT8 | Forge low-bit loader | 1024²生成と4K／8K workflow。高解像度機能の一部は実験機能です。 |
-| Anima 3.8B | built-in extension | 52層DiT、Qwen3.5、28／40／52層LoRA。RTX 3090で約1MPを実測しています。 |
+| Anima 3.8B | built-in extension | v1.1 Semantic Connector v2、52層DiT、Qwen3.5、28／40／52層LoRA。RTX 3090で約1MPを実測しています。 |
 | SenseNova U1.5 | 隔離worker | text生成と複数画像編集。24GB Safeは参照2枚、各約512²、出力2048²以下です。 |
 | MiniMax H3 | loopback ComfyUI | 音声付き動画。対応runtimeとmodelを別途用意します。外部有料APIは呼びません。 |
 | HyperWeave | built-in extension | 候補制約付き4K／8K生成的upscale。実験機能です。 |

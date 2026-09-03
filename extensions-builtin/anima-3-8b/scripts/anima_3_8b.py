@@ -1,11 +1,6 @@
 from __future__ import annotations
 
 import gradio as gr
-
-from modules import scripts
-from modules.processing import StableDiffusionProcessing
-from modules.ui_components import InputAccordion
-
 from anima3b.files import adapters, standard_anima_loras
 from anima3b.runtime import Anima3BRuntime
 from anima3b.standard_lora import (
@@ -13,6 +8,9 @@ from anima3b.standard_lora import (
     apply_standard_lora_selections,
 )
 
+from modules import scripts
+from modules.processing import StableDiffusionProcessing
+from modules.ui_components import InputAccordion
 
 STANDARD_LORA_SLOT_COUNT = 4
 
@@ -52,14 +50,17 @@ class Anima3BScript(scripts.Script):
         tab_name = "img2img" if is_img2img else "txt2img"
         with InputAccordion(
             False,
-            label="Anima 3.8B (Qwen3.5)",
+            label="Anima 3.8B (Qwen3.5 / v2)",
             elem_id=f"aikimi-{tab_name}-anima38",
         ) as enabled:
             adapter = gr.Dropdown(
                 label="Adapter",
                 choices=choices,
                 value=choices[0],
-                info="Detected by checkpoint metadata in models/text_encoder.",
+                info=(
+                    "Legacy v1 only. Bundled anima.3-8B-v2 checkpoints "
+                    "activate automatically and ignore this selector."
+                ),
             )
             strength = gr.Slider(
                 label="Adapter strength",
@@ -67,7 +68,7 @@ class Anima3BScript(scripts.Script):
                 maximum=2.0,
                 value=1.0,
                 step=0.05,
-                info="1.0 is trained strength; 0.0 is native Anima.",
+                info="Legacy v1 only; bundled v2 is fixed at trained strength 1.0.",
             )
             negative = gr.Checkbox(
                 label="Use adapter on negative prompt",
@@ -244,7 +245,7 @@ class Anima3BScript(scripts.Script):
         **kwargs,
     ):
         del standard_lora, standard_lora_strength, additional_standard_lora_values
-        if not enabled:
+        if not enabled and not self.runtime.is_v2_bundle(p.sd_model):
             return
         self.runtime.install(
             p,
@@ -254,7 +255,7 @@ class Anima3BScript(scripts.Script):
         )
 
     def before_process(self, p: StableDiffusionProcessing, *args):
-        self.runtime.restore_model(p.sd_model)
+        self.runtime.restore(p)
 
     def process_before_every_sampling(
         self,
@@ -284,7 +285,6 @@ class Anima3BScript(scripts.Script):
             p.extra_generation_params["Anima 3.8B encoder VRAM released"] = (
                 f"{released / (1024**3):.2f} GiB"
             )
-
     def postprocess(self, p, processed, *args):
         self.runtime.restore(p)
 

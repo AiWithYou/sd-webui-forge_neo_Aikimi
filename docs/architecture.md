@@ -65,11 +65,11 @@ assetは`assets/aikimi`から読みます。assetの読込失敗はUI全体の�
 
 ## Anima 3.8B
 
-`extensions-builtin/anima-3-8b`は、通常のForge `txt2img`と`img2img`へQwen3.5 adapterを追加します。52層checkpointの検査、encoder、adapter、UI callbackはextension内で分けています。
+`extensions-builtin/anima-3-8b`は、通常のForge `txt2img`と`img2img`へQwen3.5 conditioningを追加するbuilt-in extensionです。v1.1では、checkpointに内包されたSemantic Connector v2がdenoiseの各stepで動作します。実装上は、52層checkpointの検査、encoder、connector、旧v1 adapter、UI callbackを別の責務として分離しています。
 
 `modules_forge/anima_lora.py`は、28層、40層、52層のLoRA layoutを検査し、安全に特定できる完全なcoverageだけを変換します。sparseまたは曖昧なLoRAは自動変換しません。
 
-INT8 ConvRot変換は`tools/convert_anima38_int8_convrot.py`から共通streaming converterを使います。出力は一時ファイルへ書き、tensor layoutとmetadataを検証してから正式名へ移します。
+INT8 ConvRot変換では、`tools/convert_anima38_int8_convrot.py`から共通streaming converterを呼び、v1.1のSemantic Connector v2をBF16のまま保持します。出力先は一時ファイルであり、tensor layoutとmetadataの検証を通過した場合だけ正式名へ移す設計です。
 
 ## SenseNova U1.5
 

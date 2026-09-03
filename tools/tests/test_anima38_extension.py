@@ -1,30 +1,36 @@
+# ruff: noqa: E402
+
 import json
+import sys
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-import sys
-import unittest
 from unittest.mock import Mock, call, patch
 
-from safetensors.torch import save_file
 import torch
-
+from safetensors.torch import save_file
 
 ROOT = Path(__file__).resolve().parents[2]
 EXTENSION = ROOT / "extensions-builtin" / "anima-3-8b"
 if str(EXTENSION) not in sys.path:
     sys.path.insert(0, str(EXTENSION))
 
+from anima3b.adapter import ProgressiveCrossAdapter
 from anima3b.files import (
     ARCHITECTURE,
+    BUNDLE_ARCHITECTURE,
+    BUNDLE_FORMAT,
+    V2_ARCHITECTURE,
     adapters,
+    bundle_metadata,
     qwen35_models,
     standard_anima_loras,
     tokenizer_dir,
 )
-from anima3b.adapter import ProgressiveCrossAdapter
 from anima3b.qwen35 import CPUEmbedding, Qwen35HybridModel
 from anima3b.runtime import ANIMA38_BLOCK_COUNT, Anima3BRuntime
+from anima3b.semantic_v2 import QualityAnchoredSemanticConnectorV2
 from anima3b.standard_lora import (
     apply_standard_lora_selection,
     apply_standard_lora_selections,
@@ -38,6 +44,7 @@ def fake_anima(block_count: int):
     return SimpleNamespace(
         text_processing_engine_anima=object(),
         forge_objects=SimpleNamespace(clip=clip, unet=unet),
+        filename="legacy-anima.safetensors",
     )
 
 
@@ -136,6 +143,27 @@ class Anima38ExtensionTests(unittest.TestCase):
             adapter(source, target_ids, semantic)
         self.assertFalse(native.blocks[0]._anima38_inplace)
 
+    def test_v11_connector_restores_temporary_inplace_flags(self):
+        native = _NativeAdapter()
+        connector = QualityAnchoredSemanticConnectorV2(
+            native,
+            semantic_source_dim=4,
+            layer_indices=(0,),
+            num_queries=2,
+            resampler_blocks=1,
+            resampler_dim=4,
+            resampler_heads=1,
+            mlp_hidden_dim=4,
+        )
+        source = torch.ones(1, 2, 4)
+        target_ids = torch.tensor([[1, 2]])
+        semantic = [torch.ones(1, 2, 4)]
+
+        connector(source, target_ids, semantic, timesteps=torch.tensor([0.5]))
+
+        self.assertTrue(native.blocks[0].seen_flag)
+        self.assertFalse(hasattr(native.blocks[0], "_anima38_inplace"))
+
     def test_cpu_embedding_keeps_table_unregistered_and_gathers_exact_rows(self):
         weight = torch.arange(40, dtype=torch.bfloat16).reshape(10, 4)
         embedding = CPUEmbedding(weight)
@@ -179,6 +207,33 @@ class Anima38ExtensionTests(unittest.TestCase):
                 found = adapters()
 
         self.assertEqual(found, {"adapter.safetensors": str(valid)})
+
+    def test_v11_bundle_discovery_requires_official_metadata(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            valid = root / "v11.safetensors"
+            legacy = root / "legacy.safetensors"
+            save_file(
+                {"net.anima_v2_connector.test": torch.ones(1)},
+                valid,
+                metadata={
+                    "architecture": BUNDLE_ARCHITECTURE,
+                    "anima_v2_bundle_format": BUNDLE_FORMAT,
+                    "anima_v2_adapter_architecture": V2_ARCHITECTURE,
+                },
+            )
+            save_file(
+                {"net.blocks.0.test": torch.ones(1)},
+                legacy,
+                metadata={"architecture": "legacy"},
+            )
+
+            valid_metadata = bundle_metadata(valid)
+            legacy_metadata = bundle_metadata(legacy)
+
+        self.assertIsNotNone(valid_metadata)
+        self.assertEqual(valid_metadata["architecture"], BUNDLE_ARCHITECTURE)
+        self.assertIsNone(legacy_metadata)
 
     def test_qwen_discovery_accepts_the_paired_filename(self):
         with TemporaryDirectory() as directory:
@@ -485,6 +540,68 @@ class Anima38ExtensionTests(unittest.TestCase):
         self.assertFalse(
             hasattr(model, "_anima3b_original_get_learned_conditioning")
         )
+
+    def test_v11_install_is_automatic_and_uses_fixed_strength(self):
+        runtime = Anima3BRuntime()
+        model = fake_anima(ANIMA38_BLOCK_COUNT)
+        original_conditioning = Mock(name="original_conditioning")
+        model.get_learned_conditioning = original_conditioning
+        original_cached_params = Mock(return_value=("base",))
+        cached_c = ["positive-key", "positive-value", "positive-metadata"]
+        cached_uc = ["negative-key", "negative-value", "negative-metadata"]
+        processing = SimpleNamespace(
+            sd_model=model,
+            cached_params=original_cached_params,
+            cached_c=cached_c,
+            cached_uc=cached_uc,
+            extra_generation_params={},
+        )
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = root / "Anima-3.8B-v1.1.safetensors"
+            qwen = root / "qwen35_4b.safetensors"
+            qwen.write_bytes(b"qwen-checkpoint")
+            save_file(
+                {"net.anima_v2_connector.test": torch.ones(1)},
+                bundle,
+                metadata={
+                    "architecture": BUNDLE_ARCHITECTURE,
+                    "anima_v2_bundle_format": BUNDLE_FORMAT,
+                    "anima_v2_adapter_architecture": V2_ARCHITECTURE,
+                    "anima_v2_adapter_filename": "Semantic Connector v2",
+                },
+            )
+            model.filename = str(bundle)
+
+            with (
+                patch(
+                    "anima3b.runtime.qwen35_models",
+                    return_value={qwen.name: str(qwen)},
+                ),
+                patch.object(runtime, "_install_v2") as install_v2,
+            ):
+                self.assertTrue(runtime.is_v2_bundle(model))
+                runtime.install(
+                    processing,
+                    "ignored-legacy-adapter.safetensors",
+                    strength=0.25,
+                    negative_strength=None,
+                )
+
+            signature = processing.cached_params(["prompt"], 32, {}, None)[-1][1]
+
+        install_v2.assert_called_once()
+        self.assertEqual(signature[0], V2_ARCHITECTURE)
+        self.assertEqual(signature[3:], (1.0, None))
+        self.assertEqual(
+            processing.extra_generation_params["Anima 3.8B strength"],
+            1.0,
+        )
+        runtime.restore(processing)
+        self.assertIs(model.get_learned_conditioning, original_conditioning)
+        self.assertEqual(cached_c, [None, None, None])
+        self.assertEqual(cached_uc, [None, None, None])
 
     def test_missing_assets_fail_during_conditioning_and_restore_cleanly(self):
         runtime = Anima3BRuntime()

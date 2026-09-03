@@ -18,7 +18,7 @@
 
 ## Anima 3.8B extensionとtokenizer
 
-`extensions-builtin/anima-3-8b`は、`GumGum10/forge-anima-3.8B`のcommit`8af9bb4d391787030cb84205c47cf3ea1213795a`を基にしています。extension codeのMIT Licenseは、[extensions-builtin/anima-3-8b/LICENSE](extensions-builtin/anima-3-8b/LICENSE)にあります。
+`extensions-builtin/anima-3-8b`は、`GumGum10/forge-anima-3.8B`のcommit`59c27e5702f95c13dc5c08953637371d4749a034`を基にしています。extension codeのMIT Licenseは、[extensions-builtin/anima-3-8b/LICENSE](extensions-builtin/anima-3-8b/LICENSE)にあります。
 
 同梱するQwen3.5 tokenizerの2ファイルは、`Qwen/Qwen3.5-4B`のrevision`851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`由来です。出典は[extensions-builtin/anima-3-8b/THIRD_PARTY_NOTICES.md](extensions-builtin/anima-3-8b/THIRD_PARTY_NOTICES.md)にあります。配布元はApache-2.0と表示しています。release担当者は、配布物にApache-2.0本文が含まれることも確認してください。
 

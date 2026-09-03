@@ -1,15 +1,19 @@
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
-from safetensors.torch import save_file
 import torch
+from safetensors.torch import save_file
 
 from tools.convert_anima38_int8_convrot import (
     ANIMA38_BLOCK_COUNT,
     ANIMA38_PROFILE,
     ANIMA38_QUANTIZED_WEIGHT_KEYS,
     ANIMA38_REQUIRED_METADATA,
+    ANIMA38_V11_BUNDLE_ARCHITECTURE,
+    ANIMA38_V11_CONNECTOR_PREFIX,
+    ANIMA38_V11_PROFILE,
+    conversion_profile,
     validate_anima38_source,
     write_sha256_sidecar,
 )
@@ -64,6 +68,32 @@ class ConvertAnima38Int8ConvRotTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "pinned Anima 3.8B Pro52"):
                 validate_anima38_source(source, 256)
+
+    def test_v11_profile_preserves_the_bundled_semantic_connector(self):
+        keys = [
+            *ANIMA38_QUANTIZED_WEIGHT_KEYS,
+            f"{ANIMA38_V11_CONNECTOR_PREFIX}quality_anchor.layer_mix_logits",
+        ]
+        metadata = {
+            **ANIMA38_REQUIRED_METADATA,
+            "architecture": ANIMA38_V11_BUNDLE_ARCHITECTURE,
+            "anima_v2_bundle_format": "1",
+        }
+
+        profile, preserved = conversion_profile(keys, metadata)
+
+        self.assertEqual(profile, ANIMA38_V11_PROFILE)
+        self.assertIn("semantic_connector_v2", preserved)
+
+    def test_v11_profile_rejects_missing_connector_tensors(self):
+        metadata = {
+            **ANIMA38_REQUIRED_METADATA,
+            "architecture": ANIMA38_V11_BUNDLE_ARCHITECTURE,
+            "anima_v2_bundle_format": "1",
+        }
+
+        with self.assertRaisesRegex(ValueError, "no Semantic Connector v2"):
+            conversion_profile(list(ANIMA38_QUANTIZED_WEIGHT_KEYS), metadata)
 
     def test_output_metadata_records_the_anima_profile(self):
         metadata = output_metadata(

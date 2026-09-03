@@ -61,13 +61,13 @@ python .\tools\aikimi_setup.py install krea2
 
 取得物:
 
-- Anima 3.8B BF16変換元
+- Anima 3.8B v1.1 BF16 bundle変換元
 - Qwen3.5 4B encoder
-- progressive adapter
+- bundle内のSemantic Connector v2
 - Anima標準Qwen3 0.6B encoder
 - Qwen Image VAE
 
-BF16 DiTは、主要520行列をINT8 ConvRotへ変換します。変換には準備済みの`venv`、CUDA対応PyTorch、CUDA device 0が必要です。Local Safeを一度起動して依存関係を準備してから実行してください。
+BF16 bundleは、DiT本体の主要520行列をINT8 ConvRotへ変換します。Semantic Connector v2はBF16のまま保持されます。変換には準備済みの`venv`、CUDA対応PyTorch、CUDA device 0が必要です。Local Safeを一度起動して依存関係を準備してから実行してください。
 
 ```powershell
 .\aikimi-launch.ps1 -Profile LocalSafe
@@ -80,7 +80,7 @@ python .\tools\aikimi_setup.py install anima38
 python .\tools\aikimi_setup.py install anima38 --keep-source
 ```
 
-既存PowerShell installerの一時peakは約15.47 GiBで、この値はAnima共通encoderとVAEがすでにある構成です。統一CLIが共通2ファイルも新規導入する場合は、約16.82 GiBに64 MiB以上の余裕を加えてください。
+v1.1用PowerShell installerの一時peakは約17.82 GiBで、この値はAnima共通encoderとVAEがすでにある構成です。統一CLIが共通2ファイルも新規導入する場合は、約19.16 GiBに64 MiB以上の余裕を加えてください。
 
 ### SenseNova U1.5
 
@@ -105,9 +105,12 @@ python .\tools\aikimi_setup.py install sensenova
 
 ```text
 download_krea2_int8_convrot_models.bat
+download_anima38_v11_int8_convrot_models.bat
 download_anima38_int8_convrot_models.bat
 download_sensenova_u15_int8.bat
 ```
+
+Animaの旧ファイル名はv1専用の互換入口です。新規導入では`download_anima38_v11_int8_convrot_models.bat`を使います。
 
 既存の自動化がPowerShell switchを使う場合も、`-KeepSource`、`-RuntimeOnly`、`-ModelOnly`を維持します。新しい導入では統一CLIを推奨します。
 

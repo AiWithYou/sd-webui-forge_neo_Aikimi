@@ -229,7 +229,7 @@ def _sensenova_runtime_artifacts() -> tuple[ArtifactSpec, ...]:
 
 
 KREA_REVISION = "8038ce89b91b042141541ad0fa51b985ca262c5f"
-ANIMA_REVISION = "dd05532037130bebe4d94f0d559b968c14ed1279"
+ANIMA_REVISION = "3ef641256377dc4e7efbf35d426ca31c1fe5180b"
 ANIMA_COMMON_REVISION = "f973fc41ec7545364ac9776c2440285f43ff2a30"
 SENSENOVA_MODEL_REVISION = "57de22ad4e2fc24c77f56dfe45dbb87a60dfebee"
 SENSENOVA_LORA_REVISION = "e909f4636d119d65fe4cba8770c19daff2ac102e"
@@ -277,7 +277,7 @@ PROFILES: Mapping[str, ProfileSpec] = {
     ),
     "anima38": ProfileSpec(
         name="anima38",
-        description="Anima 3.8B INT8 ConvRot with Qwen3.5 and the native Anima encoder",
+        description="Anima 3.8B v1.1 INT8 ConvRot with Semantic Connector v2 and Qwen3.5",
         artifacts=(
             ArtifactSpec(
                 "anima38-qwen35",
@@ -287,15 +287,6 @@ PROFILES: Mapping[str, ProfileSpec] = {
                 "ea289be7c916726d09953c7db9971c82b280e694b5d7c47f8ad9ffad6acb54ba",
                 "https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/LICENSE",
                 ("embed_tokens.weight", "layers.31.input_layernorm.weight"),
-            ),
-            ArtifactSpec(
-                "anima38-adapter",
-                "models/text_encoder/Anima-3.8B-expanded_adapter.safetensors",
-                f"https://huggingface.co/lylogummy/Anima-3.8B/resolve/{ANIMA_REVISION}/text_encoders/Anima-3.8B-expanded_adapter.safetensors",
-                88_131_712,
-                "f9851ac4668ce069f7be7cf99755335c98879b463f3d486aaa731083978f0d71",
-                f"https://huggingface.co/lylogummy/Anima-3.8B/tree/{ANIMA_REVISION}#licenses",
-                ("anima_progressive_qwen35_cross_adapter_v1", "semantic_attentions.0.q_proj.weight"),
             ),
             ArtifactSpec(
                 "anima-native-qwen",
@@ -317,12 +308,16 @@ PROFILES: Mapping[str, ProfileSpec] = {
             ),
             ArtifactSpec(
                 "anima38-bf16-source",
-                "tmp/anima38-conversion/Anima-3.8B.safetensors",
-                f"https://huggingface.co/lylogummy/Anima-3.8B/resolve/{ANIMA_REVISION}/difussion_models/Anima-3.8B.safetensors",
-                7_504_189_974,
-                "1432c925752447df86da7b277e3797f077d358bc24e3950685b13cc0e465c7d5",
+                "tmp/anima38-v11-conversion/Anima-3.8B-v1.1.safetensors",
+                f"https://huggingface.co/lylogummy/Anima-3.8B/resolve/{ANIMA_REVISION}/difussion_models/Anima-3.8B-v1.1.safetensors",
+                8_809_227_318,
+                "4a458d26b21efa350073422f756d521b4397d9ca5964da4dc6bd9ae258a29629",
                 f"https://huggingface.co/lylogummy/Anima-3.8B/tree/{ANIMA_REVISION}#licenses",
-                ('"new_block_count":"52"', "net.blocks.51.mlp.layer2.weight"),
+                (
+                    "anima_3_8b_semantic_connector_v2_bundle",
+                    "net.anima_v2_connector.semantic_resampler.query_tokens",
+                    "net.blocks.51.mlp.layer2.weight",
+                ),
                 temporary=True,
             ),
         ),
@@ -331,17 +326,18 @@ PROFILES: Mapping[str, ProfileSpec] = {
             f"https://huggingface.co/circlestone-labs/Anima/blob/{ANIMA_COMMON_REVISION}/LICENSE.md",
             "https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/LICENSE",
         ),
-        legacy_peak_bytes=16_609_664_628,
+        legacy_peak_bytes=19_131_608_492,
         generated=GeneratedArtifactSpec(
-            "models/Stable-diffusion/Anima-3.8B-int8-convrot.safetensors",
-            4_238_326_342,
+            "models/Stable-diffusion/Anima-3.8B-v1.1-int8-convrot.safetensors",
+            5_543_364_574,
             (
-                "anima38_main_attention_mlp_v1",
+                "anima38_v11_main_attention_mlp_v1",
+                "net.anima_v2_connector.semantic_resampler.query_tokens",
                 "net.blocks.0.self_attn.q_proj.weight_scale",
                 "net.blocks.51.mlp.layer2.comfy_quant",
             ),
             (('.comfy_quant"', 520),),
-            "models/Stable-diffusion/Anima-3.8B-int8-convrot.safetensors.sha256",
+            "models/Stable-diffusion/Anima-3.8B-v1.1-int8-convrot.safetensors.sha256",
         ),
         temporary_artifact_ids=frozenset({"anima38-bf16-source"}),
     ),
