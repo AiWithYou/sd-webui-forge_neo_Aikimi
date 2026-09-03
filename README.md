@@ -7,7 +7,7 @@ Aikimi Neoは、[Stable Diffusion WebUI Forge - Neo](https://github.com/Haoming0
 | default branch | `neo` |
 | upstream | `Haoming02/sd-webui-forge-classic`の`neo` |
 | 最終同期基準 | `0d0cb72951b059c8ea17861ba86db8d0f6098c28`（Forge Neo 2.29後の`arch`更新を含む） |
-| upstream取り込みmerge | `c5bae5fd531758abc4de12c3bc8af4d89940b8ce` |
+| upstream取り込みmerge | `661439ba2b44b78346506c9b2f2178bc39275bff` |
 | 主対象 | Windows 11、Python 3.13、NVIDIA GPU |
 | code license | AGPL-3.0。modelとassetには別条件が適用される場合があります。 |
 
