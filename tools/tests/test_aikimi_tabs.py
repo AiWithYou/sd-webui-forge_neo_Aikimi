@@ -52,6 +52,11 @@ class AikimiTabsTests(unittest.TestCase):
         self.assertIn("if (!containerId || !clickNativeTab(containerId))", self.javascript)
         self.assertIn('const FEATURE_NAV_ID = "aikimi-feature-nav"', self.javascript)
         self.assertNotIn("Krea2 2-Stage Upscale", self.javascript)
+
+    def test_aliases_keep_the_selected_forge_mode_visually_selected(self):
+        stylesheet = (ROOT / "extensions-builtin" / "aikimi-ui" / "style.css").read_text(encoding="utf-8")
+        self.assertNotIn('[data-active-feature="krea2"] + #tabs', stylesheet)
+        self.assertNotIn('[data-active-feature="anima38"] + #tabs', stylesheet)
         self.assertNotIn("gr.Blocks", self.javascript)
 
     def test_aliases_do_not_require_lazy_controls_before_base_tab_click(self):
@@ -134,8 +139,11 @@ class AikimiTabsTests(unittest.TestCase):
         self.assertIn("function registerExtraNetworkPrompt(tabname, id)", source)
         self.assertIn("if (!textarea) return false", source)
         self.assertIn('textarea.dataset.extraNetworksPromptRegistered === "true"', source)
+        self.assertIn('search.dataset.extraNetworksInitialized === "true"', source)
+        self.assertIn('tabnav.querySelector(":scope > .extra-networks-controls-div")', source)
         self.assertIn("onUiUpdate(function ()", source)
-        self.assertIn('registerExtraNetworkPrompts("img2img")', source)
+        self.assertIn("setupExtraNetworks();", source)
+        self.assertIn("if (applyFunction) applyFunction(true)", source)
 
     def test_aikimi_group_is_an_external_sibling_of_forge_tabs(self):
         self.assertIn("tabs.parentElement.insertBefore(row, tabs)", self.javascript)

@@ -21,7 +21,7 @@ from modules.sd_models import checkpoint_tiles
 from modules.sd_vae import vae_dict
 from modules.shared import opts, state
 from modules.ui_components import InputAccordion
-from modules_forge.main_entry import module_list
+from modules_forge.main_entry import module_kind, module_list
 
 
 class PiDForForge(scripts.Script):
@@ -38,7 +38,7 @@ class PiDForForge(scripts.Script):
 
     def ui(self, *args, **kwargs):
         vaes: list[str] = sorted(vae_dict.keys())
-        modules: list[str] = [m for m in sorted(module_list.keys()) if m not in vaes]
+        modules: list[str] = [m for m in sorted(module_list.keys()) if module_kind(m) == "text_encoder"]
 
         with InputAccordion(False, label=self.title()) as enable:
             prompt = gr.Textbox(value=None, lines=3, max_lines=3, label="Prompt", placeholder="(leave empty to use main prompt)")
@@ -156,6 +156,7 @@ class PiDForForge(scripts.Script):
             n_iter=1,
             steps=4,
             cfg_scale=1.0,
+            distilled_cfg_scale=1.5,
             width=p.width * 4,
             height=p.height * 4,
             restore_faces=False,

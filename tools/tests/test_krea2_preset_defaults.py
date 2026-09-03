@@ -159,15 +159,19 @@ class Krea2PresetDefaultTests(unittest.TestCase):
         )
 
         calls = mock.Mock()
+        calls.resolve_module_values.return_value = ["resolved-vae.safetensors"]
+        calls.sd_models.get_closet_checkpoint_match.return_value = object()
         calls.checkpoint_change.return_value = False
         namespace.update(
+            resolve_module_values=calls.resolve_module_values,
             dtype_change=calls.dtype_change,
             modules_change=calls.modules_change,
             checkpoint_change=calls.checkpoint_change,
             refresh_model_loading_parameters=calls.refresh_model_loading_parameters,
+            sd_models=calls.sd_models,
             shared=mock.Mock(
                 config_filename="config.json",
-                opts=mock.Mock(save=calls.save),
+                opts=mock.Mock(set=calls.set, save=calls.save),
             ),
         )
 
@@ -181,8 +185,16 @@ class Krea2PresetDefaultTests(unittest.TestCase):
         self.assertEqual(
             calls.mock_calls,
             [
+                mock.call.resolve_module_values(["vae.safetensors"]),
+                mock.call.sd_models.get_closet_checkpoint_match("unchanged.safetensors"),
+                mock.call.set("forge_preset", "krea"),
                 mock.call.dtype_change("Automatic", "krea", save=False, refresh=False),
-                mock.call.modules_change(["vae.safetensors"], "krea", save=False, refresh=False),
+                mock.call.modules_change(
+                    ["resolved-vae.safetensors"],
+                    "krea",
+                    save=False,
+                    refresh=False,
+                ),
                 mock.call.checkpoint_change("unchanged.safetensors", "krea", save=False, refresh=False),
                 mock.call.save("config.json"),
                 mock.call.refresh_model_loading_parameters(),

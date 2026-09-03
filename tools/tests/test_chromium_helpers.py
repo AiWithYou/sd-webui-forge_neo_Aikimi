@@ -61,7 +61,7 @@ class ChromiumCleanupTests(unittest.TestCase):
 
         with (
             patch.object(chromium_helpers.os, "name", "nt"),
-            patch.object(chromium_helpers.shutil, "which", return_value=r"C:\Windows\System32\taskkill.exe"),
+            patch.object(chromium_helpers, "_find_windows_taskkill", return_value=r"C:\Windows\System32\taskkill.exe"),
             self.windows_taskkill(process) as taskkill,
         ):
             chromium_helpers.close_chromium(
@@ -81,7 +81,7 @@ class ChromiumCleanupTests(unittest.TestCase):
 
         with (
             patch.object(chromium_helpers.os, "name", "nt"),
-            patch.object(chromium_helpers.shutil, "which", return_value=r"C:\Windows\System32\taskkill.exe"),
+            patch.object(chromium_helpers, "_find_windows_taskkill", return_value=r"C:\Windows\System32\taskkill.exe"),
             self.windows_taskkill(process) as taskkill,
             self.assertRaisesRegex(ValueError, "unexpected close failure"),
         ):
@@ -108,7 +108,7 @@ class ChromiumCleanupTests(unittest.TestCase):
 
         with (
             patch.object(chromium_helpers.os, "name", "nt"),
-            patch.object(chromium_helpers.shutil, "which", return_value=r"C:\Windows\System32\taskkill.exe"),
+            patch.object(chromium_helpers, "_find_windows_taskkill", return_value=r"C:\Windows\System32\taskkill.exe"),
             patch.object(
                 chromium_helpers.subprocess,
                 "run",
@@ -126,13 +126,72 @@ class ChromiumCleanupTests(unittest.TestCase):
 
         with (
             patch.object(chromium_helpers.os, "name", "nt"),
-            patch.object(chromium_helpers.shutil, "which", return_value=None),
+            patch.object(chromium_helpers, "_find_windows_taskkill", return_value=None),
             self.assertRaisesRegex(RuntimeError, "taskkill is unavailable"),
         ):
             chromium_helpers.close_chromium(process, profile_flush_delay=0)
 
         self.assertTrue(process.terminated)
         self.assertEqual(process.returncode, -1)
+
+    def test_nonzero_taskkill_needs_root_exit_and_owned_port_release(self):
+        process = FakeProcess()
+
+        def root_exits_during_taskkill(*_args, **_kwargs):
+            process.returncode = 0
+            return subprocess.CompletedProcess([], 128)
+
+        with (
+            patch.object(chromium_helpers.os, "name", "nt"),
+            patch.object(chromium_helpers, "_find_windows_taskkill", return_value=r"C:\Windows\System32\taskkill.exe"),
+            patch.object(chromium_helpers.subprocess, "run", side_effect=root_exits_during_taskkill),
+            patch.object(chromium_helpers, "_wait_for_port_release", return_value=False) as port_release,
+            self.assertRaisesRegex(RuntimeError, "taskkill failed with exit code 128"),
+        ):
+            chromium_helpers.close_chromium(
+                process,
+                owned_port=9222,
+                profile_flush_delay=0,
+            )
+
+        port_release.assert_called_once_with(9222)
+        self.assertFalse(process.killed)
+
+    def test_nonzero_taskkill_is_normalized_only_after_owned_port_release(self):
+        process = FakeProcess()
+
+        def root_exits_during_taskkill(*_args, **_kwargs):
+            process.returncode = 0
+            return subprocess.CompletedProcess([], 128)
+
+        with (
+            patch.object(chromium_helpers.os, "name", "nt"),
+            patch.object(chromium_helpers, "_find_windows_taskkill", return_value=r"C:\Windows\System32\taskkill.exe"),
+            patch.object(chromium_helpers.subprocess, "run", side_effect=root_exits_during_taskkill),
+            patch.object(chromium_helpers, "_wait_for_port_release", return_value=True) as port_release,
+        ):
+            chromium_helpers.close_chromium(
+                process,
+                owned_port=9222,
+                profile_flush_delay=0,
+            )
+
+        port_release.assert_called_once_with(9222)
+        self.assertFalse(process.killed)
+
+    def test_already_exited_root_still_requires_owned_port_release(self):
+        process = FakeProcess()
+        process.returncode = 0
+
+        with (
+            patch.object(chromium_helpers, "_wait_for_port_release", return_value=False),
+            self.assertRaisesRegex(RuntimeError, "CDP port is still in use"),
+        ):
+            chromium_helpers.close_chromium(
+                process,
+                owned_port=9222,
+                profile_flush_delay=0,
+            )
 
 
 if __name__ == "__main__":

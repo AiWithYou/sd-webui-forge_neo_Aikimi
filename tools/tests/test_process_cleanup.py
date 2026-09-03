@@ -1,8 +1,8 @@
 from contextlib import nullcontext
 from pathlib import Path
-from types import SimpleNamespace
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 _ORIGINAL_ARGV = sys.argv[:]
@@ -62,6 +62,39 @@ class ProcessCleanupTests(unittest.TestCase):
             processing.process_images(request)
 
         runner.on_process_cleanup.assert_called_once_with(request)
+
+    def test_generation_overrides_use_narrow_module_boundary_without_mutating_request(self):
+        runner = Mock()
+        request = self._processing(runner)
+        original = {
+            "forge_additional_modules": ["safe-selector.safetensors"],
+            "sd_model_checkpoint": "missing-checkpoint.safetensors",
+        }
+        request.override_settings = original
+        with (
+            patch.object(processing, "set_config") as set_config,
+            patch.object(processing, "manage_model_and_prompt_cache"),
+            patch.object(processing.sd_samplers, "fix_p_invalid_sampler_and_scheduler"),
+            patch.object(processing.profiling, "Profiler", return_value=nullcontext()),
+            patch.object(processing, "process_images_inner", return_value=object()),
+        ):
+            processing.process_images(request)
+
+        self.assertIs(request.override_settings, original)
+        self.assertEqual(
+            original,
+            {
+                "forge_additional_modules": ["safe-selector.safetensors"],
+                "sd_model_checkpoint": "missing-checkpoint.safetensors",
+            },
+        )
+        applied = set_config.call_args_list[0]
+        self.assertIsNot(applied.args[0], original)
+        self.assertEqual(
+            applied.args[0],
+            {"forge_additional_modules": ["safe-selector.safetensors"]},
+        )
+        self.assertTrue(applied.kwargs["allow_generation_module_override"])
 
     def test_unload_model_dispatches_tracked_model_cleanup_once(self):
         patcher = object()

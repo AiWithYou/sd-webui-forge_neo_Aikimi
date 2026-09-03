@@ -6,7 +6,7 @@ Aikimi Neoは、[Stable Diffusion WebUI Forge - Neo](https://github.com/Haoming0
 |---|---|
 | default branch | `neo` |
 | upstream | `Haoming02/sd-webui-forge-classic`の`neo` |
-| 最終同期基準 | `f27709a4bf756078b89c947bd256d1c19ada71ef` |
+| 最終同期基準 | `0d0cb72951b059c8ea17861ba86db8d0f6098c28`（Forge Neo 2.29後の`arch`更新を含む） |
 | upstream取り込みmerge | `c5bae5fd531758abc4de12c3bc8af4d89940b8ce` |
 | 主対象 | Windows 11、Python 3.13、NVIDIA GPU |
 | code license | AGPL-3.0。modelとassetには別条件が適用される場合があります。 |
@@ -149,9 +149,9 @@ Forge由来の`txt2img`、`img2img`、`Extras`、`Settings`は、Forge Neoのタ
 
 タブが表示されていても、modelやruntimeの導入が完了しているとは限りません。実行可否はDiagnosticsまたは`/aikimi/api/v1/capabilities`で確認してください。
 
-Windows、Python 3.13、Gradio 6.17.3の実WebUIをfresh Chromeで開き、Krea2とAnimaのUI Preset選択、両aliasのタブ維持と既定移動、タブごとのAnima設定欄、SenseNova、MiniMax H3、Forgeタブへの復帰、Settings、UI再読込、PC幅と390px幅を確認しています。CPU／UI debugでの画面操作確認であり、checkpointを読み込むGPU実生成、画質、end-to-end時間、VRAMの確認とは区別します。
+Windows、Python 3.13、Gradio 6.17.3の実WebUIをChromeで開き、Krea2が`txt2img`と`img2img`の現在位置を維持し、他タブからだけ`txt2img`へ戻ることを確認しています。両モードのLora検索、Preset表示、選択中のForgeタブ表示も確認し、ページ由来のconsole errorはありませんでした。
 
-`c5bae5fd`で取り込んだupstreamの演算最適化と、その後に追加したCPU向けFlux2 VAE経路は、synthetic tensorのmicrobenchmarkと回帰テストで確認しています。model load、実生成、画質、end-to-end時間、VRAMは今回の計測対象外であり、この結果を生成全体の高速化率として扱いません。実生成を測定した既存機能は、各guideへ条件と結果を分けて記載します。
+今回取り込んだForge Neo 2.29と依存更新は、CPU回帰テストに加え、RTX 3090でKrea2の`txt2img`／`img2img`、Anima 3.8B v1、Anima 3.8B v1.1の実生成まで確認しています。Anima v1.1はPreset条件の512×512、32 steps、ER SDEで、Semantic Connector v2を含む非空の正常画像を確認しました。ここでの結果を、未計測modelの速度や画質へ一般化しません。
 
 - [Anima 3.8B guide](extensions-builtin/anima-3-8b/README.md)
 - [SenseNova U1.5 Studio guide](extensions-builtin/sensenova-u15-studio/README.md)

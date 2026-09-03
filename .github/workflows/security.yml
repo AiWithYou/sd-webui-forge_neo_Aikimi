@@ -85,20 +85,12 @@ jobs:
         with:
           inputs: requirements.txt
           no-deps: true
-          # Exact temporary baseline only: diffusers 0.38 and Transformers 5.x
-          # require GPU/model regression runs; setuptools 83 conflicts with
-          # torch 2.11's <82 constraint; diskcache has no fixed release.
+          # Exact temporary baseline only: diskcache has no fixed release,
+          # while setuptools >=83 conflicts with torch 2.11's <82 constraint.
           # The expiry step above prevents this list from becoming permanent.
           ignore-vulns: >-
-            PYSEC-2026-2446
-            PYSEC-2026-40
-            PYSEC-2026-41
             PYSEC-2026-2447
             PYSEC-2026-3447
-            PYSEC-2025-217
-            PYSEC-2026-2290
-            PYSEC-2026-2288
-            PYSEC-2026-2289
           vulnerability-service: PyPI
       - name: Resolve and audit the isolated asset toolchain
         uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0

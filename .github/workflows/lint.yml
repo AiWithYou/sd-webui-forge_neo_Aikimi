@@ -21,6 +21,7 @@ on:
       - "tools/aikimi_setup.py"
       - "tools/run_ci_tests.py"
       - "tools/tests/chromium_helpers.py"
+      - "tools/tests/test_additional_module_identity.py"
       - "tools/tests/test_aikimi_setup.py"
       - "tools/tests/test_aikimi_diagnostics.py"
       - "tools/tests/test_aikimi_tabs.py"
@@ -35,7 +36,11 @@ on:
       - "tools/tests/test_gradio_frontend_compat.py"
       - "tools/tests/test_gradio_frontend_compat_chromium.py"
       - "tools/tests/test_gradio_chromium_smoke.py"
+      - "tools/tests/test_option_migrations.py"
+      - "tools/tests/test_patcher_cleanup.py"
+      - "tools/tests/test_quant_ops_zero_scale.py"
       - "tools/tests/test_remote_auth_middleware.py"
+      - "tools/tests/test_repository_privacy.py"
       - "tools/tests/test_run_ci_tests.py"
       - "tools/tests/test_safe_image_fetch.py"
       - "tools/tests/test_security_redaction.py"
@@ -64,6 +69,7 @@ on:
       - "tools/aikimi_setup.py"
       - "tools/run_ci_tests.py"
       - "tools/tests/chromium_helpers.py"
+      - "tools/tests/test_additional_module_identity.py"
       - "tools/tests/test_aikimi_setup.py"
       - "tools/tests/test_aikimi_diagnostics.py"
       - "tools/tests/test_aikimi_tabs.py"
@@ -78,7 +84,11 @@ on:
       - "tools/tests/test_gradio_frontend_compat.py"
       - "tools/tests/test_gradio_frontend_compat_chromium.py"
       - "tools/tests/test_gradio_chromium_smoke.py"
+      - "tools/tests/test_option_migrations.py"
+      - "tools/tests/test_patcher_cleanup.py"
+      - "tools/tests/test_quant_ops_zero_scale.py"
       - "tools/tests/test_remote_auth_middleware.py"
+      - "tools/tests/test_repository_privacy.py"
       - "tools/tests/test_run_ci_tests.py"
       - "tools/tests/test_safe_image_fetch.py"
       - "tools/tests/test_security_redaction.py"
@@ -126,6 +136,7 @@ jobs:
             tools/aikimi_setup.py
             tools/run_ci_tests.py
             tools/tests/chromium_helpers.py
+            tools/tests/test_additional_module_identity.py
             tools/tests/test_aikimi_setup.py
             tools/tests/test_aikimi_diagnostics.py
             tools/tests/test_aikimi_tabs.py
@@ -140,7 +151,11 @@ jobs:
             tools/tests/test_gradio_frontend_compat.py
             tools/tests/test_gradio_frontend_compat_chromium.py
             tools/tests/test_gradio_chromium_smoke.py
+            tools/tests/test_option_migrations.py
+            tools/tests/test_patcher_cleanup.py
+            tools/tests/test_quant_ops_zero_scale.py
             tools/tests/test_remote_auth_middleware.py
+            tools/tests/test_repository_privacy.py
             tools/tests/test_run_ci_tests.py
             tools/tests/test_safe_image_fetch.py
             tools/tests/test_security_redaction.py

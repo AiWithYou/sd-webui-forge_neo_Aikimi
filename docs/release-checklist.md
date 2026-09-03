@@ -77,7 +77,7 @@ Aikimi画像assetの権利noticeを確認できないreleaseは、配布条件�
 日本語文書の最終確認:
 
 ```powershell
-C:\Users\kanat\.codex\skills\enforce-japanese-style\scripts\japanese_style_guard.py lint `
+& "$env:USERPROFILE\.codex\skills\enforce-japanese-style\scripts\japanese_style_guard.py" lint `
   README.md SECURITY.md CONTRIBUTING.md THIRD_PARTY_NOTICES.md docs
 ```
 

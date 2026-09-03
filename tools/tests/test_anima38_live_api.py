@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import os
+import unittest
 from pathlib import Path
 from urllib import request as urlrequest
-import unittest
 
 from PIL import Image, ImageStat
 from PIL.PngImagePlugin import PngInfo
@@ -21,11 +22,16 @@ API = os.environ.get("ANIMA_38B_LIVE_API", "http://127.0.0.1:7862").rstrip(
 )
 TIMEOUT = int(os.environ.get("ANIMA_38B_LIVE_TIMEOUT", "1800"))
 ROOT = Path(__file__).resolve().parents[2]
-CHECKPOINT = (
-    ROOT
-    / "models"
-    / "Stable-diffusion"
-    / "Anima-3.8B-int8-convrot.safetensors"
+CHECKPOINT = Path(
+    os.environ.get(
+        "ANIMA_38B_LIVE_CHECKPOINT",
+        str(
+            ROOT
+            / "models"
+            / "Stable-diffusion"
+            / "Anima-3.8B-int8-convrot.safetensors"
+        ),
+    )
 )
 NATIVE_TEXT_ENCODER = (
     ROOT / "models" / "text_encoder" / "qwen_3_06b_base.safetensors"
@@ -61,6 +67,23 @@ def post_json(endpoint: str, payload: dict) -> dict:
 def get_json(endpoint: str) -> dict:
     with urlrequest.urlopen(f"{API}{endpoint}", timeout=TIMEOUT) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def module_selector(path: Path, kind: str, root_index: int) -> str:
+    names = [item["model_name"] for item in get_json("/sdapi/v1/sd-modules")]
+    if path.name in names:
+        return path.name
+
+    identity = f"{root_index}:{kind.casefold()}:{path.name.casefold()}"
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    prefix = f"{path.stem} [{kind}:"
+    for name in names:
+        if not name.startswith(prefix) or not name.endswith(path.suffix):
+            continue
+        selector_digest = name[len(prefix) : -len(f"]{path.suffix}")]
+        if digest.startswith(selector_digest):
+            return name
+    raise AssertionError(f"No safe module selector was published for {path.name}")
 
 
 @unittest.skipUnless(LIVE, "set ANIMA_38B_LIVE_API_TEST=1 for the live smoke")
@@ -165,8 +188,8 @@ class Anima38LiveApiTests(unittest.TestCase):
                 "override_settings": {
                     "sd_model_checkpoint": CHECKPOINT.name,
                     "forge_additional_modules": [
-                        VAE.name,
-                        NATIVE_TEXT_ENCODER.name,
+                        module_selector(VAE, "VAE", 0),
+                        module_selector(NATIVE_TEXT_ENCODER, "text_encoder", 1),
                     ],
                     "forge_unet_storage_dtype": "Automatic",
                 },
@@ -196,10 +219,14 @@ class Anima38LiveApiTests(unittest.TestCase):
         self.assertGreater(sum(ImageStat.Stat(image).var) / 3.0, 1.0)
 
         info = str(response.get("info", ""))
-        if enable_adapter:
+        bundled_v2 = "v1.1" in CHECKPOINT.name.casefold()
+        if enable_adapter or bundled_v2:
             self.assertIn("Anima 3.8B adapter", info)
         else:
             self.assertNotIn("Anima 3.8B adapter", info)
+        if bundled_v2:
+            self.assertIn("anima_qwen35_quality_anchored_semantic_connector_v2", info)
+            self.assertIn("Anima 3.8B bundle", info)
         if standard_lora:
             self.assertIn("Lora hashes", info)
             self.assertIn("Anima 3.8B standard LoRA", info)

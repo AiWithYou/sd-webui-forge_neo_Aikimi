@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import sys
 import unittest
@@ -8,6 +9,7 @@ from unittest import mock
 import torch
 from PIL import Image
 
+from backend import attention
 from backend.nn import anima, vae
 from backend.nn.vae import (
     AutoencoderKLFlux2,
@@ -76,6 +78,58 @@ def _load_util_module():
 
 upscaler = _load_upscaler_module()
 util = _load_util_module()
+
+
+class UpstreamNeoAttentionTests(unittest.TestCase):
+    def test_forced_attention_precision_uses_mapping_and_fallback(self):
+        with mock.patch.object(
+            attention.memory_management,
+            "force_upcast_attention_dtype",
+            return_value={torch.float16: torch.float32},
+        ):
+            self.assertIs(
+                attention.get_attn_precision(torch.bfloat16, torch.float16),
+                torch.float32,
+            )
+            self.assertIs(
+                attention.get_attn_precision(torch.bfloat16, torch.float64),
+                torch.bfloat16,
+            )
+
+
+class UpstreamNeoHiresOutputTests(unittest.TestCase):
+    def test_hires_output_directory_is_restricted_like_other_local_paths(self):
+        tree = ast.parse((ROOT / "modules" / "shared_options.py").read_text(encoding="utf-8"))
+        restricted = next(
+            node.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "restricted_opts" for target in node.targets)
+        )
+
+        self.assertIn("outdir_hires_samples", {element.value for element in restricted.elts})
+
+    def test_global_output_precedes_hires_specific_and_current_paths(self):
+        tree = ast.parse((ROOT / "modules" / "processing.py").read_text(encoding="utf-8"))
+        resolver = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_resolve_hires_output_path"
+        )
+        namespace = {}
+        exec(  # noqa: S102 - execute only the extracted pure local helper
+            compile(
+                ast.fix_missing_locations(ast.Module(body=[resolver], type_ignores=[])),
+                filename="modules/processing.py",
+                mode="exec",
+            ),
+            namespace,
+        )
+        resolve = namespace["_resolve_hires_output_path"]
+
+        self.assertEqual(resolve("global", "hires", "txt2img"), "global")
+        self.assertEqual(resolve("", "hires", "txt2img"), "hires")
+        self.assertEqual(resolve("", "", "txt2img"), "txt2img")
 
 
 class _Ones(torch.nn.Module):

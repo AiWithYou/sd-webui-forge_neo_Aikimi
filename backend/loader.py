@@ -1,15 +1,16 @@
 import importlib
 import logging
 import os.path
+from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from backend.diffusion_engine.base import ForgeDiffusionEngine
 
 import torch
 import yaml
-from transformers.modeling_utils import no_init_weights
+from transformers.initialization import no_init_weights
 
 import backend.args
 from backend import memory_management, utils

@@ -47,7 +47,7 @@ _INPAINT_FULL_RES_OVERLAY_MASK = "inpaint_full_res_overlay_mask"
 
 
 def _change_hires_modules_if_needed(hr_additional_modules: list | None) -> bool:
-    if not hr_additional_modules or "Use same choices" in hr_additional_modules:
+    if hr_additional_modules is None or "Use same choices" in hr_additional_modules:
         return False
 
     return main_entry.modules_change(
@@ -181,6 +181,10 @@ def txt2img_image_conditioning(sd_model, x, width, height):
         # Still takes up a bit of memory, but no encoder call.
         # Pretty sure we can just make this a 1x1 image since its not going to be used besides its batch size.
         return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
+
+
+def _resolve_hires_output_path(global_path: str, hires_path: str, current_path: str) -> str:
+    return global_path or hires_path or current_path
 
 
 @dataclass(repr=False)
@@ -783,7 +787,7 @@ def create_infotext(p: "StableDiffusionProcessing", all_prompts, all_seeds, all_
     )
 
     for i, m in enumerate(_overridden_modules or shared.opts.forge_additional_modules):
-        generation_params[f"Module {i+1}"] = os.path.splitext(os.path.basename(m))[0]
+        generation_params[f"Module {i+1}"] = main_entry.module_infotext_reference(m)
 
     if shared.opts.forge_unet_storage_dtype != "Automatic":
         generation_params["Diffusion in Low Bits"] = shared.opts.forge_unet_storage_dtype
@@ -858,18 +862,26 @@ def process_images(p: StableDiffusionProcessing) -> Processed:
     if p.scripts is not None:
         p.scripts.before_process(p)
 
-    stored_opts = _capture_override_settings(p.override_settings)
+    request_overrides = dict(p.override_settings or {})
+    stored_opts = _capture_override_settings(request_overrides)
+    _vae_override = None
 
     try:
         # if no checkpoint override or the override checkpoint can't be found, remove override entry and load opts checkpoint
         # and if after running refiner, the refiner model is not unloaded - webui swaps back to main model here, if model over is present it will be reloaded afterwards
-        if sd_models.checkpoint_aliases.get(p.override_settings.get("sd_model_checkpoint")) is None:
-            p.override_settings.pop("sd_model_checkpoint", None)
+        if sd_models.checkpoint_aliases.get(request_overrides.get("sd_model_checkpoint")) is None:
+            request_overrides.pop("sd_model_checkpoint", None)
 
-        _vae_override = p.override_settings.pop("sd_vae", None)
+        _vae_override = request_overrides.pop("sd_vae", None)
 
         # apply any options overrides
-        set_config(p.override_settings, is_api=True, run_callbacks=False, save_config=False)
+        set_config(
+            request_overrides,
+            is_api=True,
+            run_callbacks=False,
+            save_config=False,
+            allow_generation_module_override=True,
+        )
 
         # load/reload model and manage prompt cache as needed
         if getattr(p, "txt2img_upscale", False):
@@ -1375,7 +1387,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                     self.extra_generation_params["Hires Module 1"] = "Use same choices"
                 else:
                     for i, m in enumerate(self.hr_additional_modules):
-                        self.extra_generation_params[f"Hires Module {i+1}"] = os.path.splitext(os.path.basename(m))[0]
+                        self.extra_generation_params[f"Hires Module {i+1}"] = main_entry.module_infotext_reference(m)
 
             if self.hr_scheduler is None:
                 self.hr_scheduler = self.scheduler
@@ -1582,6 +1594,12 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
 
         self.rng = rng.ImageRNG(samples.shape[1:], self.seeds, subseeds=self.subseeds, subseed_strength=self.subseed_strength, seed_resize_from_h=self.seed_resize_from_h, seed_resize_from_w=self.seed_resize_from_w)
         noise = self.rng.next()
+
+        self.outpath_samples = _resolve_hires_output_path(
+            opts.outdir_samples,
+            opts.outdir_hires_samples,
+            self.outpath_samples,
+        )
 
         # GC now before running the next img2img to prevent running out of memory
         devices.torch_gc()

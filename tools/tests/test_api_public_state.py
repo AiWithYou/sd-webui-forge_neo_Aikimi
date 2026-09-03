@@ -11,6 +11,8 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from fastapi import HTTPException
+
 import modules
 import modules_forge
 from modules.aikimi_security.api_policy import (
@@ -96,6 +98,63 @@ def launch_options(**overrides) -> SimpleNamespace:
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def load_public_api_model_surface(shared_value, sd_models_value):
+    """Load only the public model helpers/routes without importing the full UI."""
+
+    source_path = ROOT / "modules" / "api" / "api.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    helper_names = {
+        "_portable_path_name",
+        "_public_module_reference",
+        "_public_forge_model_status",
+    }
+    helpers = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in helper_names]
+    api_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Api")
+    method_names = {
+        "get_upscalers",
+        "get_sd_models",
+        "get_sd_vaes_and_text_encoders",
+        "get_face_restorers",
+        "get_forge_model_status",
+        "ensure_forge_model_status",
+    }
+    public_api_class = ast.ClassDef(
+        name="PublicApiModelSurface",
+        bases=[],
+        keywords=[],
+        body=[node for node in api_class.body if isinstance(node, ast.FunctionDef) and node.name in method_names],
+        decorator_list=[],
+    )
+    isolated = ast.fix_missing_locations(ast.Module(body=[*helpers, public_api_class], type_ignores=[]))
+    namespace = {"os": os, "shared": shared_value, "sd_models": sd_models_value}
+    exec(  # noqa: S102 - execute only the extracted local API surface
+        compile(isolated, str(source_path), "exec"), namespace
+    )
+    return namespace
+
+
+def load_api_processing_helper():
+    source_path = ROOT / "modules" / "api" / "api.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    helper = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_run_api_processing"
+    )
+    namespace = {
+        "HTTPException": HTTPException,
+        "process_images": MagicMock(),
+        "safe_error_message": str,
+    }
+    exec(  # noqa: S102 - execute only the extracted local helper
+        compile(
+            ast.fix_missing_locations(ast.Module(body=[helper], type_ignores=[])),
+            str(source_path),
+            "exec",
+        ),
+        namespace,
+    )
+    return namespace
 
 
 class PublicCommandFlagTests(unittest.TestCase):
@@ -194,6 +253,186 @@ class PublicOptionTests(unittest.TestCase):
         self.assertIn('shared.opts.data["api_forbid_local_requests"] = True', source)
 
 
+class PublicModelRouteTests(unittest.TestCase):
+    def build_surface(self):
+        checkpoint = SimpleNamespace(
+            title="nested/model.safetensors [0123456789]",
+            model_name="nested_model",
+            shorthash="0123456789",
+            sha256="0" * 64,
+            filename=r"C:\Users\private-user\models\model.safetensors",
+            config=r"C:\Users\private-user\configs\model.yaml",
+        )
+        shared_value = SimpleNamespace(
+            sd_upscalers=[
+                SimpleNamespace(
+                    name="Private upscaler",
+                    scaler=SimpleNamespace(model_name="upscaler-model"),
+                    data_path="/home/private-user/models/upscaler.pth",
+                    scale=4,
+                )
+            ],
+            face_restorers=[
+                SimpleNamespace(
+                    name=lambda: "Private restorer",
+                    cmd_dir=r"C:\Users\private-user\extensions\face-restorer",
+                )
+            ],
+        )
+        sd_models_value = fake_module(
+            "modules.sd_models",
+            checkpoints_list={checkpoint.title: checkpoint},
+            model_data=SimpleNamespace(
+                sd_model=object(),
+                forge_loading_parameters={"additional_modules": []},
+            ),
+            forge_model_reload=MagicMock(return_value=(object(), False)),
+        )
+        namespace = load_public_api_model_surface(shared_value, sd_models_value)
+        return namespace, sd_models_value
+
+    def test_path_helpers_return_selector_or_portable_basename(self):
+        namespace, _sd_models = self.build_surface()
+        module_path = r"C:\Users\private-user\models\text_encoder\encoder.safetensors"
+        selector = "encoder [text_encoder:01234567].safetensors"
+        module_list = {selector: module_path}
+
+        self.assertEqual(
+            namespace["_portable_path_name"]("/home/private-user/models/checkpoint.safetensors"),
+            "checkpoint.safetensors",
+        )
+        self.assertEqual(
+            namespace["_portable_path_name"](r"C:\Users\private-user\models\checkpoint.safetensors"),
+            "checkpoint.safetensors",
+        )
+        self.assertEqual(
+            namespace["_public_module_reference"](module_path, module_list),
+            selector,
+        )
+        self.assertEqual(
+            namespace["_public_module_reference"](
+                "/home/private-user/models/missing-encoder.safetensors",
+                module_list,
+            ),
+            "missing-encoder.safetensors",
+        )
+
+        status = namespace["_public_forge_model_status"](
+            {
+                "loaded": True,
+                "checkpoint": r"C:\Users\private-user\models\model.safetensors",
+                "additional_modules": [
+                    module_path,
+                    "/home/private-user/models/missing-encoder.safetensors",
+                ],
+            },
+            module_list,
+        )
+        self.assertEqual(status["checkpoint"], "model.safetensors")
+        self.assertEqual(
+            status["additional_modules"],
+            [selector, "missing-encoder.safetensors"],
+        )
+        serialized = json.dumps(status)
+        self.assertNotIn("private-user", serialized)
+        self.assertNotIn("C:\\\\Users", serialized)
+        self.assertNotIn("/home/", serialized)
+
+    def test_forge_model_status_routes_sanitize_runtime_paths(self):
+        namespace, sd_models_value = self.build_surface()
+        module_path = r"C:\Users\private-user\models\text_encoder\encoder.safetensors"
+        module_selector = "encoder [text_encoder:01234567].safetensors"
+        main_entry = fake_module(
+            "modules_forge.main_entry",
+            module_list={module_selector: module_path},
+            ensure_module_registry=MagicMock(),
+        )
+        describe_loaded_model = MagicMock(
+            return_value={
+                "loaded": True,
+                "checkpoint": r"C:\Users\private-user\models\model.safetensors",
+                "additional_modules": [module_path],
+                "quantization": {},
+                "inspection_errors": [],
+            }
+        )
+        status_module = fake_module(
+            "modules_forge.model_runtime_status",
+            describe_loaded_model=describe_loaded_model,
+        )
+        api = namespace["PublicApiModelSurface"]()
+        api.queue_lock = MagicMock()
+
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "modules.sd_models": sd_models_value,
+                    "modules_forge.main_entry": main_entry,
+                    "modules_forge.model_runtime_status": status_module,
+                },
+            ),
+            patch.object(modules, "sd_models", sd_models_value, create=True),
+            patch.object(modules_forge, "main_entry", main_entry, create=True),
+        ):
+            current = api.get_forge_model_status()
+            ensured = api.ensure_forge_model_status()
+
+        for response in (current, ensured):
+            self.assertEqual(response["checkpoint"], "model.safetensors")
+            self.assertEqual(response["additional_modules"], [module_selector])
+            serialized = json.dumps(response)
+            self.assertNotIn("private-user", serialized)
+            self.assertNotIn("C:\\\\Users", serialized)
+        self.assertEqual(main_entry.ensure_module_registry.call_count, 2)
+        sd_models_value.forge_model_reload.assert_called_once_with()
+
+    def test_model_routes_preserve_public_identity_without_local_paths(self):
+        namespace, sd_models_value = self.build_surface()
+        module_selector = "encoder [text_encoder:01234567].safetensors"
+        module_list = {module_selector: r"C:\Users\private-user\models\text_encoder\encoder.safetensors"}
+        main_entry = fake_module(
+            "modules_forge.main_entry",
+            module_list=module_list,
+            ensure_module_registry=MagicMock(),
+        )
+        api = namespace["PublicApiModelSurface"]()
+
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "modules.sd_models": sd_models_value,
+                    "modules_forge.main_entry": main_entry,
+                },
+            ),
+            patch.object(modules, "sd_models", sd_models_value, create=True),
+            patch.object(modules_forge, "main_entry", main_entry, create=True),
+        ):
+            response = {
+                "upscalers": api.get_upscalers(),
+                "models": api.get_sd_models(),
+                "modules": api.get_sd_vaes_and_text_encoders(),
+                "restorers": api.get_face_restorers(),
+            }
+
+        model = response["models"][0]
+        self.assertEqual(model["title"], "nested/model.safetensors [0123456789]")
+        self.assertEqual(model["model_name"], "nested_model")
+        self.assertEqual(model["hash"], "0123456789")
+        self.assertEqual(model["filename"], "model.safetensors")
+        self.assertEqual(model["config"], "model.yaml")
+        self.assertEqual(response["modules"], [{"model_name": module_selector, "filename": module_selector}])
+        main_entry.ensure_module_registry.assert_called_once_with()
+        self.assertEqual(response["upscalers"][0]["model_path"], "upscaler.pth")
+        self.assertEqual(response["restorers"][0]["cmd_dir"], "face-restorer")
+
+        serialized = json.dumps(response)
+        self.assertNotIn("private-user", serialized)
+        self.assertNotIn("C:\\\\Users", serialized)
+        self.assertNotIn("/home/", serialized)
+
+
 class OptionUpdateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -209,6 +448,8 @@ class OptionUpdateTests(unittest.TestCase):
                 "public_toggle": OptionInfo(False),
                 "api_enable_requests": OptionInfo(True, restrict_api=True),
                 "outdir_samples": OptionInfo(PRIVATE_WINDOWS_PATH),
+                "forge_additional_modules": OptionInfo([]),
+                "forge_additional_modules_krea": OptionInfo([]),
             },
             restricted_opts={"outdir_samples"},
         )
@@ -224,9 +465,11 @@ class OptionUpdateTests(unittest.TestCase):
         )
         self.fake_main_entry = fake_module(
             "modules_forge.main_entry",
+            ModuleResolutionError=ValueError,
             checkpoint_change=MagicMock(return_value=False),
             modules_change=MagicMock(return_value=False),
             refresh_model_loading_parameters=MagicMock(),
+            resolve_generation_module_values=MagicMock(return_value=[PRIVATE_WINDOWS_PATH]),
         )
 
     def runtime_patches(self):
@@ -244,10 +487,10 @@ class OptionUpdateTests(unittest.TestCase):
             patch.object(modules_forge, "main_entry", self.fake_main_entry, create=True),
         )
 
-    def call_set_config(self, request):
+    def call_set_config(self, request, **kwargs):
         patches = self.runtime_patches()
         with patches[0], patches[1], patches[2], patches[3]:
-            return self.sysinfo.set_config(request, is_api=True)
+            return self.sysinfo.set_config(request, is_api=True, **kwargs)
 
     def test_valid_api_update_changes_and_saves_reviewed_option(self):
         changed = self.call_set_config({"public_count": 2})
@@ -262,6 +505,75 @@ class OptionUpdateTests(unittest.TestCase):
 
         self.assertTrue(self.options.data["api_enable_requests"])
         self.options.save.assert_not_called()
+
+    def test_direct_settings_api_cannot_write_additional_modules(self):
+        request = {"forge_additional_modules": ["safe-selector.safetensors"]}
+
+        with self.assertRaises(self.sysinfo.RestrictedOptionError):
+            self.call_set_config(request)
+
+        self.assertEqual(request, {"forge_additional_modules": ["safe-selector.safetensors"]})
+        self.fake_main_entry.resolve_generation_module_values.assert_not_called()
+        self.fake_main_entry.modules_change.assert_not_called()
+        self.options.save.assert_not_called()
+
+    def test_generation_boundary_resolves_module_selectors_without_mutating_request(self):
+        request = {"forge_additional_modules": ["safe-selector.safetensors"]}
+        self.fake_main_entry.modules_change.return_value = True
+
+        changed = self.call_set_config(
+            request,
+            allow_generation_module_override=True,
+            save_config=False,
+        )
+
+        self.assertEqual(changed, ["forge_additional_modules"])
+        self.assertEqual(request, {"forge_additional_modules": ["safe-selector.safetensors"]})
+        self.fake_main_entry.resolve_generation_module_values.assert_called_once_with(["safe-selector.safetensors"])
+        self.fake_main_entry.modules_change.assert_called_once_with(
+            [PRIVATE_WINDOWS_PATH],
+            preset=None,
+            save=False,
+            refresh=False,
+        )
+        self.fake_main_entry.refresh_model_loading_parameters.assert_called_once_with()
+        self.options.save.assert_not_called()
+
+    def test_generation_boundary_validates_later_keys_before_module_change(self):
+        request = {
+            "forge_additional_modules": ["safe-selector.safetensors"],
+            "public_count": "invalid",
+        }
+
+        with self.assertRaises(self.sysinfo.InvalidOptionTypeError):
+            self.call_set_config(
+                request,
+                allow_generation_module_override=True,
+                save_config=False,
+            )
+
+        self.assertEqual(
+            request,
+            {
+                "forge_additional_modules": ["safe-selector.safetensors"],
+                "public_count": "invalid",
+            },
+        )
+        self.fake_main_entry.resolve_generation_module_values.assert_called_once()
+        self.fake_main_entry.modules_change.assert_not_called()
+        self.fake_main_entry.refresh_model_loading_parameters.assert_not_called()
+        self.options.save.assert_not_called()
+
+    def test_generation_boundary_does_not_open_preset_module_settings(self):
+        with self.assertRaises(self.sysinfo.RestrictedOptionError):
+            self.call_set_config(
+                {"forge_additional_modules_krea": ["safe-selector.safetensors"]},
+                allow_generation_module_override=True,
+                save_config=False,
+            )
+
+        self.fake_main_entry.resolve_generation_module_values.assert_not_called()
+        self.fake_main_entry.modules_change.assert_not_called()
 
     def test_unknown_option_is_422_class_for_null_and_non_null_values(self):
         for value in (None, "unknown"):
@@ -319,6 +631,21 @@ class OptionUpdateTests(unittest.TestCase):
                 for keyword in call.keywords
             )
         )
+
+    def test_generation_handlers_map_invalid_overrides_to_client_errors(self):
+        namespace = load_api_processing_helper()
+        helper = namespace["_run_api_processing"]
+
+        namespace["process_images"].side_effect = self.sysinfo.InvalidOptionTypeError("invalid module selector")
+        with self.assertRaises(HTTPException) as invalid:
+            helper(SimpleNamespace(), MagicMock(), None, [])
+        self.assertEqual(invalid.exception.status_code, 422)
+
+        runner = MagicMock()
+        runner.run.side_effect = self.sysinfo.RestrictedOptionError("restricted generation option")
+        with self.assertRaises(HTTPException) as restricted:
+            helper(SimpleNamespace(), runner, object(), [])
+        self.assertEqual(restricted.exception.status_code, 403)
 
 
 class LaunchPolicyTests(unittest.TestCase):

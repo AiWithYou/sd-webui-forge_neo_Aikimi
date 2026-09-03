@@ -82,7 +82,6 @@ parser.add_argument("--deterministic", action="store_true", help="Use slower det
 vram_group = parser.add_mutually_exclusive_group()
 vram_group.add_argument("--gpu-only", action="store_true", help="Store and run everything on the GPU")
 vram_group.add_argument("--highvram", action="store_true", help="Keeps models in VRAM after usage")
-vram_group.add_argument("--normalvram", action="store_true", help="Force NORMAL_VRAM in case LOW_VRAM gets automatically enabled")
 vram_group.add_argument("--lowvram", action="store_true", help="Split the diffusion model in parts to use less VRAM")
 vram_group.add_argument("--novram", action="store_true", help="When even LOW_VRAM is still not enough")
 vram_group.add_argument("--cpu", action="store_true", help="Use the CPU for everything (slow)")

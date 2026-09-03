@@ -19,25 +19,41 @@ class CiWorkflowBoundaryTests(unittest.TestCase):
     def test_windows_job_tracks_and_runs_its_runner_and_chromium_smokes(self):
         workflow = self.workflow("windows-smoke.yml")
         tracked_twice = (
+            "backend/**",
             "launch.py",
+            "modules_forge/**",
             "modules_forge/forge_canvas/**",
             "script.js",
             "tools/run_ci_tests.py",
             "tools/tests/chromium_helpers.py",
             "tools/tests/test_chromium_helpers.py",
             "tools/tests/test_ci_workflow_boundaries.py",
+            "tools/tests/test_additional_module_identity.py",
+            "tools/tests/test_extra_networks_lora_filter.py",
             "tools/tests/test_gradio_chromium_smoke.py",
+            "tools/tests/test_option_migrations.py",
+            "tools/tests/test_patcher_cleanup.py",
+            "tools/tests/test_quant_ops_zero_scale.py",
+            "tools/tests/test_repository_privacy.py",
             "tools/tests/test_run_ci_tests.py",
+            "tools/tests/test_upstream_neo_regressions.py",
         )
         for path in tracked_twice:
             with self.subTest(path=path):
                 self.assertEqual(sum(line.strip() == f'- "{path}"' for line in workflow.splitlines()), 2)
 
         for module in (
+            "tools.tests.test_additional_module_identity",
             "tools.tests.test_chromium_helpers",
             "tools.tests.test_ci_workflow_boundaries",
+            "tools.tests.test_extra_networks_lora_filter",
             "tools.tests.test_gradio_chromium_smoke",
+            "tools.tests.test_option_migrations",
+            "tools.tests.test_patcher_cleanup",
+            "tools.tests.test_quant_ops_zero_scale",
+            "tools.tests.test_repository_privacy",
             "tools.tests.test_run_ci_tests",
+            "tools.tests.test_upstream_neo_regressions",
         ):
             with self.subTest(module=module):
                 self.assertEqual(sum(line.strip() == f"--module {module}" for line in workflow.splitlines()), 1)
@@ -57,8 +73,13 @@ class CiWorkflowBoundaryTests(unittest.TestCase):
             "modules/gradio_file_url.py",
             "modules/gradio_runtime.py",
             "tools/tests/chromium_helpers.py",
+            "tools/tests/test_additional_module_identity.py",
             "tools/tests/test_chromium_helpers.py",
             "tools/tests/test_ci_workflow_boundaries.py",
+            "tools/tests/test_option_migrations.py",
+            "tools/tests/test_patcher_cleanup.py",
+            "tools/tests/test_quant_ops_zero_scale.py",
+            "tools/tests/test_repository_privacy.py",
         ):
             with self.subTest(path=path):
                 self.assertGreaterEqual(workflow.count(path), 3)

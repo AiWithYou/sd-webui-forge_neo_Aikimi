@@ -43,14 +43,6 @@
     display: none !important;
 }
 
-#aikimi-feature-nav[data-active-feature="krea2"] + #tabs > .tab-wrapper > .tab-container[role="tablist"] > button[aria-controls="tab_img2img"][aria-selected="true"],
-#aikimi-feature-nav[data-active-feature="anima38"] + #tabs > .tab-wrapper > .tab-container[role="tablist"] > button[aria-controls="tab_txt2img"][aria-selected="true"],
-#aikimi-feature-nav[data-active-feature="krea2"] + #tabs > .tab-nav > button[aria-controls="tab_img2img"].selected,
-#aikimi-feature-nav[data-active-feature="anima38"] + #tabs > .tab-nav > button[aria-controls="tab_txt2img"].selected {
-    background: var(--button-secondary-background-fill, var(--background-fill-secondary));
-    box-shadow: none;
-}
-
 .aikimi-diagnostics {
     display: grid;
     gap: 1rem;
@@ -520,11 +512,6 @@
 
     .aikimi-feature-nav__button.aikimi-feature-active {
         box-shadow: inset 0 -2px 0 Highlight;
-    }
-
-    #aikimi-feature-nav[data-active-feature="krea2"] + #tabs > .tab-wrapper > .tab-container[role="tablist"] > button[aria-controls="tab_img2img"][aria-selected="true"],
-    #aikimi-feature-nav[data-active-feature="anima38"] + #tabs > .tab-wrapper > .tab-container[role="tablist"] > button[aria-controls="tab_txt2img"][aria-selected="true"] {
-        background: Canvas;
     }
 
     #aikimi-status {

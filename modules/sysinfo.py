@@ -214,12 +214,20 @@ def get_api_config() -> dict[str, Any]:
     return public_options(shared.opts)
 
 
-def set_config(req: dict[str, Any], is_api=False, run_callbacks=True, save_config=True) -> list[str]:
-    from modules import shared, sd_models
+def set_config(
+    req: dict[str, Any],
+    is_api=False,
+    run_callbacks=True,
+    save_config=True,
+    *,
+    allow_generation_module_override=False,
+) -> list[str]:
+    from modules import sd_models, shared
     from modules_forge import main_entry
 
     should_refresh_model_loading_params = False
     changed_keys: list[str] = []
+    validated_values: dict[str, Any] = {}
 
     if not isinstance(req, dict):
         raise InvalidOptionTypeError("The settings request must be a JSON object.")
@@ -229,7 +237,14 @@ def set_config(req: dict[str, Any], is_api=False, run_callbacks=True, save_confi
     for k, v in req.items():
         if k not in shared.opts.data_labels:
             raise UnknownOptionError(f"Unknown option: {k}")
-        if is_api and not shared.opts.api_accessible(k, write=True):
+        is_generation_module_override = (
+            is_api
+            and allow_generation_module_override
+            and k == "forge_additional_modules"
+        )
+        if is_api and k == "forge_additional_modules" and not is_generation_module_override:
+            raise RestrictedOptionError(f"Option is not writable through the API: {k}")
+        if is_api and not shared.opts.api_accessible(k, write=True) and not is_generation_module_override:
             raise RestrictedOptionError(f"Option is not writable through the API: {k}")
         expected = shared.opts.data.get(k, shared.opts.data_labels[k].default)
         type_is_valid = (
@@ -244,7 +259,15 @@ def set_config(req: dict[str, Any], is_api=False, run_callbacks=True, save_confi
         if k == "sd_model_checkpoint" and v is not None and v not in sd_models.checkpoint_aliases:
             raise InvalidOptionTypeError("The requested checkpoint is not available.")
 
-    for k, v in req.items():
+        if is_generation_module_override:
+            try:
+                validated_values[k] = main_entry.resolve_generation_module_values(v)
+            except main_entry.ModuleResolutionError as error:
+                raise InvalidOptionTypeError(str(error)) from error
+        else:
+            validated_values[k] = v
+
+    for k, v in validated_values.items():
 
         # ignore unchanged options
         if v == shared.opts.data.get(k):

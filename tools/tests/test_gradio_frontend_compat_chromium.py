@@ -126,6 +126,7 @@ def cdp_page(chromium: str, url: str):
                 process,
                 websocket=websocket,
                 close_browser=(lambda: page.send("Browser.close", timeout=2)) if page is not None else None,
+                owned_port=debugging_port,
             )
 
 

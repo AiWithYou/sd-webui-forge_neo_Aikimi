@@ -353,6 +353,59 @@ def _populate_defaults(res: dict):
         res["Rescale CFG"] = 0.0
 
 
+def _resolve_additional_module_parameters(res: dict[str, Any]) -> None:
+    modules = []
+    hr_modules = []
+    modules_valid = True
+    hr_modules_valid = True
+    saw_hires_modules = False
+    hires_mode = None
+
+    if (vae := res.pop("VAE", None)) is not None:
+        selector = main_entry.module_selector_from_infotext(vae)
+        if selector is None:
+            modules_valid = False
+        else:
+            modules.append(selector)
+
+    for key in list(res):
+        if key.startswith("Module "):
+            selector = main_entry.module_selector_from_infotext(res.pop(key))
+            if selector is None:
+                modules_valid = False
+            else:
+                modules.append(selector)
+        elif key.startswith("Hires Module "):
+            saw_hires_modules = True
+            value = res.pop(key)
+            if key == "Hires Module 1" and value in ("Use same choices", "Built-in"):
+                hires_mode = value
+                continue
+            selector = main_entry.module_selector_from_infotext(value)
+            if selector is None:
+                hr_modules_valid = False
+            else:
+                hr_modules.append(selector)
+
+    if modules and modules_valid:
+        current_modules = main_entry.module_values_to_ui_selectors(
+            shared.opts.forge_additional_modules
+        )
+        if sorted(modules) != sorted(current_modules):
+            res["VAE/TE"] = modules
+
+    if not saw_hires_modules or hires_mode == "Use same choices":
+        res["Hires VAE/TE"] = ["Use same choices"]
+    elif hires_mode == "Built-in":
+        res["Hires VAE/TE"] = []
+    elif hr_modules_valid:
+        res["Hires VAE/TE"] = hr_modules
+    else:
+        # Never turn an unresolved legacy reference into an unintended built-in
+        # selection. Keeping the current modules is the only lossless fallback.
+        res["Hires VAE/TE"] = ["Use same choices"]
+
+
 def parse_generation_parameters(x: str, skip_fields: list[str] | None = None):
     """
     parses infotext (the string under the Gallery in UI)
@@ -421,42 +474,7 @@ def parse_generation_parameters(x: str, skip_fields: list[str] | None = None):
     for key in [*skip_fields, "Clip skip", "CLIP_stop_at_last_layers"]:
         res.pop(key, None)
 
-    # VAE / TE
-    modules, hr_modules = [], []
-
-    if (vae := res.pop("VAE", None)) is not None:
-        modules.append(vae)  # Classic
-
-    _keys = list(res.keys())
-    known_modules = {os.path.splitext(m)[0]: m for m in main_entry.module_list.keys()}
-
-    for key in _keys:
-        if key.startswith("Module "):
-            if (m := known_modules.get(res.pop(key), None)) is not None:
-                modules.append(m)
-        elif key.startswith("Hires Module "):
-            if (m := known_modules.get(res.pop(key), None)) is not None:
-                hr_modules.append(m)
-
-    if modules != []:
-        current_modules = shared.opts.forge_additional_modules
-        basename_modules = []
-        for m in current_modules:
-            basename_modules.append(os.path.basename(m))
-
-        if sorted(modules) != sorted(basename_modules):
-            res["VAE/TE"] = modules
-
-    # processing.py/StableDiffusionProcessingTxt2Img/init()
-    if "Hires Module 1" in res:
-        if res["Hires Module 1"] == "Use same choices":
-            hr_modules = ["Use same choices"]
-        elif res["Hires Module 1"] == "Built-in":
-            hr_modules = []
-
-        res["Hires VAE/TE"] = hr_modules
-    else:
-        res["Hires VAE/TE"] = ["Use same choices"]
+    _resolve_additional_module_parameters(res)
 
     return res
 

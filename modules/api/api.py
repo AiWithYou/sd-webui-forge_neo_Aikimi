@@ -49,6 +49,74 @@ def validate_sampler_name(name):
     return name
 
 
+def _portable_path_name(value):
+    """Return a path's final component without exposing its local directory."""
+
+    if value is None:
+        return None
+    text = os.fspath(value)
+    if not text:
+        return text
+    return text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
+def _public_module_reference(value, module_list):
+    """Prefer the public module selector and safely fall back to a basename."""
+
+    text = os.fspath(value)
+    if text in module_list:
+        return text
+
+    try:
+        normalized = os.path.normcase(os.path.realpath(os.path.abspath(text)))
+    except (OSError, TypeError, ValueError):
+        normalized = None
+    if normalized is not None:
+        for selector, path in module_list.items():
+            try:
+                candidate = os.path.normcase(os.path.realpath(os.path.abspath(os.fspath(path))))
+            except (OSError, TypeError, ValueError):
+                continue
+            if candidate == normalized:
+                return selector
+
+    return _portable_path_name(text)
+
+
+def _public_forge_model_status(status, module_list):
+    """Sanitize local model paths at the public API boundary."""
+
+    payload = dict(status)
+    payload["checkpoint"] = _portable_path_name(payload.get("checkpoint"))
+    modules = payload.get("additional_modules") or []
+    if isinstance(modules, (str, os.PathLike)):
+        modules = [modules]
+    payload["additional_modules"] = [
+        _public_module_reference(value, module_list) for value in modules
+    ]
+    return payload
+
+
+def _run_api_processing(p, script_runner, selectable_scripts, script_args):
+    """Run one generation request and map invalid overrides to client errors."""
+    from modules.sysinfo import (
+        InvalidOptionTypeError,
+        RestrictedOptionError,
+        UnknownOptionError,
+    )
+
+    try:
+        if selectable_scripts is not None:
+            p.script_args = script_args
+            return script_runner.run(p, *p.script_args)
+        p.script_args = tuple(script_args)
+        return process_images(p)
+    except RestrictedOptionError as exc:
+        raise HTTPException(status_code=403, detail=safe_error_message(exc)) from exc
+    except (InvalidOptionTypeError, UnknownOptionError) as exc:
+        raise HTTPException(status_code=422, detail=safe_error_message(exc)) from exc
+
+
 def setUpscalers(req: dict):
     reqDict = vars(req)
     reqDict["extras_upscaler_1"] = reqDict.pop("upscaler_1", None)
@@ -473,12 +541,12 @@ class Api:
                 try:
                     shared.state.begin(job="scripts_txt2img")
                     start_task(task_id)
-                    if selectable_scripts is not None:
-                        p.script_args = script_args
-                        processed = scripts.scripts_txt2img.run(p, *p.script_args)  # Need to pass args as list here
-                    else:
-                        p.script_args = tuple(script_args)  # Need to pass args as tuple here
-                        processed = process_images(p)
+                    processed = _run_api_processing(
+                        p,
+                        scripts.scripts_txt2img,
+                        selectable_scripts,
+                        script_args,
+                    )
                     process_extra_images(processed)
                     finish_task(task_id)
                 finally:
@@ -547,12 +615,12 @@ class Api:
                 try:
                     shared.state.begin(job="scripts_img2img")
                     start_task(task_id)
-                    if selectable_scripts is not None:
-                        p.script_args = script_args
-                        processed = scripts.scripts_img2img.run(p, *p.script_args)  # Need to pass args as list here
-                    else:
-                        p.script_args = tuple(script_args)  # Need to pass args as tuple here
-                        processed = process_images(p)
+                    processed = _run_api_processing(
+                        p,
+                        scripts.scripts_img2img,
+                        selectable_scripts,
+                        script_args,
+                    )
                     process_extra_images(processed)
                     finish_task(task_id)
                 finally:
@@ -682,7 +750,7 @@ class Api:
             {
                 "name": upscaler.name,
                 "model_name": upscaler.scaler.model_name,
-                "model_path": upscaler.data_path,
+                "model_path": _portable_path_name(upscaler.data_path),
                 "model_url": None,
                 "scale": upscaler.scale,
             }
@@ -700,15 +768,35 @@ class Api:
     def get_sd_models(self):
         import modules.sd_models as sd_models
 
-        return [{"title": x.title, "model_name": x.model_name, "hash": x.shorthash, "sha256": x.sha256, "filename": x.filename, "config": getattr(x, "config", None)} for x in sd_models.checkpoints_list.values()]
+        return [
+            {
+                "title": x.title,
+                "model_name": x.model_name,
+                "hash": x.shorthash,
+                "sha256": x.sha256,
+                "filename": _portable_path_name(x.filename),
+                "config": _portable_path_name(getattr(x, "config", None)),
+            }
+            for x in sd_models.checkpoints_list.values()
+        ]
 
     def get_sd_vaes_and_text_encoders(self):
-        from modules_forge.main_entry import module_list
+        from modules_forge import main_entry
 
-        return [{"model_name": x, "filename": module_list[x]} for x in module_list.keys()]
+        main_entry.ensure_module_registry()
+        return [
+            {"model_name": selector, "filename": selector}
+            for selector in main_entry.module_list
+        ]
 
     def get_face_restorers(self):
-        return [{"name": x.name(), "cmd_dir": getattr(x, "cmd_dir", None)} for x in shared.face_restorers]
+        return [
+            {
+                "name": restorer.name(),
+                "cmd_dir": _portable_path_name(getattr(restorer, "cmd_dir", None)),
+            }
+            for restorer in shared.face_restorers
+        ]
 
     def get_prompt_styles(self):
         styleList = []
@@ -796,21 +884,31 @@ class Api:
 
     def get_forge_model_status(self):
         from modules_forge.model_runtime_status import describe_loaded_model
+        from modules_forge import main_entry
 
+        main_entry.ensure_module_registry()
         with self.queue_lock:
-            return describe_loaded_model(
-                sd_models.model_data.sd_model,
-                sd_models.model_data.forge_loading_parameters,
+            return _public_forge_model_status(
+                describe_loaded_model(
+                    sd_models.model_data.sd_model,
+                    sd_models.model_data.forge_loading_parameters,
+                ),
+                main_entry.module_list,
             )
 
     def ensure_forge_model_status(self):
         from modules_forge.model_runtime_status import describe_loaded_model
+        from modules_forge import main_entry
 
+        main_entry.ensure_module_registry()
         with self.queue_lock:
             sd_model, _loaded_now = sd_models.forge_model_reload()
-            return describe_loaded_model(
-                sd_model,
-                sd_models.model_data.forge_loading_parameters,
+            return _public_forge_model_status(
+                describe_loaded_model(
+                    sd_model,
+                    sd_models.model_data.forge_loading_parameters,
+                ),
+                main_entry.module_list,
             )
 
     def get_extensions_list(self):

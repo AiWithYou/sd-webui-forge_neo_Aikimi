@@ -32,12 +32,15 @@ def import_ui_tempdir():
 class GradioDependencyContractTests(unittest.TestCase):
     def test_runtime_matches_the_audited_direct_dependency_set(self):
         expected = {
+            "diffusers": "0.38.0",
+            "GitPython": "3.1.61",
             "gradio": gradio_compat.SUPPORTED_GRADIO_VERSION,
             "gradio-client": "2.5.0",
             "fastapi": "0.141.1",
             "starlette": "1.6.0",
-            "huggingface-hub": "0.36.2",
-            "transformers": "4.57.6",
+            "huggingface-hub": "1.5.0",
+            "peft": "0.20.0",
+            "transformers": "5.10.4",
         }
         self.assertEqual(
             {name: importlib.metadata.version(name) for name in expected},

@@ -1,6 +1,6 @@
 import gradio as gr
 
-from modules import ui_extra_networks_user_metadata, sd_vae, shared
+from modules import ui_extra_networks_user_metadata
 from modules.ui_components import ToolButton
 from modules_forge import main_entry
 
@@ -17,6 +17,10 @@ class CheckpointUserMetadataEditor(ui_extra_networks_user_metadata.UserMetadataE
         user_metadata = self.get_user_metadata(name)
         user_metadata["description"] = desc
         user_metadata["notes"] = notes
+        if isinstance(vae, str):
+            vae = [vae]
+        if vae and "Built in" not in vae:
+            vae = main_entry.resolve_module_values(vae)
         user_metadata["vae_te"] = vae
         user_metadata["sd_version_str"] = 'SdVersion.' + sd_version
 
@@ -29,9 +33,15 @@ class CheckpointUserMetadataEditor(ui_extra_networks_user_metadata.UserMetadataE
         vae = user_metadata.get('vae_te', None)
         if vae is None:     # fallback to old type
             vae = user_metadata.get('vae', None)
-            if vae is not None:
-                if isinstance(vae, str):
-                    vae = [vae]
+        if vae is not None:
+            if isinstance(vae, str):
+                vae = [vae]
+            if "Built in" not in vae:
+                vae = main_entry.module_values_to_ui_selectors(vae)
+        vae = gr.update(
+            value=vae,
+            choices=["Built in", *main_entry.module_dropdown_choices()],
+        )
 
         version = user_metadata.get('sd_version_str', '')
         if version == '':
@@ -46,15 +56,16 @@ class CheckpointUserMetadataEditor(ui_extra_networks_user_metadata.UserMetadataE
         ]
 
     def create_editor(self):    #happens before main_entry.modules_list is filled
-        modules_list = ['Built in']
+        modules_list = ["Built in"]
         if main_entry.module_list == {}:
             _, modules = main_entry.refresh_models()
-            modules_list += list(modules)
+            modules_list += modules
         else:
-            modules_list += list(main_entry.module_list.keys())
+            modules_list += main_entry.module_dropdown_choices()
 
         def refreshModules ():
-            return gr.update(choices=['Built in'] + list(main_entry.module_list.keys()))
+            _, modules = main_entry.refresh_models()
+            return gr.update(choices=["Built in", *modules])
 
         self.create_default_editor_elems()
 

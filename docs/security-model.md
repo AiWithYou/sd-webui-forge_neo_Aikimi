@@ -101,7 +101,7 @@ GET /aikimi/api/v1/status
 GET /aikimi/api/v1/capabilities
 ```
 
-remote modeでは、これらを含むAPI routeが認証境界を通ります。healthは秘密値を返さず、statusとcapabilitiesも認証情報や機密性が高い絶対パスを返しません。
+remote modeでは、これらを含むAPI routeが認証境界を通ります。healthは秘密値を返しません。status、capabilities、checkpoint、追加module、upscaler、face restorerの一覧も、認証情報やローカル絶対パスを返さず、安全なselectorまたはbasenameだけを公開します。
 
 ## ログとsysinfo
 
@@ -111,14 +111,14 @@ redactionは最後の防御です。利用者は、共有前に[SECURITY.md](../
 
 ## 依存関係監査の期限付き例外
 
-2026年8月26日の監査では、Gradio、FastAPI、Starlette、GitPython、protobuf、pipに未対応の既知脆弱性は残っていません。一方、現在のGPU生成経路を維持するため、次のadvisory IDを2026年9月30日までの期限付き例外としてCIへ登録しています。
+2026年9月3日に、Diffusersを0.38.0、GitPythonを3.1.61、Transformersを5.10.4、huggingface-hubを1.5.0、PEFTを0.20.0へ更新しました。Diffusers 0.38.0は、`trust_remote_code`を回避する3件の脆弱性に対する公式修正版です。GitPython 3.1.61は、3.1.59未満に影響する`PYSEC-2026-3785`、`PYSEC-2026-3786`、`PYSEC-2026-3787`、`PYSEC-2026-3788`を修正済みです。Transformers 5.10.0はCVE-2026-9856の修正境界ですが、PyPIでyankされているため、同じ系列の非yank版である5.10.4を固定しています。PEFT 0.20.0は、Transformers 5で削除された`HybridCache`をPEFT 0.17.1が読み込んでDiffusersの起動を妨げる問題を避けるための固定です。
 
-- Diffusers 0.37.1: `PYSEC-2026-2446`、`PYSEC-2026-40`、`PYSEC-2026-41`
+DiffusersとTransformersの旧版に対するadvisory IDは、CIの例外から削除しました。一方、公開済み修正版がない依存関係と、PyTorchの制約内で修正版を選べない依存関係については、次のadvisory IDを2026年9月30日までの期限付き例外として残しています。
+
 - diskcache 5.6.3: `PYSEC-2026-2447`
 - setuptools 81.0.0: `PYSEC-2026-3447`
-- Transformers 4.57.6: `PYSEC-2025-217`、`PYSEC-2026-2290`、`PYSEC-2026-2288`、`PYSEC-2026-2289`
 
-Diffusers 0.38とTransformers 5系への更新は、Anima、SenseNova、Krea2、MiniMax H3を含むGPU実生成の回帰確認が必要です。diskcacheには監査時点で修正版がなく、setuptools 83はPyTorch 2.11の`setuptools<82`制約と両立しません。CIは上記IDだけを除外するため、新しいadvisory IDは即時に失敗します。期限までにモデルスタックを再検証し、解除できない場合は理由と次回期限を改めて審査します。
+diskcacheは、最新の5.6.3までが影響対象であり、監査時点では修正版が公開されていません。setuptoolsは83.0.0以降で修正済みですが、PyTorch 2.11が`setuptools<82`を要求するため、安全版との共通範囲がありません。CIはこの2件だけを除外し、新しいadvisory IDが追加された場合は即時に失敗します。期限までにdiskcacheの新規releaseとPyTorch 2.13以降への移行可否を再検証し、解除できない場合は理由と次回期限を改めて審査します。
 
 ## 非目標
 

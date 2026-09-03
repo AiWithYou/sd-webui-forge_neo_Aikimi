@@ -167,6 +167,7 @@ def probe_navigation_with_cdp(chromium, url, *, blocked_urls=(), timeout=60):
                 process,
                 websocket=websocket,
                 close_browser=close_browser,
+                owned_port=debugging_port,
             )
 
 

@@ -65,13 +65,18 @@ function registerExtraNetworkPrompts(tabname) {
 }
 
 function setupExtraNetworksForTab(tabname) {
+    registerExtraNetworkPrompts(tabname);
     let this_tab = gradioApp().querySelector("#" + tabname + "_extra_tabs");
     let tabnav = get_uiTabList(this_tab);
-    if (!tabnav) return;
-    let controlsDiv = document.createElement("DIV");
-    controlsDiv.classList.add("extra-networks-controls-div");
-    tabnav.appendChild(controlsDiv);
-    tabnav.insertBefore(controlsDiv, null);
+    if (!tabnav) return false;
+    let controlsDiv = tabnav.querySelector(":scope > .extra-networks-controls-div");
+    if (!controlsDiv) {
+        controlsDiv = document.createElement("DIV");
+        controlsDiv.classList.add("extra-networks-controls-div");
+        tabnav.appendChild(controlsDiv);
+    }
+
+    let initialized = false;
 
     this_tab.querySelectorAll(":scope > [id^='" + tabname + "_']").forEach(function (elem) {
         // tabname_full = {tabname}_{extra_networks_tabname}
@@ -79,13 +84,17 @@ function setupExtraNetworksForTab(tabname) {
         let search = gradioApp().querySelector("#" + tabname_full + "_extra_search");
         let sort_dir = gradioApp().querySelector("#" + tabname_full + "_extra_sort_dir");
         let refresh = gradioApp().querySelector("#" + tabname_full + "_extra_refresh");
+        let controls = gradioApp().querySelector("#" + tabname_full + "_controls");
         let currentSort = "";
         const isLoraPage = tabname_full === tabname + "_lora";
 
         // If any of the buttons above don't exist, we want to skip this iteration of the loop.
-        if (!search || !sort_dir || !refresh) {
+        if (!search || !sort_dir || !refresh || !controls) {
             return; // `return` is equivalent of `continue` but for forEach loops.
         }
+        if (search.dataset.extraNetworksInitialized === "true") return;
+        search.dataset.extraNetworksInitialized = "true";
+        initialized = true;
 
         let applyFilter = function (force) {
             let searchTerm = search.value.toLowerCase();
@@ -136,6 +145,7 @@ function setupExtraNetworksForTab(tabname) {
         let applySort = function (force) {
             let cards = gradioApp().querySelectorAll("#" + tabname_full + " div.card");
             let parent = gradioApp().querySelector("#" + tabname_full + "_cards");
+            if (!parent) return;
             let reverse = sort_dir.dataset.sortdir == "Descending";
             let activeSearchElem = gradioApp().querySelector(
                 "#" + tabname_full + "_controls .extra-network-control--sort.extra-network-control--enabled",
@@ -182,15 +192,13 @@ function setupExtraNetworksForTab(tabname) {
         extraNetworksApplySort[tabname_full] = applySort;
         extraNetworksApplyFilter[tabname_full] = applyFilter;
 
-        let controls = gradioApp().querySelector("#" + tabname_full + "_controls");
         controlsDiv.insertBefore(controls, null);
 
         if (elem.style.display != "none") {
             extraNetworksShowControlsForPage(tabname, tabname_full);
         }
     });
-
-    registerExtraNetworkPrompts(tabname);
+    return initialized;
 }
 
 function extraNetworksMovePromptToTab(tabname, id, showPrompt, showNegativePrompt) {
@@ -244,6 +252,11 @@ function extraNetworksTabSelected(tabname, id, showPrompt, showNegativePrompt, t
 function applyExtraNetworkFilter(tabname_full) {
     let doFilter = function () {
         let applyFunction = extraNetworksApplyFilter[tabname_full];
+        if (!applyFunction) {
+            if (tabname_full.startsWith("txt2img_")) setupExtraNetworksForTab("txt2img");
+            if (tabname_full.startsWith("img2img_")) setupExtraNetworksForTab("img2img");
+            applyFunction = extraNetworksApplyFilter[tabname_full];
+        }
 
         if (applyFunction) {
             applyFunction(true);
@@ -254,7 +267,13 @@ function applyExtraNetworkFilter(tabname_full) {
 
 function applyExtraNetworkSort(tabname_full) {
     let doSort = function () {
-        extraNetworksApplySort[tabname_full](true);
+        let applyFunction = extraNetworksApplySort[tabname_full];
+        if (!applyFunction) {
+            if (tabname_full.startsWith("txt2img_")) setupExtraNetworksForTab("txt2img");
+            if (tabname_full.startsWith("img2img_")) setupExtraNetworksForTab("img2img");
+            applyFunction = extraNetworksApplySort[tabname_full];
+        }
+        if (applyFunction) applyFunction(true);
     };
     setTimeout(doSort, 1);
 }
@@ -831,6 +850,5 @@ onUiLoaded(function () {
 uiAfterScriptsCallbacks.push(setupExtraNetworks);
 
 onUiUpdate(function () {
-    registerExtraNetworkPrompts("txt2img");
-    registerExtraNetworkPrompts("img2img");
+    setupExtraNetworks();
 });

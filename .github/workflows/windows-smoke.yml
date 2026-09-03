@@ -5,6 +5,7 @@ on:
     paths:
       - "**/*.bat"
       - "**/*.ps1"
+      - "backend/**"
       - "extensions-builtin/aikimi-ui/**"
       - "extensions-builtin/anima-3-8b/**"
       - "extensions-builtin/hyperweave/**"
@@ -32,6 +33,7 @@ on:
       - "modules_forge/minimax_h3_bridge.py"
       - "modules_forge/sensenova_u15_bridge.py"
       - "modules_forge/forge_canvas/**"
+      - "modules_forge/**"
       - "requirements.txt"
       - "tools/requirements-test.txt"
       - "tools/run_ci_tests.py"
@@ -43,11 +45,13 @@ on:
       - "tools/tests/test_aikimi_status.py"
       - "tools/tests/test_aikimi_tabs.py"
       - "tools/tests/test_aikimi_tabs_chromium.py"
+      - "tools/tests/test_additional_module_identity.py"
       - "tools/tests/test_anima38_extension.py"
       - "tools/tests/test_api_public_state.py"
       - "tools/tests/test_api_script_args.py"
       - "tools/tests/test_chromium_helpers.py"
       - "tools/tests/test_ci_workflow_boundaries.py"
+      - "tools/tests/test_extra_networks_lora_filter.py"
       - "tools/tests/test_gradio_compatibility.py"
       - "tools/tests/test_gradio_frontend_compat.py"
       - "tools/tests/test_gradio_frontend_compat_chromium.py"
@@ -57,7 +61,11 @@ on:
       - "tools/tests/test_legacy_yaml_security.py"
       - "tools/tests/test_launch_utils_environment.py"
       - "tools/tests/test_minimax_h3_studio.py"
+      - "tools/tests/test_option_migrations.py"
+      - "tools/tests/test_patcher_cleanup.py"
+      - "tools/tests/test_quant_ops_zero_scale.py"
       - "tools/tests/test_remote_auth_middleware.py"
+      - "tools/tests/test_repository_privacy.py"
       - "tools/tests/test_run_ci_tests.py"
       - "tools/tests/test_safe_image_fetch.py"
       - "tools/tests/test_security_redaction.py"
@@ -65,6 +73,7 @@ on:
       - "tools/tests/test_studio_css_boundaries.py"
       - "tools/tests/test_sysinfo_security.py"
       - "tools/tests/test_ui_tempdir_security.py"
+      - "tools/tests/test_upstream_neo_regressions.py"
       - "tools/tests/test_workflow_ui.py"
       - ".github/workflows/windows-smoke.yml"
   push:
@@ -72,6 +81,7 @@ on:
     paths:
       - "**/*.bat"
       - "**/*.ps1"
+      - "backend/**"
       - "extensions-builtin/aikimi-ui/**"
       - "extensions-builtin/anima-3-8b/**"
       - "extensions-builtin/hyperweave/**"
@@ -99,6 +109,7 @@ on:
       - "modules_forge/minimax_h3_bridge.py"
       - "modules_forge/sensenova_u15_bridge.py"
       - "modules_forge/forge_canvas/**"
+      - "modules_forge/**"
       - "requirements.txt"
       - "tools/requirements-test.txt"
       - "tools/run_ci_tests.py"
@@ -110,11 +121,13 @@ on:
       - "tools/tests/test_aikimi_status.py"
       - "tools/tests/test_aikimi_tabs.py"
       - "tools/tests/test_aikimi_tabs_chromium.py"
+      - "tools/tests/test_additional_module_identity.py"
       - "tools/tests/test_anima38_extension.py"
       - "tools/tests/test_api_public_state.py"
       - "tools/tests/test_api_script_args.py"
       - "tools/tests/test_chromium_helpers.py"
       - "tools/tests/test_ci_workflow_boundaries.py"
+      - "tools/tests/test_extra_networks_lora_filter.py"
       - "tools/tests/test_gradio_compatibility.py"
       - "tools/tests/test_gradio_frontend_compat.py"
       - "tools/tests/test_gradio_frontend_compat_chromium.py"
@@ -124,7 +137,11 @@ on:
       - "tools/tests/test_legacy_yaml_security.py"
       - "tools/tests/test_launch_utils_environment.py"
       - "tools/tests/test_minimax_h3_studio.py"
+      - "tools/tests/test_option_migrations.py"
+      - "tools/tests/test_patcher_cleanup.py"
+      - "tools/tests/test_quant_ops_zero_scale.py"
       - "tools/tests/test_remote_auth_middleware.py"
+      - "tools/tests/test_repository_privacy.py"
       - "tools/tests/test_run_ci_tests.py"
       - "tools/tests/test_safe_image_fetch.py"
       - "tools/tests/test_security_redaction.py"
@@ -132,6 +149,7 @@ on:
       - "tools/tests/test_studio_css_boundaries.py"
       - "tools/tests/test_sysinfo_security.py"
       - "tools/tests/test_ui_tempdir_security.py"
+      - "tools/tests/test_upstream_neo_regressions.py"
       - "tools/tests/test_workflow_ui.py"
       - ".github/workflows/windows-smoke.yml"
   workflow_dispatch:
@@ -209,11 +227,13 @@ jobs:
           --module tools.tests.test_aikimi_status
           --module tools.tests.test_aikimi_tabs
           --module tools.tests.test_aikimi_tabs_chromium
+          --module tools.tests.test_additional_module_identity
           --module tools.tests.test_anima38_extension
           --module tools.tests.test_api_public_state
           --module tools.tests.test_api_script_args
           --module tools.tests.test_chromium_helpers
           --module tools.tests.test_ci_workflow_boundaries
+          --module tools.tests.test_extra_networks_lora_filter
           --module tools.tests.test_gradio_compatibility
           --module tools.tests.test_gradio_frontend_compat
           --module tools.tests.test_gradio_frontend_compat_chromium
@@ -223,7 +243,11 @@ jobs:
           --module tools.tests.test_legacy_yaml_security
           --module tools.tests.test_launch_utils_environment
           --module tools.tests.test_minimax_h3_studio
+          --module tools.tests.test_option_migrations
+          --module tools.tests.test_patcher_cleanup
+          --module tools.tests.test_quant_ops_zero_scale
           --module tools.tests.test_remote_auth_middleware
+          --module tools.tests.test_repository_privacy
           --module tools.tests.test_run_ci_tests
           --module tools.tests.test_safe_image_fetch
           --module tools.tests.test_security_redaction
@@ -231,6 +255,7 @@ jobs:
           --module tools.tests.test_studio_css_boundaries
           --module tools.tests.test_sysinfo_security
           --module tools.tests.test_ui_tempdir_security
+          --module tools.tests.test_upstream_neo_regressions
           --module tools.tests.test_workflow_ui
       - name: Start the real UI and run the full Chromium smoke
         shell: pwsh

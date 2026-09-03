@@ -8,8 +8,10 @@ Aikimi Neoは、WindowsとPython 3.13を対象に、次の組み合わせを直�
 - gradio-client `2.5.0`
 - FastAPI `0.141.1`
 - Starlette `1.6.0`
-- huggingface-hub `0.36.2`
-- Transformers `4.57.6`
+- Diffusers `0.38.0`
+- huggingface-hub `1.5.0`
+- PEFT `0.20.0`
+- Transformers `5.10.4`
 
 Gradioは`requirements.txt`から導入します。起動コードに別のGradioインストール指定はありません。PyTorchとtorchvisionはCUDA構成ごとにwheelが異なるため、従来どおり`TORCH_COMMAND`と`TORCH_INDEX_URL`を使って起動処理が管理します。
 
@@ -17,9 +19,9 @@ Gradioは`requirements.txt`から導入します。起動コードに別のGradi
 
 旧版のGradio 4.40.0には、ファイル漏えい、CORS、SSRF、Windows上のパストラバーサルなど、Aikimi Neoの利用方法に関係する既知の脆弱性が複数あります。特に、Python 3.13以降のWindowsでは、認証を有効にしていても任意ファイルを読み取られる可能性があるため、6.7.0未満は利用できません。
 
-2026年8月26日に、Gradio 6.17.3をPython 3.13の隔離環境へ導入し、`pip-audit`で既知の脆弱性が検出されないことを確認しました。また、6.17.3はhuggingface-hub 0.36.2と共存できるため、既存のAnima、SenseNova、MiniMax H3などが使用するTransformers 4.57.6を維持できます。
+2026年8月26日に、Gradio 6.17.3をPython 3.13の隔離環境へ導入し、`pip-audit`でGradioに既知の脆弱性が検出されないことを確認しました。Gradio 6.17.3はhuggingface-hub 1.5.0も許容するため、CVE-2026-9856を修正したTransformers 5.10.4と同じ環境で利用できます。
 
-Gradio 6.18.0以降では、複数の同種コンポーネントを同時に表示したときに画面が停止する問題が修正済みです。ただし、huggingface-hub 1.2以降を要求するため、huggingface-hub 1.0未満を使うTransformers 4.57.6とは共存できません。次回のGradio更新は、モデル読込経路を含むTransformers更新とGPU実生成の回帰確認を伴う別作業として扱います。
+Gradio 6.18.0以降では、複数の同種コンポーネントを同時に表示したときに画面が停止する問題が修正済みです。モデル依存関係はhuggingface-hub 1.5.0へ移行しましたが、Aikimi Neoは6.17.3の固定assetに限定したcompat workaroundを使用しています。次回のGradio更新では、このworkaroundと静的asset routeのguardを再監査し、実WebUIで挙動を確認します。
 
 参考資料:
 

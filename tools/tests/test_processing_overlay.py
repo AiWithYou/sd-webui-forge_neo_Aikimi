@@ -104,15 +104,26 @@ class OverrideSettingsTests(unittest.TestCase):
 
 
 class HiresModuleSwitchTests(unittest.TestCase):
-    def test_unspecified_or_empty_modules_keep_the_current_choices(self):
+    def test_unspecified_modules_keep_the_current_choices(self):
         with patch.object(processing.main_entry, "modules_change") as modules_change:
-            for module_values in (None, []):
-                with self.subTest(module_values=module_values):
-                    self.assertFalse(
-                        processing._change_hires_modules_if_needed(module_values)
-                    )
+            self.assertFalse(processing._change_hires_modules_if_needed(None))
 
         modules_change.assert_not_called()
+
+    def test_empty_modules_select_the_builtin_hires_vae(self):
+        with patch.object(
+            processing.main_entry,
+            "modules_change",
+            return_value=True,
+        ) as modules_change:
+            self.assertTrue(processing._change_hires_modules_if_needed([]))
+
+        modules_change.assert_called_once_with(
+            [],
+            preset=None,
+            save=False,
+            refresh=False,
+        )
 
     def test_same_choices_marker_keeps_the_current_choices(self):
         with patch.object(processing.main_entry, "modules_change") as modules_change:

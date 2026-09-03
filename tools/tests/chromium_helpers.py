@@ -46,13 +46,39 @@ def _wait_for_exit(process: subprocess.Popen[Any], timeout: float) -> bool:
     return True
 
 
-def _stop_process_tree(process: subprocess.Popen[Any]) -> None:
+def _wait_for_port_release(port: int, timeout: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            try:
+                listener.bind(("127.0.0.1", port))
+            except OSError:
+                pass
+            else:
+                return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _find_windows_taskkill() -> str | None:
+    system_root = os.environ.get("SystemRoot")
+    if system_root:
+        candidate = Path(system_root) / "System32" / "taskkill.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which("taskkill.exe")
+
+
+def _stop_process_tree(process: subprocess.Popen[Any], *, owned_port: int | None = None) -> None:
     if process.poll() is not None or _wait_for_exit(process, 0.5):
+        if owned_port is not None and not _wait_for_port_release(owned_port):
+            raise RuntimeError("Chromium root exited but its CDP port is still in use")
         return
 
     if os.name == "nt":
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        taskkill = shutil.which("taskkill")
+        taskkill = _find_windows_taskkill()
         if taskkill is None:
             process.terminate()
             if _wait_for_exit(process, 5):
@@ -77,9 +103,12 @@ def _stop_process_tree(process: subprocess.Popen[Any]) -> None:
                 process.wait(timeout=5)
             raise RuntimeError("taskkill could not run; Chromium tree cleanup was not guaranteed") from error
         else:
-            if taskkill_result.returncode != 0 and process.poll() is None:
-                process.kill()
-                process.wait(timeout=5)
+            if taskkill_result.returncode != 0:
+                if process.poll() is None and not _wait_for_exit(process, 1):
+                    process.kill()
+                    process.wait(timeout=5)
+                if owned_port is not None and _wait_for_port_release(owned_port):
+                    return
                 raise RuntimeError(f"taskkill failed with exit code {taskkill_result.returncode}")
     else:
         try:
@@ -87,17 +116,18 @@ def _stop_process_tree(process: subprocess.Popen[Any]) -> None:
         except ProcessLookupError:
             pass
 
-    if _wait_for_exit(process, 5):
-        return
+    if not _wait_for_exit(process, 5):
+        if os.name == "nt":
+            process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        process.wait(timeout=5)
 
-    if os.name == "nt":
-        process.kill()
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    process.wait(timeout=5)
+    if owned_port is not None and not _wait_for_port_release(owned_port):
+        raise RuntimeError("Chromium exited but its CDP port is still in use")
 
 
 def close_chromium(
@@ -105,6 +135,7 @@ def close_chromium(
     *,
     websocket: Any | None = None,
     close_browser: Callable[[], Any] | None = None,
+    owned_port: int | None = None,
     profile_flush_delay: float = 0.25,
 ) -> None:
     """Close CDP, its socket, and the exact Chromium process tree independently."""
@@ -123,6 +154,6 @@ def close_chromium(
                 except (ConnectionClosed, OSError, RuntimeError, TimeoutError):
                     pass
         finally:
-            _stop_process_tree(process)
+            _stop_process_tree(process, owned_port=owned_port)
             if profile_flush_delay > 0:
                 time.sleep(profile_flush_delay)
