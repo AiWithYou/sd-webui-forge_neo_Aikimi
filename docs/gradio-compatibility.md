@@ -84,7 +84,9 @@ GradioまたはFastAPI関連の固定版を変更する場合は、少なくと�
 7. unnamed callbackのprivate既定と、明示したnamed／public API contractの維持
 8. constructorと通常callbackのlazy `visible=False`と、`settings_json`、InputAccordion、H3、HyperWeave、ControlNetだけが使うmounted hiddenの分離
 9. Krea2、Anima、SenseNova、MiniMax H3のUI構築と上部タブ順序
-10. Krea2 aliasによるForge `img2img`の`Krea2 2-Stage Upscale`選択と、Anima aliasによるForge `txt2img`のAnima設定欄展開
+10. Aikimi aliasの移動契約
+    - Krea2はUI Presetの`krea`を選択し、現在のForgeタブが`txt2img`または`img2img`ならそのタブを維持する。別のタブから開いた場合は`txt2img`へ移動し、`Krea2 2-Stage Upscale`は自動選択しない
+    - AnimaはUI Presetの`anima`を選択し、現在のForgeタブが`txt2img`または`img2img`ならそのタブを維持する。別のタブから開いた場合は`txt2img`へ移動し、選択したタブのAnima設定欄を展開する
 11. 通常のForgeタブへ戻った場合のAikimi Status非表示とstatus polling停止
 12. UI再読込後のタブ、event listener、status要素の重複防止
 13. 実ブラウザーでのselector、keyboard、ARIA、reduced motion、主要なvisibility変更後の応答性

@@ -1,8 +1,8 @@
 import ast
-from pathlib import Path
 import sys
-from types import ModuleType
 import unittest
+from pathlib import Path
+from types import ModuleType
 from unittest import mock
 
 from modules_forge.krea2_upscale import (
@@ -142,6 +142,52 @@ class Krea2PresetDefaultTests(unittest.TestCase):
         target_names = [element.id for element in output_targets.elts]
         self.assertIn("ui_txt2img_hr_denoise", target_names)
         self.assertIn("ui_img2img_denoise", target_names)
+
+    def test_preset_load_saves_and_refreshes_once_when_checkpoint_is_unchanged(self):
+        tree = ast.parse((ROOT / "modules_forge" / "main_entry.py").read_text(encoding="utf-8"))
+        load_presets = next(
+            node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_load_presets"
+        )
+        namespace = {}
+        exec(  # noqa: S102 - execute only the extracted local callback in isolation
+            compile(
+                ast.fix_missing_locations(ast.Module(body=[load_presets], type_ignores=[])),
+                filename="modules_forge/main_entry.py",
+                mode="exec",
+            ),
+            namespace,
+        )
+
+        calls = mock.Mock()
+        calls.checkpoint_change.return_value = False
+        namespace.update(
+            dtype_change=calls.dtype_change,
+            modules_change=calls.modules_change,
+            checkpoint_change=calls.checkpoint_change,
+            refresh_model_loading_parameters=calls.refresh_model_loading_parameters,
+            shared=mock.Mock(
+                config_filename="config.json",
+                opts=mock.Mock(save=calls.save),
+            ),
+        )
+
+        namespace["_load_presets"](
+            "unchanged.safetensors",
+            ["vae.safetensors"],
+            "Automatic",
+            "krea",
+        )
+
+        self.assertEqual(
+            calls.mock_calls,
+            [
+                mock.call.dtype_change("Automatic", "krea", save=False, refresh=False),
+                mock.call.modules_change(["vae.safetensors"], "krea", save=False, refresh=False),
+                mock.call.checkpoint_change("unchanged.safetensors", "krea", save=False, refresh=False),
+                mock.call.save("config.json"),
+                mock.call.refresh_model_loading_parameters(),
+            ],
+        )
 
 
 if __name__ == "__main__":

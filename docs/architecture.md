@@ -10,8 +10,8 @@ Windows launcher / Docker entrypoint
   -> Forge WebUI and FastAPI
      -> standard txt2img / img2img / Extras
      -> Aikimi tab aliases
-        -> Krea2 -> Forge img2img / Krea2 2-Stage Upscale
-        -> Anima -> Forge txt2img / Anima 3.8B accordion
+        -> Krea2 -> UI Preset krea / keep txt2img or img2img / other tabs -> txt2img
+        -> Anima -> UI Preset anima / keep txt2img or img2img / other tabs -> txt2img / matching accordion
      -> Aikimi native tabs
         -> SenseNova bridge -> isolated worker
         -> MiniMax H3 bridge -> local ComfyUI process
@@ -57,7 +57,7 @@ API routeは共通の認証処理を使います。healthは最小情報、statu
 
 `extensions-builtin/aikimi-ui`は、Aikimi固有の小型ナビゲーション、ちびあいきみ、status用CSSを所有します。AikimiナビゲーションはGradioのタブ列へbuttonを挿入せず、`#tabs`直前の独立した1行として配置します。Forge由来の上部タブ、Quick Settings、`txt2img`、`img2img`、`Extras`、`Settings`はForge Neoの構成を維持し、Studio側CSSから変更しません。
 
-`aikimi_tabs.js`は`window.AikimiTabs`と`aikimi:feature-tab-change`を公開します。feature keyとcapabilities APIは、`krea2`、`anima38`、`sensenova`、`minimax_h3`の識別子を共用します。Krea2はForge `img2img`の`Krea2 2-Stage Upscale`、AnimaはForge `txt2img`の`Anima 3.8B`設定欄へ移動するaliasです。生成設定、queue、model状態を別のUI stateへ複製しません。
+`aikimi_tabs.js`は`window.AikimiTabs`と`aikimi:feature-tab-change`を公開します。feature keyとcapabilities APIは、`krea2`、`anima38`、`sensenova`、`minimax_h3`の識別子を共用します。Krea2はUI Presetの`krea`を選択し、現在のForgeタブが`txt2img`または`img2img`ならそのタブを維持するaliasです。別のタブから開いた場合は`txt2img`へ移動し、`Krea2 2-Stage Upscale`は自動選択しません。AnimaはUI Presetの`anima`を選択し、現在のForgeタブが`txt2img`または`img2img`ならそのタブを維持するaliasです。別のタブから開いた場合は`txt2img`へ移動し、選択したタブの`Anima 3.8B`設定欄を展開します。生成設定、queue、model状態を別のUI stateへ複製しません。
 
 `modules/aikimi_status.py`が生成状態、queue、VRAM、model読込状態を要約し、`aikimiStatus.js`がactiveなAikimi操作領域の先頭へ一つのstatus要素をinline表示します。通常のForgeタブへ移動すると表示とstatus pollingを停止します。従来の全画面共通ヘッダーと固定オーバーレイは使用しません。技術logは残したまま、キャラクター向けmessageと詳細情報を分離しています。
 

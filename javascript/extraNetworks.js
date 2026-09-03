@@ -15,19 +15,56 @@ function toggleCss(key, css, enable) {
     }
 }
 
-function setupExtraNetworksForTab(tabname) {
-    function registerPrompt(tabname, id) {
-        let textarea = gradioApp().querySelector("#" + id + " > label > textarea");
+function extraNetworksLoraCardMatchesPreset(sdversion, uiPreset, filterEnabled) {
+    return (
+        !filterEnabled ||
+        sdversion == null ||
+        sdversion === "Unknown" ||
+        sdversion === "SdVersion.Unknown" ||
+        !uiPreset ||
+        sdversion === uiPreset
+    );
+}
 
-        if (!activePromptTextarea[tabname]) {
-            activePromptTextarea[tabname] = textarea;
-        }
-
-        textarea.addEventListener("focus", function () {
-            activePromptTextarea[tabname] = textarea;
+function extraNetworksApplyLoraTreePresetFilter(page, uiPreset, filterEnabled) {
+    const fileSelector = ".extra-network-tree li[data-tree-entry-type='file']";
+    const files = Array.from(page.querySelectorAll(fileSelector));
+    files.forEach(function (item) {
+        item.hidden = !extraNetworksLoraCardMatchesPreset(
+            item.getAttribute("data-sort-sdversion"),
+            uiPreset,
+            filterEnabled,
+        );
+    });
+    page.querySelectorAll(".extra-network-tree li[data-tree-entry-type='dir']").forEach(function (directory) {
+        const hasVisibleFile = Array.from(directory.querySelectorAll(fileSelector)).some(function (item) {
+            return !item.hidden;
         });
-    }
+        directory.hidden = filterEnabled && !hasVisibleFile;
+    });
+}
 
+function registerExtraNetworkPrompt(tabname, id) {
+    const textarea = gradioApp().querySelector("#" + id + " > label > textarea");
+    if (!textarea) return false;
+    if (!activePromptTextarea[tabname]?.isConnected) {
+        activePromptTextarea[tabname] = textarea;
+    }
+    if (textarea.dataset.extraNetworksPromptRegistered === "true") return true;
+
+    textarea.dataset.extraNetworksPromptRegistered = "true";
+    textarea.addEventListener("focus", function () {
+        activePromptTextarea[tabname] = textarea;
+    });
+    return true;
+}
+
+function registerExtraNetworkPrompts(tabname) {
+    registerExtraNetworkPrompt(tabname, tabname + "_prompt");
+    registerExtraNetworkPrompt(tabname, tabname + "_neg_prompt");
+}
+
+function setupExtraNetworksForTab(tabname) {
     let this_tab = gradioApp().querySelector("#" + tabname + "_extra_tabs");
     let tabnav = get_uiTabList(this_tab);
     if (!tabnav) return;
@@ -43,6 +80,7 @@ function setupExtraNetworksForTab(tabname) {
         let sort_dir = gradioApp().querySelector("#" + tabname_full + "_extra_sort_dir");
         let refresh = gradioApp().querySelector("#" + tabname_full + "_extra_refresh");
         let currentSort = "";
+        const isLoraPage = tabname_full === tabname + "_lora";
 
         // If any of the buttons above don't exist, we want to skip this iteration of the loop.
         if (!search || !sort_dir || !refresh) {
@@ -53,17 +91,11 @@ function setupExtraNetworksForTab(tabname) {
             let searchTerm = search.value.toLowerCase();
 
             // get UI preset
-            radioUI = gradioApp().querySelector("#forge_ui_preset");
-            radioButtons = radioUI.getElementsByTagName("input");
-            UIresult = 3; //  default to 'all'
-            for (i = 0; i < radioButtons.length; i++) {
-                if (radioButtons[i].checked) {
-                    UIresult = i;
-                }
-            }
+            const uiPreset = gradioApp().querySelector("#forge_ui_preset input")?.value;
+            const page = elem;
 
-            gradioApp()
-                .querySelectorAll("#" + tabname + "_extra_tabs div.card")
+            page
+                .querySelectorAll("div.card")
                 .forEach(function (elem) {
                     let searchOnly = elem.querySelector(".search_only");
                     let text = Array.prototype.map
@@ -75,25 +107,17 @@ function setupExtraNetworksForTab(tabname) {
                     let visible = true;
                     if (searchOnly && searchTerm.length < 4) visible = false;
 
-                    splitSearch = searchTerm.split(" ");
+                    const splitSearch = searchTerm.split(" ");
                     splitSearch.forEach(function (partial) {
                         if (text.indexOf(partial) == -1) visible = false;
                     });
 
-                    sdversion = elem.getAttribute("data-sort-sdversion");
-                    if (sdversion == null);
-                    else if (sdversion == "SdVersion.Unknown");
-                    else if (opts.lora_filter_disabled == True);
-                    else if (UIresult == 3); //  'all'
-                    else if (UIresult == 0) {
-                        //  'sd'
-                        if (sdversion != "SdVersion.SD1") visible = false;
-                    } else if (UIresult == 1) {
-                        //  'xl'
-                        if (sdversion != "SdVersion.SDXL") visible = false;
-                    } else if (UIresult == 2) {
-                        //  'flux'
-                        if (sdversion != "SdVersion.Flux") visible = false;
+                    const sdversion = elem.getAttribute("data-sort-sdversion");
+                    if (
+                        isLoraPage &&
+                        !extraNetworksLoraCardMatchesPreset(sdversion, uiPreset, opts.lora_preset_filter === true)
+                    ) {
+                        visible = false;
                     }
 
                     if (visible) {
@@ -102,6 +126,9 @@ function setupExtraNetworksForTab(tabname) {
                         elem.classList.add("hidden");
                     }
                 });
+            if (isLoraPage) {
+                extraNetworksApplyLoraTreePresetFilter(page, uiPreset, opts.lora_preset_filter === true);
+            }
 
             applySort(force);
         };
@@ -163,8 +190,7 @@ function setupExtraNetworksForTab(tabname) {
         }
     });
 
-    registerPrompt(tabname, tabname + "_prompt");
-    registerPrompt(tabname, tabname + "_neg_prompt");
+    registerExtraNetworkPrompts(tabname);
 }
 
 function extraNetworksMovePromptToTab(tabname, id, showPrompt, showNegativePrompt) {
@@ -803,3 +829,8 @@ onUiLoaded(function () {
 });
 
 uiAfterScriptsCallbacks.push(setupExtraNetworks);
+
+onUiUpdate(function () {
+    registerExtraNetworkPrompts("txt2img");
+    registerExtraNetworkPrompts("img2img");
+});

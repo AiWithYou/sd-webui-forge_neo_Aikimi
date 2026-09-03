@@ -141,15 +141,15 @@ Animaの旧ファイル名はv1用です。新規導入ではv1.1用batまたは
 
 Forge由来の`txt2img`、`img2img`、`Extras`、`Settings`は、Forge Neoのタブ構成とQuick Settingsを維持します。Gradioが所有するタブ列は変更せず、その直前へAikimi専用の細い1行を置き、`Krea2`、`Anima`、`SenseNova`、`MiniMax H3`を直接選べるようにしています。カード型ランチャーや別ダッシュボードは追加しません。
 
-- `Krea2`はForgeの`img2img`を通常モードで開き、`Krea2 2-Stage Upscale`を選択するaliasです。
-- `Anima`はForgeの`txt2img`へ移動するaliasで、`Anima 3.8B`設定欄を展開します。
+- `Krea2`はUI Presetの`krea`を選択するaliasです。現在のForgeタブが`txt2img`または`img2img`ならそのタブを維持し、別のタブから開いた場合は`txt2img`へ移動します。`Krea2 2-Stage Upscale`は自動選択しません。
+- `Anima`はUI Presetの`anima`を選択するaliasです。現在のForgeタブが`txt2img`または`img2img`ならそのタブを維持し、別のタブから開いた場合は`txt2img`へ移動した上で、選択したタブの`Anima 3.8B`設定欄を展開します。
 - `SenseNova`と`MiniMax H3`は、専用Studioタブとして直接開きます。
 
 ちびあいきみは、4つのAikimi入口を開いている間だけ操作領域の先頭へ表示され、折りたたみ時は高さ64px以下の状態欄でRuntime、Backend、Queue、進捗、展開可能な技術詳細を示します。通常のForgeタブでは表示と状態取得を停止します。従来の全画面共通ヘッダーと固定オーバーレイは廃止しました。
 
 タブが表示されていても、modelやruntimeの導入が完了しているとは限りません。実行可否はDiagnosticsまたは`/aikimi/api/v1/capabilities`で確認してください。
 
-Windows、Python 3.13、Gradio 6.17.3の実WebUIをfresh Chromeで開き、Krea2のScript選択、Anima設定欄、SenseNova、MiniMax H3、Forgeタブへの復帰、Settings、UI再読込、PC幅と390px幅を確認しています。CPU／UI debugでの画面操作確認であり、checkpointを読み込むGPU実生成、画質、end-to-end時間、VRAMの確認とは区別します。
+Windows、Python 3.13、Gradio 6.17.3の実WebUIをfresh Chromeで開き、Krea2とAnimaのUI Preset選択、両aliasのタブ維持と既定移動、タブごとのAnima設定欄、SenseNova、MiniMax H3、Forgeタブへの復帰、Settings、UI再読込、PC幅と390px幅を確認しています。CPU／UI debugでの画面操作確認であり、checkpointを読み込むGPU実生成、画質、end-to-end時間、VRAMの確認とは区別します。
 
 `c5bae5fd`で取り込んだupstreamの演算最適化と、その後に追加したCPU向けFlux2 VAE経路は、synthetic tensorのmicrobenchmarkと回帰テストで確認しています。model load、実生成、画質、end-to-end時間、VRAMは今回の計測対象外であり、この結果を生成全体の高速化率として扱いません。実生成を測定した既存機能は、各guideへ条件と結果を分けて記載します。
 

@@ -40,16 +40,18 @@ class AikimiTabsTests(unittest.TestCase):
         self.assertIn('"krea2",\n        "anima38",\n        "sensenova",\n        "minimax_h3"', self.javascript)
 
     def test_aliases_reuse_forge_generation_tabs(self):
-        self.assertIn('containerId: "tab_img2img"', self.javascript)
         self.assertIn('containerId: "tab_txt2img"', self.javascript)
-        self.assertIn(
-            'querySelector("#img2img_script_container #script_list")',
-            self.javascript,
+        self.assertEqual(
+            self.javascript.count('containerIds: Object.freeze(["tab_txt2img", "tab_img2img"])'),
+            2,
         )
-        self.assertIn('const KREA2_SCRIPT = "Krea2 2-Stage Upscale"', self.javascript)
-        self.assertIn('const accordionId = "aikimi-txt2img-anima38"', self.javascript)
-        self.assertIn("if (!clickNativeTab(config.containerId))", self.javascript)
+        self.assertIn('preset: "krea"', self.javascript)
+        self.assertIn('preset: "anima"', self.javascript)
+        self.assertIn('querySelector("#forge_ui_preset")', self.javascript)
+        self.assertIn("function animaAccordionId(containerId)", self.javascript)
+        self.assertIn("if (!containerId || !clickNativeTab(containerId))", self.javascript)
         self.assertIn('const FEATURE_NAV_ID = "aikimi-feature-nav"', self.javascript)
+        self.assertNotIn("Krea2 2-Stage Upscale", self.javascript)
         self.assertNotIn("gr.Blocks", self.javascript)
 
     def test_aliases_do_not_require_lazy_controls_before_base_tab_click(self):
@@ -58,16 +60,19 @@ class AikimiTabsTests(unittest.TestCase):
                 "function ensureFeatureNavigation"
             )
         ]
-        self.assertNotIn("script_list", create_navigation)
+        self.assertNotIn("forge_ui_preset", create_navigation)
         self.assertNotIn("aikimi-txt2img-anima38", create_navigation)
-        self.assertIn('querySelector("#img2img_script_container #script_list")', self.javascript)
-        self.assertIn('const accordionId = "aikimi-txt2img-anima38"', self.javascript)
-        self.assertIn("async function selectNormalImg2ImgMode()", self.javascript)
+        self.assertIn('querySelector("#forge_ui_preset")', self.javascript)
+        self.assertIn("const accordionId = animaAccordionId(containerId)", self.javascript)
+        self.assertIn("async function selectFeaturePreset(feature)", self.javascript)
 
-    def test_krea_option_uses_semantic_exact_match_and_gradio6_mousedown(self):
+    def test_preset_option_uses_semantic_exact_match_and_gradio6_mousedown(self):
         self.assertIn('option.getAttribute("aria-label")', self.javascript)
         self.assertIn('trimmed.startsWith("✓")', self.javascript)
         self.assertIn("normalizeGradioOptionLabel(candidate) === label", self.javascript)
+        self.assertIn('input.getAttribute("aria-controls")', self.javascript)
+        self.assertIn("const optionRoot = controlledListbox || dropdown", self.javascript)
+        self.assertNotIn("appRoot().querySelectorAll(\"[role='option']\")", self.javascript)
         self.assertNotIn('startsWith("✔")', self.javascript)
         self.assertNotIn("candidate.includes", self.javascript)
         self.assertIn('new MouseEvent("mousedown"', self.javascript)
@@ -79,12 +84,12 @@ class AikimiTabsTests(unittest.TestCase):
         self.assertIn('new KeyboardEvent("keydown"', self.javascript)
         self.assertIn('key: "ArrowDown"', self.javascript)
         self.assertIn('code: "ArrowDown"', self.javascript)
-        select_krea = self.javascript[
-            self.javascript.index("async function selectKrea2Script") : self.javascript.index(
+        select_preset = self.javascript[
+            self.javascript.index("async function selectFeaturePreset") : self.javascript.index(
                 "async function expandAnimaAccordion"
             )
         ]
-        self.assertNotIn("input.click()", select_krea)
+        self.assertNotIn("input.click()", select_preset)
 
     def test_native_button_mapping_prefers_aria_controls_before_mounted_panels(self):
         self.assertIn('button.getAttribute("aria-controls") === containerId', self.javascript)
@@ -123,6 +128,15 @@ class AikimiTabsTests(unittest.TestCase):
             source,
         )
 
+    def test_extra_network_prompt_registration_recovers_after_lazy_mount(self):
+        source = EXTRA_NETWORKS_JS.read_text(encoding="utf-8")
+
+        self.assertIn("function registerExtraNetworkPrompt(tabname, id)", source)
+        self.assertIn("if (!textarea) return false", source)
+        self.assertIn('textarea.dataset.extraNetworksPromptRegistered === "true"', source)
+        self.assertIn("onUiUpdate(function ()", source)
+        self.assertIn('registerExtraNetworkPrompts("img2img")', source)
+
     def test_aikimi_group_is_an_external_sibling_of_forge_tabs(self):
         self.assertIn("tabs.parentElement.insertBefore(row, tabs)", self.javascript)
         self.assertIn('row.className = "aikimi-feature-nav"', self.javascript)
@@ -131,7 +145,10 @@ class AikimiTabsTests(unittest.TestCase):
 
     def test_programmatic_host_click_keeps_alias_activation(self):
         self.assertIn("activatingFeature && selectedButtonMatches", self.javascript)
-        self.assertIn("if (sequence !== activationSequence) return", self.javascript)
+        self.assertIn("if (sequence !== activationSequence) {", self.javascript)
+        self.assertIn("let activationQueue = Promise.resolve()", self.javascript)
+        self.assertIn("function queueFeatureActivation(feature)", self.javascript)
+        self.assertIn('FEATURES[activeFeature]?.kind === "alias"', self.javascript)
 
     def test_alias_aria_does_not_claim_the_native_selected_tab(self):
         self.assertIn('button.setAttribute("aria-current", "page")', self.javascript)
@@ -150,7 +167,9 @@ class AikimiTabsTests(unittest.TestCase):
 
     def test_alias_state_is_reconciled_with_real_forge_controls(self):
         self.assertIn("function aliasStateMatches(feature)", self.javascript)
-        self.assertIn("scriptInput?.value === KREA2_SCRIPT", self.javascript)
+        self.assertIn("function presetMatches(feature)", self.javascript)
+        self.assertIn('querySelector("#forge_ui_preset input")?.value === preset', self.javascript)
+        self.assertIn("selectedButtonMatches(feature, selectedNativeButton())", self.javascript)
         self.assertIn("visibleCheckbox?.checked", self.javascript)
         self.assertIn("setActiveFeature(null, null)", self.javascript)
 

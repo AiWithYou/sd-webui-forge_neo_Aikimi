@@ -280,7 +280,9 @@ def forge_main_entry():
 def _load_presets(ui_checkpoint: str, ui_vae: list[str], ui_forge_unet_dtype: str, ui_forge_preset: str):
     dtype_change(ui_forge_unet_dtype, ui_forge_preset, save=False, refresh=False)
     modules_change(ui_vae, ui_forge_preset, save=False, refresh=False)
-    checkpoint_change(ui_checkpoint, ui_forge_preset, save=True, refresh=True)
+    checkpoint_change(ui_checkpoint, ui_forge_preset, save=False, refresh=False)
+    shared.opts.save(shared.config_filename)
+    refresh_model_loading_parameters()
 
 
 def on_preset_change(preset: str):

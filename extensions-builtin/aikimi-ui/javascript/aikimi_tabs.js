@@ -1,10 +1,9 @@
 (function () {
     "use strict";
 
-    const API_VERSION = 3;
+    const API_VERSION = 4;
     const FEATURE_EVENT = "aikimi:feature-tab-change";
     const FEATURE_NAV_ID = "aikimi-feature-nav";
-    const KREA2_SCRIPT = "Krea2 2-Stage Upscale";
     const SETUP_RETRY_LIMIT = 80;
     const SETUP_RETRY_DELAY_MS = 50;
     const REPAIR_LIMIT = 12;
@@ -12,15 +11,19 @@
     const FEATURES = Object.freeze({
         krea2: Object.freeze({
             buttonId: "aikimi-tab-krea2",
-            containerId: "tab_img2img",
+            containerId: "tab_txt2img",
+            containerIds: Object.freeze(["tab_txt2img", "tab_img2img"]),
             label: "Krea2",
             kind: "alias",
+            preset: "krea",
         }),
         anima38: Object.freeze({
             buttonId: "aikimi-tab-anima38",
             containerId: "tab_txt2img",
+            containerIds: Object.freeze(["tab_txt2img", "tab_img2img"]),
             label: "Anima",
             kind: "alias",
+            preset: "anima",
         }),
         sensenova: Object.freeze({
             buttonId: "aikimi-tab-sensenova",
@@ -50,9 +53,11 @@
     let activeFeature = null;
     let activatingFeature = null;
     let activationSequence = 0;
+    let activationQueue = Promise.resolve();
     let setupTimer = null;
     let reconcileTimer = null;
     let repairCount = 0;
+    let dispatchedContainer = null;
 
     function appRoot() {
         return typeof gradioApp === "function" ? gradioApp() : document;
@@ -113,9 +118,25 @@
         return panelIndex >= 0 ? buttons[panelIndex] || null : null;
     }
 
-    function featureContainer(feature) {
+    function featureContainerIds(config) {
+        if (!config) return [];
+        return config.containerIds || [config.containerId];
+    }
+
+    function preferredContainerId(feature) {
         const config = FEATURES[feature];
-        return config ? appRoot().querySelector(`#${config.containerId}`) : null;
+        if (!config) return null;
+        const selected = selectedNativeButton();
+        return featureContainerIds(config).find(function (containerId) {
+            return nativeButtonFor(containerId) === selected;
+        }) || featureContainerIds(config).find(function (containerId) {
+            return Boolean(nativeButtonFor(containerId));
+        }) || null;
+    }
+
+    function featureContainer(feature) {
+        const containerId = preferredContainerId(feature);
+        return containerId ? appRoot().querySelector(`#${containerId}`) : null;
     }
 
     function featureNavigation() {
@@ -127,8 +148,23 @@
         return config ? featureNavigation()?.querySelector(`#${config.buttonId}`) : null;
     }
 
+    function syncFeatureButtonTarget(feature, containerId = preferredContainerId(feature)) {
+        const button = featureButton(feature);
+        const fallback = FEATURES[feature]?.containerId;
+        if (button && (containerId || fallback)) {
+            button.setAttribute("aria-controls", containerId || fallback);
+        }
+    }
+
+    function syncFeatureButtonTargets() {
+        FEATURE_ORDER.forEach(function (feature) {
+            syncFeatureButtonTarget(feature);
+        });
+    }
+
     function dispatchFeatureChange(feature, warning) {
         const container = feature ? featureContainer(feature) : null;
+        dispatchedContainer = container;
         document.dispatchEvent(
             new CustomEvent(FEATURE_EVENT, {
                 detail: Object.freeze({
@@ -208,7 +244,10 @@
         let availableCount = 0;
         FEATURE_ORDER.forEach(function (feature) {
             const button = featureButton(feature);
-            const available = Boolean(nativeButtonFor(FEATURES[feature].containerId));
+            const config = FEATURES[feature];
+            const containerId = preferredContainerId(feature);
+            const available = Boolean(containerId);
+            syncFeatureButtonTarget(feature, containerId || config.containerId);
             button.hidden = !available;
             button.disabled = !available;
             if (available) availableCount += 1;
@@ -240,8 +279,13 @@
         return trimmed.startsWith("✓") ? trimmed.slice(1).trim() : trimmed;
     }
 
-    function exactVisibleOption(label) {
-        return Array.from(appRoot().querySelectorAll("[role='option']")).find(function (option) {
+    function exactVisibleOption(dropdown, input, label) {
+        const controlledId = input.getAttribute("aria-controls");
+        const controlledListbox = controlledId
+            ? appRoot().querySelector(`#${CSS.escape(controlledId)}`)
+            : null;
+        const optionRoot = controlledListbox || dropdown;
+        return Array.from(optionRoot.querySelectorAll("[role='option']")).find(function (option) {
             if (
                 option.getAttribute("aria-disabled") === "true" ||
                 option.offsetParent === null
@@ -284,61 +328,48 @@
         }));
     }
 
-    async function selectNormalImg2ImgMode() {
-        const button = await waitFor(function () {
-            return tabListFor(appRoot().querySelector("#mode_img2img"))
-                ?.querySelector(":scope > button:first-child");
-        });
-        if (!button) {
-            return "通常のimg2imgを開けませんでした。img2imgタブから手動で選択してください。";
-        }
-        button.click();
-        return null;
-    }
-
-    async function selectKrea2Script() {
+    async function selectFeaturePreset(feature) {
+        const config = FEATURES[feature];
+        if (!config?.preset) return null;
         const dropdown = await waitFor(function () {
-            return appRoot().querySelector("#img2img_script_container #script_list");
+            return appRoot().querySelector("#forge_ui_preset");
         });
-        if (!dropdown) return "Krea2のScript選択欄が見つかりません。UIを再読み込みしてください。";
+        if (!dropdown) return `${config.label}のUI Preset欄が見つかりません。UIを再読み込みしてください。`;
 
         const input = dropdown.querySelector("input");
-        if (!input) return "Krea2のScript選択欄を操作できません。UIを再読み込みしてください。";
+        if (!input) return `${config.label}のUI Preset欄を操作できません。UIを再読み込みしてください。`;
 
-        const panelSelector = "#script_krea2_2stage_upscale_quick_4k";
-        if (input.value !== KREA2_SCRIPT) {
+        if (input.value !== config.preset) {
             openGradioDropdown(input);
             let option = await waitFor(function () {
-                return exactVisibleOption(KREA2_SCRIPT);
+                return exactVisibleOption(dropdown, input, config.preset);
             }, 20);
             if (!option) {
                 openGradioDropdown(input);
                 option = await waitFor(function () {
-                    return exactVisibleOption(KREA2_SCRIPT);
+                    return exactVisibleOption(dropdown, input, config.preset);
                 }, 40);
             }
             if (option) activateDropdownOption(option);
             await waitFor(function () {
-                return input.value === KREA2_SCRIPT ? input : null;
+                return input.value === config.preset ? input : null;
             }, 60);
         }
 
-        if (input.value !== KREA2_SCRIPT) {
-            return "Krea2 2-Stage Upscaleを選択できませんでした。Script欄から手動で選択してください。";
-        }
-
-        const panelControl = await waitFor(function () {
-            const element = appRoot().querySelector(panelSelector);
-            return element && element.offsetParent !== null ? element : null;
-        }, 60);
-        if (!panelControl) {
-            return "Krea2 2-Stage Upscaleを選択できませんでした。Script欄から手動で選択してください。";
+        if (input.value !== config.preset) {
+            return `${config.label}のUI Presetを選択できませんでした。UI Preset欄から手動で選択してください。`;
         }
         return null;
     }
 
-    async function expandAnimaAccordion() {
-        const accordionId = "aikimi-txt2img-anima38";
+    function animaAccordionId(containerId) {
+        return containerId === "tab_img2img"
+            ? "aikimi-img2img-anima38"
+            : "aikimi-txt2img-anima38";
+    }
+
+    async function expandAnimaAccordion(containerId) {
+        const accordionId = animaAccordionId(containerId);
         const controls = await waitFor(function () {
             const accordion = appRoot().querySelector(`#${accordionId}`);
             const visibleCheckbox = appRoot().querySelector(
@@ -374,6 +405,38 @@
         return opened ? null : "Anima 3.8Bを有効化できませんでした。設定欄を手動で有効にしてください。";
     }
 
+    async function collapseAnimaAccordion(containerId) {
+        const accordionId = animaAccordionId(containerId);
+        const accordion = appRoot().querySelector(`#${accordionId}`);
+        const visibleCheckbox = appRoot().querySelector(`#${accordionId}-visible-checkbox`);
+        const hiddenCheckbox = appRoot().querySelector(
+            `#${accordionId}-checkbox input[type='checkbox']`,
+        );
+        if (!accordion || !visibleCheckbox || !hiddenCheckbox) return null;
+        if (!visibleCheckbox.checked && !hiddenCheckbox.checked) return null;
+        if (typeof inputAccordionChecked !== "function") {
+            return "Anima 3.8Bの設定を無効化できませんでした。設定欄から手動で無効にしてください。";
+        }
+
+        inputAccordionChecked(accordionId, false);
+        const closed = await waitFor(function () {
+            return !accordion.querySelector(".label-wrap")?.classList.contains("open") &&
+                !visibleCheckbox.checked &&
+                !hiddenCheckbox.checked
+                ? accordion
+                : null;
+        }, 20);
+        return closed ? null : "Anima 3.8Bの設定を無効化できませんでした。設定欄から手動で無効にしてください。";
+    }
+
+    async function collapseAnimaAccordions() {
+        const warnings = await Promise.all([
+            collapseAnimaAccordion("tab_txt2img"),
+            collapseAnimaAccordion("tab_img2img"),
+        ]);
+        return warnings.find(Boolean) || null;
+    }
+
     function clickNativeTab(containerId) {
         const button = nativeButtonFor(containerId);
         if (!button) return false;
@@ -381,26 +444,28 @@
         return true;
     }
 
-    async function activateFeature(feature) {
-        const sequence = ++activationSequence;
+    async function activateFeature(feature, sequence) {
         const config = FEATURES[feature];
         if (!config) return;
 
         activatingFeature = feature;
         syncFeatureButtonState(feature);
-        if (!clickNativeTab(config.containerId)) {
+        const containerId = preferredContainerId(feature);
+        if (!containerId || !clickNativeTab(containerId)) {
             activatingFeature = null;
             setActiveFeature(null, `${config.label}のForgeタブが見つかりません。UIを再読み込みしてください。`);
             return;
         }
+        syncFeatureButtonTarget(feature, containerId);
 
         let warning = null;
         if (feature === "krea2") {
-            const modeWarning = await selectNormalImg2ImgMode();
-            const scriptWarning = await selectKrea2Script();
-            warning = modeWarning || scriptWarning;
-        } else if (feature === "anima38") {
-            warning = await expandAnimaAccordion();
+            warning = await collapseAnimaAccordions();
+        }
+        const presetWarning = await selectFeaturePreset(feature);
+        warning = warning || presetWarning;
+        if (feature === "anima38") {
+            warning = warning || await expandAnimaAccordion(containerId);
         } else {
             const mounted = await waitFor(function () {
                 return featureContainer(feature);
@@ -410,9 +475,30 @@
             }
         }
 
-        if (sequence !== activationSequence) return;
+        if (sequence !== activationSequence) {
+            if (activatingFeature === feature) activatingFeature = null;
+            return;
+        }
         activatingFeature = null;
         setActiveFeature(feature, warning);
+    }
+
+    function queueFeatureActivation(feature) {
+        const sequence = ++activationSequence;
+        activationQueue = activationQueue
+            .catch(function () {
+                return null;
+            })
+            .then(async function () {
+                if (sequence !== activationSequence) return;
+                await activateFeature(feature, sequence);
+            });
+        void activationQueue.catch(function (error) {
+            if (sequence !== activationSequence) return;
+            activatingFeature = null;
+            console.error(`Aikimi ${FEATURES[feature]?.label || feature} activation failed`, error);
+            setActiveFeature(null, `${FEATURES[feature]?.label || feature}を開けませんでした。UIを再読み込みしてください。`);
+        });
     }
 
     function selectedNativeButton() {
@@ -431,28 +517,30 @@
 
     function selectedButtonMatches(feature, selected) {
         const config = FEATURES[feature];
-        return Boolean(config && nativeButtonFor(config.containerId) === selected);
+        return Boolean(config && featureContainerIds(config).some(function (containerId) {
+            return nativeButtonFor(containerId) === selected;
+        }));
+    }
+
+    function presetMatches(feature) {
+        const preset = FEATURES[feature]?.preset;
+        if (!preset) return true;
+        return appRoot().querySelector("#forge_ui_preset input")?.value === preset;
     }
 
     function aliasStateMatches(feature) {
         if (feature === "krea2") {
-            const modeButton = tabListFor(appRoot().querySelector("#mode_img2img"))
-                ?.querySelector(":scope > button:first-child");
-            const scriptInput = appRoot().querySelector("#img2img_script_container #script_list input");
-            const panel = appRoot().querySelector("#script_krea2_2stage_upscale_quick_4k");
-            const normalModeSelected = Boolean(
-                modeButton &&
-                (modeButton.classList.contains("selected") || modeButton.getAttribute("aria-selected") === "true"),
-            );
-            return normalModeSelected && scriptInput?.value === KREA2_SCRIPT && panel?.offsetParent !== null;
+            return presetMatches(feature) && selectedButtonMatches(feature, selectedNativeButton());
         }
         if (feature === "anima38") {
-            const accordion = appRoot().querySelector("#aikimi-txt2img-anima38");
-            const visibleCheckbox = appRoot().querySelector("#aikimi-txt2img-anima38-visible-checkbox");
+            const accordionId = animaAccordionId(preferredContainerId(feature));
+            const accordion = appRoot().querySelector(`#${accordionId}`);
+            const visibleCheckbox = appRoot().querySelector(`#${accordionId}-visible-checkbox`);
             const hiddenCheckbox = appRoot().querySelector(
-                "#aikimi-txt2img-anima38-checkbox input[type='checkbox']",
+                `#${accordionId}-checkbox input[type='checkbox']`,
             );
             return Boolean(
+                presetMatches(feature) &&
                 accordion?.querySelector(".label-wrap")?.classList.contains("open") &&
                 visibleCheckbox?.checked &&
                 hiddenCheckbox?.checked,
@@ -471,6 +559,7 @@
     }
 
     function syncFromSelectedNativeTab() {
+        syncFeatureButtonTargets();
         const selected = selectedNativeButton();
         if (!selected) return;
         if (activatingFeature && selectedButtonMatches(activatingFeature, selected)) {
@@ -492,6 +581,10 @@
         ) {
             if (aliasStateMatches(activeFeature)) {
                 syncFeatureButtonState(activeFeature);
+                syncFeatureButtonTarget(activeFeature);
+                if (featureContainer(activeFeature) !== dispatchedContainer) {
+                    dispatchFeatureChange(activeFeature, null);
+                }
             } else {
                 setActiveFeature(null, null);
             }
@@ -577,6 +670,14 @@
         const button = topNavButtonFromTarget(event.target);
         if (!button) return;
         if (activatingFeature && selectedButtonMatches(activatingFeature, button)) return;
+        if (
+            activeFeature &&
+            FEATURES[activeFeature]?.kind === "alias" &&
+            selectedButtonMatches(activeFeature, button)
+        ) {
+            scheduleAliasReconciliation();
+            return;
+        }
 
         activationSequence += 1;
         activatingFeature = null;
@@ -592,7 +693,7 @@
     function handleFeatureNavigationClick(event) {
         const button = event.target.closest?.(".aikimi-feature-nav__button");
         if (!button || button.parentElement !== featureNavigation() || button.disabled) return;
-        void activateFeature(button.dataset.aikimiFeature);
+        queueFeatureActivation(button.dataset.aikimiFeature);
     }
 
     function handleFeatureNavigationKeydown(event) {

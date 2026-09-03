@@ -70,6 +70,7 @@ class AikimiTabsFixtureHandler(BaseHTTPRequestHandler):
         legacy_dom = params.get("dom", ["gradio6"])[0] == "legacy"
         lazy_controls = params.get("lazy", ["0"])[0] == "1"
         lazy_panels = params.get("lazy_panels", ["0"])[0] == "1"
+        preset_delay_ms = int(params.get("preset_delay", ["0"])[0])
         native_tabs = [
             ("txt2img", "txt2img"),
             ("img2img", "img2img"),
@@ -97,13 +98,16 @@ class AikimiTabsFixtureHandler(BaseHTTPRequestHandler):
                 f'<div class="tab-container" role="tablist">{buttons}</div>'
                 "</div>"
             )
-        anima_content = """
-<div id="aikimi-txt2img-anima38" class="input-accordion">
+
+        def anima_content(tab_name):
+            return f"""
+<div id="aikimi-{tab_name}-anima38" class="input-accordion">
   <div class="label-wrap"><span>Anima 3.8B</span></div>
 </div>
-<div id="aikimi-txt2img-anima38-checkbox"><input type="checkbox"></div>
-<input id="aikimi-txt2img-anima38-visible-checkbox" type="checkbox">
+<div id="aikimi-{tab_name}-anima38-checkbox"><input type="checkbox"></div>
+<input id="aikimi-{tab_name}-anima38-visible-checkbox" type="checkbox">
 """
+
         mode_navigation = (
             '<div class="tab-nav" role="tablist">'
             '<button type="button" role="tab" class="selected">img2img</button>'
@@ -144,6 +148,31 @@ class AikimiTabsFixtureHandler(BaseHTTPRequestHandler):
                 '<span class="inner-item hide">✓</span> Krea2 2-Stage Upscale Spoof</li>'
                 "</ul></template>"
             )
+        if legacy_dom:
+            preset_input = '<input value="sd" aria-label="UI Preset">'
+            preset_options = (
+                '<div id="preset-options" role="listbox">'
+                '<div role="option" aria-label="sd">sd</div>'
+                '<div role="option" aria-label="anima">anima</div>'
+                '<div role="option" aria-label="krea">krea</div></div>'
+            )
+        else:
+            preset_input = (
+                '<input value="sd" aria-label="UI Preset" role="listbox" '
+                'aria-controls="preset-options" aria-expanded="false">'
+            )
+            preset_options = (
+                '<template id="preset-options-template">'
+                '<ul class="options" role="listbox" id="preset-options">'
+                '<li data-testid="dropdown-option" role="option" data-index="1" '
+                'aria-label="sd" aria-selected="true">sd</li>'
+                '<li data-testid="dropdown-option" role="option" data-index="2" '
+                'aria-label="anima" aria-selected="false">anima</li>'
+                '<li data-testid="dropdown-option" role="option" data-index="3" '
+                'aria-label="krea" aria-selected="false">krea</li>'
+                "</ul></template>"
+            )
+        preset_content = f'<div id="forge_ui_preset">{preset_input}{preset_options}</div>'
         krea_content = f"""
 <div id="mode_img2img">{mode_navigation}</div>
 <div id="img2img_script_container">
@@ -156,8 +185,8 @@ class AikimiTabsFixtureHandler(BaseHTTPRequestHandler):
         panels = []
         panel_templates = []
         content_by_tab = {
-            "txt2img": anima_content,
-            "img2img": krea_content,
+            "txt2img": anima_content("txt2img"),
+            "img2img": anima_content("img2img") + krea_content,
         }
         for index, (tab_id, _) in enumerate(native_tabs):
             content = content_by_tab.get(tab_id, "")
@@ -175,14 +204,15 @@ class AikimiTabsFixtureHandler(BaseHTTPRequestHandler):
         lazy_templates = ""
         if lazy_controls:
             lazy_templates = (
-                f'<template id="lazy-txt2img-controls">{anima_content}</template>'
-                f'<template id="lazy-img2img-controls">{krea_content}</template>'
+                f'<template id="lazy-txt2img-controls">{anima_content("txt2img")}</template>'
+                f'<template id="lazy-img2img-controls">{anima_content("img2img") + krea_content}</template>'
             )
         lazy_templates += "".join(panel_templates)
 
         document = f"""<!doctype html>
 <html><head><meta charset="utf-8"><link rel="stylesheet" href="/aikimi-ui.css"></head><body>
-<div id="tabs">{tab_navigation}{"".join(panels)}</div>{lazy_templates}
+<div id="decoy-listbox" role="listbox"><div role="option" aria-label="krea">krea</div></div>
+{preset_content}<div id="tabs">{tab_navigation}{"".join(panels)}</div>{lazy_templates}
 <pre id="result">pending</pre>
 <script>
 window.gradioApp = () => document;
@@ -190,6 +220,13 @@ window.fixtureErrors = [];
 window.fixtureOptionEvents = {{
     openKeydown: 0, mousedown: 0, click: 0, selectedIndex: null
 }};
+window.fixturePresetEvents = {{
+    openKeydown: 0, mousedown: 0, click: 0, selectedValues: []
+}};
+window.fixtureDecoyClicks = 0;
+document.querySelector("#decoy-listbox [role='option']").addEventListener("click", () => {{
+    window.fixtureDecoyClicks += 1;
+}});
 window.addEventListener("error", (event) => window.fixtureErrors.push(event.message));
 const uiLoadedCallbacks = [];
 const uiUpdateCallbacks = [];
@@ -218,22 +255,92 @@ const fixtureNativeButton = (panelId) => {{
     const index = panelIds.indexOf(panelId);
     return index >= 0 ? initialButtons[index] : null;
 }};
-let accordion = null;
 let scriptInput = null;
+const presetInput = document.querySelector("#forge_ui_preset input");
 
-function bindFixtureControls() {{
-    accordion = document.querySelector("#aikimi-txt2img-anima38");
-    if (accordion && !accordion.visibleCheckbox) {{
-        accordion.visibleCheckbox = document.querySelector("#aikimi-txt2img-anima38-visible-checkbox");
-        accordion.onVisibleCheckboxChange = () => {{
-            const checked = accordion.visibleCheckbox.checked;
-            document.querySelector("#aikimi-txt2img-anima38-checkbox input").checked = checked;
-            accordion.querySelector(".label-wrap").classList.toggle("open", checked);
-        }};
-        accordion.querySelector(".label-wrap").addEventListener("click", () => {{
-            window.inputAccordionChecked("aikimi-txt2img-anima38", !accordion.visibleCheckbox.checked);
+function fixtureAccordion(tabName) {{
+    return document.querySelector(`#aikimi-${{tabName}}-anima38`);
+}}
+
+function setFixturePresetValue(value) {{
+    presetInput.value = value;
+    presetInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+    presetInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
+}}
+
+function bindPresetControl() {{
+    const optionTemplate = document.querySelector("#preset-options-template");
+    if (optionTemplate && presetInput.dataset.fixtureOpenBound !== "true") {{
+        presetInput.dataset.fixtureOpenBound = "true";
+        presetInput.addEventListener("keydown", (event) => {{
+            if (event.key !== "ArrowDown") return;
+            event.preventDefault();
+            window.fixturePresetEvents.openKeydown += 1;
+            presetInput.setAttribute("aria-expanded", "true");
+            if (!document.querySelector("#preset-options")) {{
+                optionTemplate.before(optionTemplate.content.cloneNode(true));
+                bindPresetControl();
+            }}
         }});
     }}
+    const listbox = document.querySelector("#preset-options");
+    const options = Array.from(listbox?.querySelectorAll("[role='option']") || []);
+    const selectPreset = (option) => {{
+        const value = option.getAttribute("aria-label");
+        const applySelection = () => {{
+            window.fixturePresetEvents.selectedValues.push(value);
+            setFixturePresetValue(value);
+            if (listbox?.tagName === "UL") {{
+                listbox.remove();
+                presetInput.setAttribute("aria-expanded", "false");
+            }}
+        }};
+        const delay = value === "krea" ? {preset_delay_ms} : 0;
+        if (delay > 0) {{
+            setTimeout(applySelection, delay);
+        }} else {{
+            applySelection();
+        }}
+    }};
+    if (listbox?.tagName === "UL" && listbox.dataset.fixtureBound !== "true") {{
+        listbox.dataset.fixtureBound = "true";
+        listbox.addEventListener("mousedown", (event) => {{
+            event.preventDefault();
+            window.fixturePresetEvents.mousedown += 1;
+            selectPreset(event.target.closest("[role='option']"));
+        }});
+        options.forEach((option) => option.addEventListener("click", () => {{
+            window.fixturePresetEvents.click += 1;
+        }}));
+    }} else {{
+        options.forEach((option) => {{
+            if (option.dataset.fixtureBound === "true") return;
+            option.dataset.fixtureBound = "true";
+            option.addEventListener("click", () => {{
+                window.fixturePresetEvents.click += 1;
+                selectPreset(option);
+            }});
+        }});
+    }}
+}}
+
+function bindFixtureAccordion(tabName) {{
+    const accordion = fixtureAccordion(tabName);
+    if (!accordion || accordion.visibleCheckbox) return;
+    accordion.visibleCheckbox = document.querySelector(`#aikimi-${{tabName}}-anima38-visible-checkbox`);
+    accordion.onVisibleCheckboxChange = () => {{
+        const checked = accordion.visibleCheckbox.checked;
+        document.querySelector(`#aikimi-${{tabName}}-anima38-checkbox input`).checked = checked;
+        accordion.querySelector(".label-wrap").classList.toggle("open", checked);
+    }};
+    accordion.querySelector(".label-wrap").addEventListener("click", () => {{
+        window.inputAccordionChecked(`aikimi-${{tabName}}-anima38`, !accordion.visibleCheckbox.checked);
+    }});
+}}
+
+function bindFixtureControls() {{
+    bindFixtureAccordion("txt2img");
+    bindFixtureAccordion("img2img");
 
     scriptInput = document.querySelector("#img2img_script_container #script_list input");
     const optionTemplate = document.querySelector("#c9-options-template");
@@ -344,6 +451,7 @@ window.inputAccordionChecked = (id, checked) => {{
     target.visibleCheckbox.checked = checked;
     target.onVisibleCheckboxChange();
 }};
+bindPresetControl();
 bindFixtureControls();
 
 new MutationObserver((records) => {{
@@ -377,71 +485,169 @@ setTimeout(() => uiLoadedCallbacks.forEach((callback) => callback()), 0);
     const anima = document.querySelector("#aikimi-tab-anima38");
     const txt2img = fixtureNativeButton("tab_txt2img");
     const img2img = fixtureNativeButton("tab_img2img");
+    const extras = fixtureNativeButton("tab_extras");
     const controlsBeforeClicks = {{
         krea: Boolean(document.querySelector("#img2img_script_container #script_list input")),
-        anima: Boolean(document.querySelector("#aikimi-txt2img-anima38"))
+        animaTxt2img: Boolean(document.querySelector("#aikimi-txt2img-anima38")),
+        animaImg2img: Boolean(document.querySelector("#aikimi-img2img-anima38"))
     }};
     const mountedPanelsBeforeClicks = Array.from(
         tabs.querySelectorAll(":scope > .tabitem")
     ).map((panel) => panel.id);
 
-    let kreaResult = null;
-    let kreaClearedAfterModeChange = null;
+    let kreaTxt2imgResult = null;
+    let kreaImg2imgResult = null;
+    let kreaContainerAfterModeChange = null;
+    let kreaClearedAfterPresetChange = null;
     let kreaClearEvents = null;
     let clearAfterNative = null;
-    let animaResult = null;
-    let animaClearedAfterCollapse = null;
+    let animaTxt2imgResult = null;
+    let animaImg2imgResult = null;
+    let animaContainerAfterModeChange = null;
+    let animaClearedAfterPresetChange = null;
     let animaClearEvents = null;
     let keyboardResult = null;
-    if (krea && !krea.hidden && anima && !anima.hidden && txt2img && img2img) {{
+    let rapidSwitchResult = null;
+    if (krea && !krea.hidden && anima && !anima.hidden && txt2img && img2img && extras) {{
         krea.click();
-        await waitFor(() => window.AikimiTabs.getActiveFeature() === "krea2");
-        kreaResult = {{
+        await waitFor(() =>
+            window.AikimiTabs.getActiveFeature() === "krea2" && presetInput.value === "krea"
+        );
+        kreaTxt2imgResult = {{
             active: window.AikimiTabs.getActiveFeature(),
-            selectedScript: scriptInput.value,
-            panelMounted: Boolean(document.querySelector("#tab_img2img")),
-            normalModeSelected: Boolean(document.querySelector(
-                "#mode_img2img [role='tablist'] > button:first-child.selected, #mode_img2img > .tab-nav > button:first-child.selected"
-            )),
-            panelVisible: document.querySelector("#script_krea2_2stage_upscale_quick_4k").offsetParent !== null,
-            hostSelected: img2img.classList.contains("selected"),
+            preset: presetInput.value,
+            container: window.AikimiTabs.getActiveContainer()?.id || null,
+            txt2imgSelected: txt2img.classList.contains("selected"),
+            img2imgSelected: img2img.classList.contains("selected"),
+            selectedScript: scriptInput?.value || null,
+            ariaControls: krea.getAttribute("aria-controls"),
             hostSubdued: document.querySelector("#aikimi-feature-nav").dataset.activeFeature === "krea2",
             aliasActive: krea.classList.contains("aikimi-feature-active")
         }};
+
+        img2img.click();
+        await waitFor(() =>
+            window.AikimiTabs.getActiveFeature() === "krea2" &&
+            window.AikimiTabs.getActiveContainer()?.id === "tab_img2img"
+        );
+        kreaContainerAfterModeChange = window.AikimiTabs.getActiveContainer()?.id || null;
+
         const beforeKreaClear = eventCounts.cleared;
-        document.querySelectorAll("#mode_img2img [role='tablist'] > button")[1].click();
+        setFixturePresetValue("sd");
         await waitFor(() => window.AikimiTabs.getActiveFeature() === null);
-        kreaClearedAfterModeChange = window.AikimiTabs.getActiveFeature();
+        kreaClearedAfterPresetChange = window.AikimiTabs.getActiveFeature();
         kreaClearEvents = eventCounts.cleared - beforeKreaClear;
 
-        txt2img.click();
+        document.querySelectorAll("#mode_img2img [role='tablist'] > button")[1].click();
+        krea.click();
+        await waitFor(() =>
+            window.AikimiTabs.getActiveFeature() === "krea2" && presetInput.value === "krea"
+        );
+        kreaImg2imgResult = {{
+            active: window.AikimiTabs.getActiveFeature(),
+            preset: presetInput.value,
+            container: window.AikimiTabs.getActiveContainer()?.id || null,
+            txt2imgSelected: txt2img.classList.contains("selected"),
+            img2imgSelected: img2img.classList.contains("selected"),
+            selectedScript: scriptInput?.value || null,
+            normalModeSelected: Boolean(document.querySelector(
+                "#mode_img2img [role='tablist'] > button:first-child.selected, #mode_img2img > .tab-nav > button:first-child.selected"
+            )),
+            sketchModeSelected: Boolean(document.querySelector(
+                "#mode_img2img [role='tablist'] > button:nth-child(2).selected, #mode_img2img > .tab-nav > button:nth-child(2).selected"
+            ))
+        }};
+
+        extras.click();
         clearAfterNative = window.AikimiTabs.getActiveFeature();
 
         anima.click();
-        await waitFor(() => window.AikimiTabs.getActiveFeature() === "anima38");
-        animaResult = {{
+        await waitFor(() =>
+            window.AikimiTabs.getActiveFeature() === "anima38" && presetInput.value === "anima"
+        );
+        const txtAccordion = fixtureAccordion("txt2img");
+        animaTxt2imgResult = {{
             active: window.AikimiTabs.getActiveFeature(),
-            open: accordion.querySelector(".label-wrap").classList.contains("open"),
-            visibleChecked: accordion.visibleCheckbox.checked,
+            preset: presetInput.value,
+            container: window.AikimiTabs.getActiveContainer()?.id || null,
+            open: txtAccordion.querySelector(".label-wrap").classList.contains("open"),
+            visibleChecked: txtAccordion.visibleCheckbox.checked,
             hiddenChecked: document.querySelector("#aikimi-txt2img-anima38-checkbox input").checked,
-            hostSelected: txt2img.classList.contains("selected")
+            txt2imgSelected: txt2img.classList.contains("selected"),
+            img2imgSelected: img2img.classList.contains("selected")
         }};
+
         const beforeAnimaClear = eventCounts.cleared;
-        accordion.querySelector(".label-wrap").click();
+        setFixturePresetValue("sd");
         await waitFor(() => window.AikimiTabs.getActiveFeature() === null);
-        animaClearedAfterCollapse = window.AikimiTabs.getActiveFeature();
+        animaClearedAfterPresetChange = window.AikimiTabs.getActiveFeature();
         animaClearEvents = eventCounts.cleared - beforeAnimaClear;
 
+        img2img.click();
+        anima.click();
+        await waitFor(() =>
+            window.AikimiTabs.getActiveFeature() === "anima38" && presetInput.value === "anima"
+        );
+        const imgAccordion = fixtureAccordion("img2img");
+        animaImg2imgResult = {{
+            active: window.AikimiTabs.getActiveFeature(),
+            preset: presetInput.value,
+            container: window.AikimiTabs.getActiveContainer()?.id || null,
+            open: imgAccordion.querySelector(".label-wrap").classList.contains("open"),
+            visibleChecked: imgAccordion.visibleCheckbox.checked,
+            hiddenChecked: document.querySelector("#aikimi-img2img-anima38-checkbox input").checked,
+            txt2imgSelected: txt2img.classList.contains("selected"),
+            img2imgSelected: img2img.classList.contains("selected")
+        }};
+
         txt2img.click();
+        await waitFor(() =>
+            window.AikimiTabs.getActiveFeature() === "anima38" &&
+            window.AikimiTabs.getActiveContainer()?.id === "tab_txt2img"
+        );
+        animaContainerAfterModeChange = window.AikimiTabs.getActiveContainer()?.id || null;
+        img2img.click();
+        await waitFor(() =>
+            window.AikimiTabs.getActiveFeature() === "anima38" &&
+            window.AikimiTabs.getActiveContainer()?.id === "tab_img2img"
+        );
+
         const beforeKeyboard = eventCounts.krea2;
         krea.dispatchEvent(new KeyboardEvent("keydown", {{
             key: "Enter", bubbles: true, cancelable: true
         }}));
-        await waitFor(() => window.AikimiTabs.getActiveFeature() === "krea2");
+        await waitFor(() =>
+            window.AikimiTabs.getActiveFeature() === "krea2" && presetInput.value === "krea"
+        );
         keyboardResult = {{
             activations: eventCounts.krea2 - beforeKeyboard,
-            active: window.AikimiTabs.getActiveFeature()
+            active: window.AikimiTabs.getActiveFeature(),
+            preset: presetInput.value,
+            container: window.AikimiTabs.getActiveContainer()?.id || null,
+            animaTxt2imgEnabled: fixtureAccordion("txt2img")?.visibleCheckbox.checked || false,
+            animaImg2imgEnabled: fixtureAccordion("img2img")?.visibleCheckbox.checked || false
         }};
+
+        if ({preset_delay_ms} > 0) {{
+            extras.click();
+            setFixturePresetValue("sd");
+            await waitFor(() => window.AikimiTabs.getActiveFeature() === null);
+            const beforeRapidSelection = window.fixturePresetEvents.mousedown;
+            krea.click();
+            await waitFor(() => window.fixturePresetEvents.mousedown > beforeRapidSelection);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            anima.click();
+            await waitFor(() =>
+                window.AikimiTabs.getActiveFeature() === "anima38" && presetInput.value === "anima"
+            );
+            rapidSwitchResult = {{
+                active: window.AikimiTabs.getActiveFeature(),
+                preset: presetInput.value,
+                container: window.AikimiTabs.getActiveContainer()?.id || null,
+                animaTxt2imgEnabled: fixtureAccordion("txt2img")?.visibleCheckbox.checked || false,
+                animaImg2imgEnabled: fixtureAccordion("img2img")?.visibleCheckbox.checked || false
+            }};
+        }}
     }}
 
     const studioPanelsWereLazyBeforeVisit =
@@ -490,15 +696,22 @@ setTimeout(() => uiLoadedCallbacks.forEach((callback) => callback()), 0);
         animaCount: document.querySelectorAll("#aikimi-tab-anima38").length,
         kreaHidden: Boolean(document.querySelector("#aikimi-tab-krea2")?.hidden),
         animaHidden: Boolean(document.querySelector("#aikimi-tab-anima38")?.hidden),
-        kreaResult,
-        kreaClearedAfterModeChange,
+        kreaTxt2imgResult,
+        kreaImg2imgResult,
+        kreaContainerAfterModeChange,
+        kreaClearedAfterPresetChange,
         kreaClearEvents,
         optionEvents: window.fixtureOptionEvents,
+        presetEvents: window.fixturePresetEvents,
         clearAfterNative,
-        animaResult,
-        animaClearedAfterCollapse,
+        animaTxt2imgResult,
+        animaImg2imgResult,
+        animaContainerAfterModeChange,
+        animaClearedAfterPresetChange,
         animaClearEvents,
         keyboardResult,
+        rapidSwitchResult,
+        decoyClicks: window.fixtureDecoyClicks,
         domMode: {json.dumps("legacy" if legacy_dom else "gradio6")},
         lazyControls: {json.dumps(lazy_controls)},
         lazyPanels: {json.dumps(lazy_panels)},
@@ -601,53 +814,143 @@ class AikimiTabsChromiumTests(unittest.TestCase):
             {"sensenova": True, "minimax": True},
         )
         self.assertTrue(result["ariaTargetsExist"])
-        self.assertEqual(result["kreaResult"]["active"], "krea2")
-        self.assertEqual(result["kreaResult"]["selectedScript"], "Krea2 2-Stage Upscale")
+        self.assertEqual(
+            result["kreaTxt2imgResult"],
+            {
+                "active": "krea2",
+                "preset": "krea",
+                "container": "tab_txt2img",
+                "txt2imgSelected": True,
+                "img2imgSelected": False,
+                "selectedScript": "None",
+                "ariaControls": "tab_txt2img",
+                "hostSubdued": True,
+                "aliasActive": True,
+            },
+        )
+        self.assertEqual(result["kreaContainerAfterModeChange"], "tab_img2img")
+        self.assertEqual(
+            result["kreaImg2imgResult"],
+            {
+                "active": "krea2",
+                "preset": "krea",
+                "container": "tab_img2img",
+                "txt2imgSelected": False,
+                "img2imgSelected": True,
+                "selectedScript": "None",
+                "normalModeSelected": False,
+                "sketchModeSelected": True,
+            },
+        )
         self.assertEqual(
             result["optionEvents"],
-            {"openKeydown": 1, "mousedown": 1, "click": 0, "selectedIndex": "1"},
+            {"openKeydown": 0, "mousedown": 0, "click": 0, "selectedIndex": None},
         )
-        self.assertTrue(result["kreaResult"]["normalModeSelected"])
-        self.assertTrue(result["kreaResult"]["panelVisible"])
-        self.assertTrue(result["kreaResult"]["hostSelected"])
-        self.assertTrue(result["kreaResult"]["hostSubdued"])
-        self.assertTrue(result["kreaResult"]["aliasActive"])
-        self.assertIsNone(result["kreaClearedAfterModeChange"])
+        self.assertEqual(
+            result["presetEvents"],
+            {
+                "openKeydown": 5,
+                "mousedown": 5,
+                "click": 0,
+                "selectedValues": ["krea", "krea", "anima", "anima", "krea"],
+            },
+        )
+        self.assertIsNone(result["kreaClearedAfterPresetChange"])
         self.assertEqual(result["kreaClearEvents"], 1)
         self.assertIsNone(result["clearAfterNative"])
-        self.assertEqual(result["animaResult"]["active"], "anima38")
-        self.assertTrue(result["animaResult"]["open"])
-        self.assertTrue(result["animaResult"]["visibleChecked"])
-        self.assertTrue(result["animaResult"]["hiddenChecked"])
-        self.assertTrue(result["animaResult"]["hostSelected"])
-        self.assertIsNone(result["animaClearedAfterCollapse"])
+        self.assertEqual(
+            result["animaTxt2imgResult"],
+            {
+                "active": "anima38",
+                "preset": "anima",
+                "container": "tab_txt2img",
+                "open": True,
+                "visibleChecked": True,
+                "hiddenChecked": True,
+                "txt2imgSelected": True,
+                "img2imgSelected": False,
+            },
+        )
+        self.assertEqual(
+            result["animaImg2imgResult"],
+            {
+                "active": "anima38",
+                "preset": "anima",
+                "container": "tab_img2img",
+                "open": True,
+                "visibleChecked": True,
+                "hiddenChecked": True,
+                "txt2imgSelected": False,
+                "img2imgSelected": True,
+            },
+        )
+        self.assertIsNone(result["animaClearedAfterPresetChange"])
         self.assertEqual(result["animaClearEvents"], 1)
-        self.assertEqual(result["keyboardResult"], {"activations": 1, "active": "krea2"})
+        self.assertEqual(result["animaContainerAfterModeChange"], "tab_txt2img")
+        self.assertEqual(
+            result["keyboardResult"],
+            {
+                "activations": 1,
+                "active": "krea2",
+                "preset": "krea",
+                "container": "tab_img2img",
+                "animaTxt2imgEnabled": False,
+                "animaImg2imgEnabled": False,
+            },
+        )
+        self.assertEqual(result["decoyClicks"], 0)
         self.assertEqual(result["mutationRepairCount"], 1)
 
-    def test_hidden_base_tab_hides_its_external_shortcut(self):
+    def test_latest_rapid_alias_click_wins_after_delayed_preset_event(self):
+        result = self.render_fixture("preset_delay=120")
+
+        self.assertEqual(
+            result["rapidSwitchResult"],
+            {
+                "active": "anima38",
+                "preset": "anima",
+                "container": "tab_txt2img",
+                "animaTxt2imgEnabled": True,
+                "animaImg2imgEnabled": False,
+            },
+        )
+        self.assertEqual(result["decoyClicks"], 0)
+        self.assertEqual(result["errors"], [])
+
+    def test_each_alias_remains_available_with_either_generation_tab(self):
         result = self.render_fixture("hide=img2img")
 
         self.assertEqual(result["kreaCount"], 1)
         self.assertEqual(result["animaCount"], 1)
-        self.assertTrue(result["kreaHidden"])
+        self.assertFalse(result["kreaHidden"])
         self.assertFalse(result["animaHidden"])
         self.assertTrue(result["ariaTargetsExist"])
+        self.assertTrue(result["nativeOrderUnchanged"])
+
+    def test_aliases_hide_only_when_both_generation_tabs_are_hidden(self):
+        result = self.render_fixture("hide=txt2img&hide=img2img")
+
+        self.assertTrue(result["kreaHidden"])
+        self.assertTrue(result["animaHidden"])
         self.assertTrue(result["nativeOrderUnchanged"])
 
     def test_aliases_open_base_tabs_before_lazy_controls_mount(self):
         result = self.render_fixture("lazy=1")
 
         self.assertTrue(result["lazyControls"])
-        self.assertEqual(result["controlsBeforeClicks"], {"krea": False, "anima": False})
+        self.assertEqual(
+            result["controlsBeforeClicks"],
+            {"krea": False, "animaTxt2img": False, "animaImg2img": False},
+        )
         self.assertTrue(result["aliasesReady"], result)
         self.assertEqual(result["kreaCount"], 1)
         self.assertEqual(result["animaCount"], 1)
-        self.assertEqual(result["kreaResult"]["selectedScript"], "Krea2 2-Stage Upscale")
-        self.assertTrue(result["kreaResult"]["normalModeSelected"])
-        self.assertTrue(result["kreaResult"]["panelVisible"])
-        self.assertTrue(result["animaResult"]["visibleChecked"])
-        self.assertTrue(result["animaResult"]["hiddenChecked"])
+        self.assertEqual(result["kreaTxt2imgResult"]["preset"], "krea")
+        self.assertIsNone(result["kreaTxt2imgResult"]["selectedScript"])
+        self.assertEqual(result["kreaImg2imgResult"]["selectedScript"], "None")
+        self.assertTrue(result["kreaImg2imgResult"]["sketchModeSelected"])
+        self.assertTrue(result["animaTxt2imgResult"]["visibleChecked"])
+        self.assertTrue(result["animaImg2imgResult"]["visibleChecked"])
         self.assertEqual(result["errors"], [])
 
     def test_aliases_exist_before_unselected_gradio6_panels_mount(self):
@@ -655,7 +958,10 @@ class AikimiTabsChromiumTests(unittest.TestCase):
 
         self.assertTrue(result["lazyPanels"])
         self.assertEqual(result["mountedPanelsBeforeClicks"], ["tab_txt2img"])
-        self.assertEqual(result["controlsBeforeClicks"], {"krea": False, "anima": False})
+        self.assertEqual(
+            result["controlsBeforeClicks"],
+            {"krea": False, "animaTxt2img": False, "animaImg2img": False},
+        )
         self.assertTrue(result["aliasesReady"], result)
         self.assertEqual(result["kreaCount"], 1)
         self.assertEqual(result["animaCount"], 1)
@@ -667,10 +973,11 @@ class AikimiTabsChromiumTests(unittest.TestCase):
         self.assertTrue(result["nativeOrderUnchanged"])
         self.assertTrue(result["nativeNodeIdentityUnchanged"])
         self.assertFalse(result["nativeContainsAikimiButtons"])
-        self.assertTrue(result["kreaResult"]["panelMounted"])
-        self.assertEqual(result["kreaResult"]["selectedScript"], "Krea2 2-Stage Upscale")
-        self.assertTrue(result["animaResult"]["visibleChecked"])
-        self.assertTrue(result["animaResult"]["hiddenChecked"])
+        self.assertEqual(result["kreaTxt2imgResult"]["container"], "tab_txt2img")
+        self.assertEqual(result["kreaImg2imgResult"]["container"], "tab_img2img")
+        self.assertEqual(result["kreaImg2imgResult"]["selectedScript"], "None")
+        self.assertTrue(result["animaTxt2imgResult"]["visibleChecked"])
+        self.assertTrue(result["animaImg2imgResult"]["visibleChecked"])
         self.assertTrue(result["studioPanelsWereLazyBeforeVisit"])
         self.assertEqual(
             result["nativeLazyResults"]["sensenova"],
@@ -689,11 +996,20 @@ class AikimiTabsChromiumTests(unittest.TestCase):
         self.assertEqual(result["tabListClass"], "tab-nav")
         self.assertEqual(result["kreaCount"], 1)
         self.assertEqual(result["animaCount"], 1)
-        self.assertEqual(result["kreaResult"]["active"], "krea2")
-        self.assertEqual(result["animaResult"]["active"], "anima38")
+        self.assertEqual(result["kreaTxt2imgResult"]["active"], "krea2")
+        self.assertEqual(result["animaTxt2imgResult"]["active"], "anima38")
         self.assertEqual(
             result["optionEvents"],
-            {"openKeydown": 0, "mousedown": 0, "click": 1, "selectedIndex": "1"},
+            {"openKeydown": 0, "mousedown": 0, "click": 0, "selectedIndex": None},
+        )
+        self.assertEqual(
+            result["presetEvents"],
+            {
+                "openKeydown": 0,
+                "mousedown": 0,
+                "click": 5,
+                "selectedValues": ["krea", "krea", "anima", "anima", "krea"],
+            },
         )
         self.assertEqual(result["mutationRepairCount"], 1)
         self.assertTrue(result["externalRowBeforeTabs"])

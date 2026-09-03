@@ -89,8 +89,10 @@ findingがある場合は、単語だけを置換せず、対象文全体を書�
 - [ ] browserから`127.0.0.1`だけで開ける
 - [ ] Forge由来の上部タブとQuick Settingsが常に表示される
 - [ ] Aikimiの4入口が`#tabs`直前の小型1行にあり、Gradio所有tablistのchild、順序、label、ARIAを変更しない
-- [ ] `Krea2`がForge `img2img`の`Krea2 2-Stage Upscale`へ直接移動する
-- [ ] `Anima`がForge `txt2img`のAnima 3.8B設定欄を展開する
+- [ ] `Krea2`がUI Presetの`krea`を選択し、現在のForgeタブが`txt2img`または`img2img`ならそのタブを維持する
+- [ ] `Krea2`を別のタブから開くと`txt2img`へ移動し、`Krea2 2-Stage Upscale`を自動選択しない
+- [ ] `Anima`がUI Presetの`anima`を選択し、現在のForgeタブが`txt2img`または`img2img`ならそのタブを維持する
+- [ ] `Anima`を別のタブから開くと`txt2img`へ移動し、選択したタブのAnima 3.8B設定欄を展開する
 - [ ] `SenseNova`と`MiniMax H3`が専用タブを直接開く
 - [ ] 通常のForgeタブに全画面共通Aikimi headerや固定status overlayが表示されない
 - [ ] ちびあいきみがAikimi機能内だけに表示され、通常のForgeタブではpollingを停止する

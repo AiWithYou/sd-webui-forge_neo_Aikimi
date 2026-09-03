@@ -57,6 +57,7 @@ class ExtraNetworksPageLora(ui_extra_networks.ExtraNetworksPage):
             item["sd_version"] = sd_version
         else:
             sd_version = "Unknown"
+            item["sd_version"] = sd_version
 
         if enable_filter and shared.opts.lora_preset_filter and sd_version not in ("Unknown", shared.opts.forge_preset):
             return None
@@ -66,7 +67,9 @@ class ExtraNetworksPageLora(ui_extra_networks.ExtraNetworksPage):
     def list_items(self):
         names = list(networks.available_networks)
         for index, name in enumerate(names):
-            item = self.create_item(name, index)
+            # Preset changes are filtered immediately in the browser, so every
+            # compatible card must remain available in the DOM.
+            item = self.create_item(name, index, enable_filter=False)
             if item is not None:
                 yield item
 

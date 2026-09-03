@@ -37,8 +37,8 @@ referenceの全画面dark theme、生成済みvideo、historyはconcept用の状
 
 ### States and interactions
 
-- Krea2: 通常img2imgへ移動し、Gradio 6のDropdownをArrowDownで開いた後、semantic exact optionをmousedownで選択。
-- Anima: txt2imgへ移動し、late-mounted InputAccordionを展開してvisible／internal checkboxを同期。
+- Krea2: UI Presetの`krea`を選択。現在のForgeタブがtxt2imgまたはimg2imgならそのタブを維持し、別のタブから開いた場合はtxt2imgへ移動します。`Krea2 2-Stage Upscale`は自動選択しません。
+- Anima: UI Presetの`anima`を選択。現在のForgeタブがtxt2imgまたはimg2imgならそのタブを維持し、別のタブから開いた場合はtxt2imgへ移動します。選択したタブのlate-mounted InputAccordionを展開してvisible／internal checkboxを同期。
 - SenseNova／MiniMax H3: 対応するnative panelを直接表示。
 - Forge復帰: txt2imgへ戻った時点でAikimi Statusを隠し、pollingも停止する設計です。
 - UI reload: 同じ一連の操作を再実行しても、listener、status、badgeは重複しませんでした。
@@ -56,7 +56,7 @@ referenceの全画面dark theme、生成済みvideo、historyはconcept用の状
 1. 初期案の撤回: Gradio tablistへのAikimi button追加が、overflow計測とのfeedback loopを発生。
 2. Navigation分離: 外部compact navigationへ移し、Gradio所有tablistへのmutationを0にしました。
 3. 起動経路の安定化: Settingsの772-output再送、global mounted-hidden変換、Gradio 6.17.3 Tabs mount stormを個別に修正。
-4. Lazy lifecycle対応: Krea2 Dropdown、InputAccordion、Settings search、token counter、resolution paste、image drag-and-drop、ControlNetを実DOM契約へ合わせています。
+4. Lazy lifecycle対応: UI Preset Dropdown、InputAccordion、Settings search、token counter、resolution paste、image drag-and-drop、ControlNetを実DOM契約へ合わせています。
 5. Visual polish: status summaryのclipと補助text contrastを直した後、同一viewportで再capture。
 
 ## QA result

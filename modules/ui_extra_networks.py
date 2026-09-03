@@ -314,7 +314,9 @@ class ExtraNetworksPage:
             return ""
 
         item_sort_keys = item.get("sort_keys", {})
-        item_sort_keys["SDversion"] = item.get("sd_version_str", "SdVersion.Unknown")
+        item_sort_keys["SDversion"] = item.get(
+            "sd_version", item.get("sd_version_str", "SdVersion.Unknown")
+        )
         sort_keys = " ".join([f'data-sort-{k}="{html.escape(str(v))}"' for k, v in item_sort_keys.items()]).strip()
 
         search_terms_html = ""
@@ -448,7 +450,13 @@ class ExtraNetworksPage:
                 "action_list_item_action_trailing": action_buttons,
             }
         )
-        return "<li class='tree-list-item tree-list-item--subitem' data-tree-entry-type='file'>" f"{btn}" "</li>"
+        sd_version = html.escape(
+            str(item.get("sd_version", item.get("sd_version_str", "SdVersion.Unknown")))
+        )
+        return (
+            "<li class='tree-list-item tree-list-item--subitem' data-tree-entry-type='file' "
+            f'data-sort-sdversion="{sd_version}">{btn}</li>'
+        )
 
     def create_tree_view_html(self, tabname: str) -> str:
         """Generates HTML for displaying folders in a tree view.
