@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 import sys
 import unittest
 import warnings
@@ -243,6 +244,37 @@ class AdditionalModuleIdentityTests(unittest.TestCase):
             self.assertEqual(first, self.main_entry.module_list)
             self.assertTrue(any(selector.casefold() == "upper.safetensors" for selector in first))
             self.assertFalse(any("not-a-real-safetensors" in selector for selector in first))
+
+    def test_registry_persists_the_canonical_path_instead_of_a_short_alias(self):
+        short_root = os.fspath(Path("RUNNER~1") / "modules")
+        canonical_root = os.fspath(Path("runneradmin") / "modules")
+        short_file = os.fspath(Path(short_root) / "encoder.safetensors")
+        canonical_file = os.fspath(Path(canonical_root) / "encoder.safetensors")
+
+        def canonicalize(value):
+            return {
+                short_root: canonical_root,
+                short_file: canonical_file,
+            }.get(os.fspath(value), os.fspath(value))
+
+        with (
+            mock.patch.object(
+                self.main_entry,
+                "find_files_with_extensions",
+                return_value=[short_file],
+            ),
+            mock.patch.object(
+                self.main_entry,
+                "_canonical_module_path",
+                side_effect=canonicalize,
+            ),
+        ):
+            self.main_entry._rebuild_module_registry([("text_encoder", short_root)])
+
+        self.assertEqual(
+            self.main_entry.module_list,
+            {"encoder.safetensors": canonical_file},
+        )
 
     def test_exact_saved_path_is_remapped_when_a_new_duplicate_appears(self):
         with TemporaryDirectory() as directory:

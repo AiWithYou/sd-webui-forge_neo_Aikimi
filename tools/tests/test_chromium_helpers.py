@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from websockets.exceptions import ConnectionClosedOK
 
@@ -184,6 +184,7 @@ class ChromiumCleanupTests(unittest.TestCase):
         process.returncode = 0
 
         with (
+            patch.object(chromium_helpers.os, "name", "nt"),
             patch.object(chromium_helpers, "_wait_for_port_release", return_value=False),
             self.assertRaisesRegex(RuntimeError, "CDP port is still in use"),
         ):
@@ -192,6 +193,67 @@ class ChromiumCleanupTests(unittest.TestCase):
                 owned_port=9222,
                 profile_flush_delay=0,
             )
+
+    def test_posix_exited_root_terminates_the_lingering_process_group(self):
+        process = FakeProcess()
+        process.returncode = 0
+
+        with (
+            patch.object(chromium_helpers.os, "name", "posix"),
+            patch.object(chromium_helpers.signal, "SIGKILL", 9, create=True),
+            patch.object(
+                chromium_helpers,
+                "_wait_for_port_release",
+                side_effect=[False, True],
+            ) as port_release,
+            patch.object(chromium_helpers.os, "killpg", create=True) as killpg,
+        ):
+            chromium_helpers.close_chromium(
+                process,
+                owned_port=9222,
+                profile_flush_delay=0,
+            )
+
+        self.assertEqual(port_release.call_args_list, [call(9222), call(9222)])
+        killpg.assert_called_once_with(process.pid, chromium_helpers.signal.SIGTERM)
+
+    def test_posix_root_exit_still_kills_a_child_that_keeps_the_port(self):
+        process = FakeProcess()
+        sigkill = 9
+
+        def signal_group(_process_id, group_signal):
+            if group_signal == chromium_helpers.signal.SIGTERM:
+                process.returncode = 0
+
+        with (
+            patch.object(chromium_helpers.os, "name", "posix"),
+            patch.object(chromium_helpers.signal, "SIGKILL", sigkill, create=True),
+            patch.object(
+                chromium_helpers,
+                "_wait_for_port_release",
+                side_effect=[False, True],
+            ) as port_release,
+            patch.object(
+                chromium_helpers.os,
+                "killpg",
+                side_effect=signal_group,
+                create=True,
+            ) as killpg,
+        ):
+            chromium_helpers.close_chromium(
+                process,
+                owned_port=9222,
+                profile_flush_delay=0,
+            )
+
+        self.assertEqual(port_release.call_args_list, [call(9222), call(9222)])
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                call(process.pid, chromium_helpers.signal.SIGTERM),
+                call(process.pid, sigkill),
+            ],
+        )
 
 
 if __name__ == "__main__":

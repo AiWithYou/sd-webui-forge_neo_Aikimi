@@ -72,8 +72,23 @@ def _find_windows_taskkill() -> str | None:
 
 def _stop_process_tree(process: subprocess.Popen[Any], *, owned_port: int | None = None) -> None:
     if process.poll() is not None or _wait_for_exit(process, 0.5):
-        if owned_port is not None and not _wait_for_port_release(owned_port):
+        if owned_port is None or _wait_for_port_release(owned_port):
+            return
+        if os.name == "nt":
             raise RuntimeError("Chromium root exited but its CDP port is still in use")
+
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        if _wait_for_port_release(owned_port):
+            return
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if not _wait_for_port_release(owned_port):
+            raise RuntimeError("Chromium root exited but its CDP process group still owns the port")
         return
 
     if os.name == "nt":
@@ -126,8 +141,16 @@ def _stop_process_tree(process: subprocess.Popen[Any], *, owned_port: int | None
                 pass
         process.wait(timeout=5)
 
-    if owned_port is not None and not _wait_for_port_release(owned_port):
-        raise RuntimeError("Chromium exited but its CDP port is still in use")
+    if owned_port is None or _wait_for_port_release(owned_port):
+        return
+    if os.name != "nt":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if _wait_for_port_release(owned_port):
+            return
+    raise RuntimeError("Chromium exited but its CDP port is still in use")
 
 
 def close_chromium(

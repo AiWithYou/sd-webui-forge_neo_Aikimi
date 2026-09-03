@@ -81,8 +81,12 @@ def portable_module_basename(value: object) -> str:
     return str(value or "").replace("\\", "/").rsplit("/", 1)[-1]
 
 
+def _canonical_module_path(value: os.PathLike | str) -> str:
+    return os.path.realpath(os.path.abspath(os.fspath(value)))
+
+
 def _normalize_module_path(value: os.PathLike | str) -> str:
-    return os.path.normcase(os.path.realpath(os.path.abspath(os.fspath(value))))
+    return os.path.normcase(_canonical_module_path(value))
 
 
 def _normalized_extensions(extensions) -> set[str]:
@@ -144,12 +148,14 @@ def _rebuild_module_registry(module_roots: list[tuple[str, str]], extensions=MOD
     candidates: list[tuple[str, str, str, str]] = []
     seen_paths = set()
     for root_index, (root_label, root) in enumerate(module_roots):
-        for full_path in find_files_with_extensions(root, extensions):
+        canonical_root = _canonical_module_path(root)
+        for full_path in find_files_with_extensions(canonical_root, extensions):
+            full_path = _canonical_module_path(full_path)
             normalized = _normalize_module_path(full_path)
             if normalized in seen_paths:
                 continue
             seen_paths.add(normalized)
-            relative = os.path.relpath(full_path, root).replace("\\", "/").casefold()
+            relative = os.path.relpath(full_path, canonical_root).replace("\\", "/").casefold()
             identity = f"{root_index}:{root_label.casefold()}:{relative}"
             candidates.append((root_label, full_path, normalized, identity))
 
