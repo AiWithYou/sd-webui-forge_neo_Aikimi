@@ -186,6 +186,23 @@ document.addEventListener("DOMContentLoaded", function () {
     mutationObserver.observe(gradioApp(), { childList: true, subtree: true });
 });
 
+const pendingGenerationRestarts = new WeakMap();
+
+function cancelGenerationRestart(interruptButton) {
+    const observer = pendingGenerationRestarts.get(interruptButton);
+    if (!observer) return;
+    observer.disconnect();
+    pendingGenerationRestarts.delete(interruptButton);
+}
+
+// A real click on Interrupt means stop, not restart. Programmatic clicks below
+// must keep their observer. Capture also covers handlers that stop propagation.
+document.addEventListener("click", function (event) {
+    if (!event.isTrusted) return;
+    const button = event.composedPath().find((node) => node.matches?.("button[id$='_interrupt']"));
+    if (button) cancelGenerationRestart(button);
+}, true);
+
 // Keyboard Shortcuts:
 // - Ctrl + Enter to start/restart a generation
 // - Alt / Option + Enter to skip a generation
@@ -212,20 +229,25 @@ document.addEventListener("keydown", function (e) {
         e.preventDefault();
         if (interruptButton?.style.display === "block") {
             if (opts.ctrl_enter_interrupt) {
+                cancelGenerationRestart(interruptButton);
                 interruptButton.click();
                 return;
             }
+            if (pendingGenerationRestarts.has(interruptButton)) return;
             const observer = new MutationObserver(function () {
                 if (interruptButton.style.display !== "none") return;
-                observer.disconnect();
-                if (generateButton.isConnected) generateButton.click();
+                cancelGenerationRestart(interruptButton);
+                if (generateButton.isConnected && uiElementIsVisible(currentTab)) generateButton.click();
             });
+            pendingGenerationRestarts.set(interruptButton, observer);
             // Observe before clicking: the interrupt handler may update synchronously.
             observer.observe(interruptButton, { attributes: true, attributeFilter: ["style"] });
             interruptButton.click();
         } else {
+            cancelGenerationRestart(interruptButton);
             generateButton.click();
         }
+        return;
     }
 
     if (isAltKey && isEnter && skipButton) {
@@ -238,6 +260,7 @@ document.addEventListener("keydown", function (e) {
         const lightboxModal = document.querySelector("#lightboxModal");
         if (!globalPopup || globalPopup.style.display === "none") {
             if (document.activeElement === lightboxModal) return;
+            cancelGenerationRestart(interruptButton);
             if (interruptButton?.style.display === "block") {
                 interruptButton.click();
                 e.preventDefault();

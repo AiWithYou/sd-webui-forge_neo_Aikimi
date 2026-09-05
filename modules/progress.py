@@ -4,6 +4,7 @@ import base64
 import io
 import random
 import string
+import threading
 import time
 from collections import OrderedDict
 from typing import List
@@ -20,19 +21,26 @@ finished_tasks = []
 recorded_results = []
 recorded_results_limit = 2
 
+# One encoded preview per task, shared by polling clients. Replacing the
+# dictionary on task boundaries also isolates encoders still finishing an old task.
+_preview_cache = {}
+_preview_lock = threading.Lock()
+
 
 def start_task(id_task):
-    global current_task
+    global current_task, _preview_cache
 
+    _preview_cache = {}
     current_task = id_task
     pending_tasks.pop(id_task, None)
 
 
 def finish_task(id_task):
-    global current_task
+    global current_task, _preview_cache
 
     if current_task == id_task:
         current_task = None
+        _preview_cache = {}
 
     finished_tasks.append(id_task)
     if len(finished_tasks) > 16:
@@ -88,8 +96,36 @@ def get_pending_tasks():
     return PendingTasksResponse(size=pending_len, tasks=pending_tasks_ids)
 
 
+def _encode_live_preview(image, image_format, preview_id, cache):
+    with _preview_lock:
+        if (
+            cache.get("image") is image
+            and cache.get("id") == preview_id
+            and cache.get("format") == image_format
+        ):
+            return cache["value"]
+
+        source_image = image
+        if image_format == "png":
+            # Avoid expensive PNG optimization for large previews.
+            save_kwargs = {"optimize": True} if max(image.size) <= 256 else {"optimize": False, "compress_level": 1}
+        elif image_format == "gif":
+            save_kwargs = {"save_all": True, "loop": 0}
+        else:
+            image = image.convert("RGB")
+            save_kwargs = {}
+
+        with io.BytesIO() as buffered:
+            image.save(buffered, format=image_format, **save_kwargs)
+            base64_image = base64.b64encode(buffered.getvalue()).decode("ascii")
+        value = f"data:image/{image_format};base64,{base64_image}"
+        cache.update(image=source_image, id=preview_id, format=image_format, value=value)
+        return value
+
+
 def progressapi(req: ProgressRequest):
-    active = req.id_task == current_task
+    preview_cache = _preview_cache
+    active = current_task is not None and req.id_task == current_task
     queued = req.id_task in pending_tasks
     completed = req.id_task in finished_tasks
 
@@ -122,29 +158,15 @@ def progressapi(req: ProgressRequest):
 
     if opts.live_previews_enable and req.live_preview:
         shared.state.set_current_image()
-        if shared.state.id_live_preview != req.id_live_preview:
+        # Never label an older encoded image with an ID advanced during save().
+        preview_id = shared.state.id_live_preview
+        if preview_id != req.id_live_preview:
             image = shared.state.current_image
             if image is not None:
                 _video: bool = getattr(image, "is_animated", False)
                 _format = "gif" if _video else opts.live_previews_image_format
-                buffered = io.BytesIO()
-
-                if _format == "png":
-                    # using optimize for large images takes an enormous amount of time
-                    if max(*image.size) <= 256:
-                        save_kwargs = {"optimize": True}
-                    else:
-                        save_kwargs = {"optimize": False, "compress_level": 1}
-                elif _format == "gif":
-                    save_kwargs = {"save_all": True, "loop": 0}
-                else:
-                    image = image.convert("RGB")
-                    save_kwargs = {}
-
-                image.save(buffered, format=_format, **save_kwargs)
-                base64_image = base64.b64encode(buffered.getvalue()).decode("ascii")
-                live_preview = f"data:image/{_format};base64,{base64_image}"
-                id_live_preview = shared.state.id_live_preview
+                live_preview = _encode_live_preview(image, _format, preview_id, preview_cache)
+                id_live_preview = preview_id
 
     return ProgressResponse(active=active, queued=queued, completed=completed, progress=progress, eta=eta, live_preview=live_preview, id_live_preview=id_live_preview, textinfo=shared.state.textinfo)
 

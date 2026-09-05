@@ -164,5 +164,44 @@ class ShortcutTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate("[interrupted, generated, skipped]"), [1, 0, 1])
 
 
+    def test_repeated_distinct_presses_schedule_one_restart(self):
+        self.page.evaluate("document.getElementById('img2img_interrupt').style.display = 'block'")
+        self.page.keyboard.press("Control+Enter")
+        self.page.keyboard.press("Control+Enter")
+        self.page.evaluate("document.getElementById('img2img_interrupt').style.display = 'none'")
+        self.page.wait_for_timeout(30)
+        self.assertEqual(self.page.evaluate("[interrupted, generated]"), [1, 1])
+
+    def test_escape_cancels_pending_restart(self):
+        self.page.evaluate("document.getElementById('img2img_interrupt').style.display = 'block'")
+        self.page.keyboard.press("Control+Enter")
+        self.page.keyboard.press("Escape")
+        self.page.evaluate("document.getElementById('img2img_interrupt').style.display = 'none'")
+        self.page.wait_for_timeout(30)
+        self.assertEqual(self.page.evaluate("generated"), 0)
+
+    def test_manual_interrupt_cancels_pending_restart(self):
+        self.page.evaluate("document.getElementById('img2img_interrupt').style.display = 'block'")
+        self.page.keyboard.press("Control+Enter")
+        self.page.locator("#img2img_interrupt").click()
+        self.page.evaluate("document.getElementById('img2img_interrupt').style.display = 'none'")
+        self.page.wait_for_timeout(30)
+        self.assertEqual(self.page.evaluate("generated"), 0)
+
+    def test_combined_modifiers_do_not_generate_and_skip_together(self):
+        self.page.keyboard.press("Control+Alt+Enter")
+        self.assertEqual(self.page.evaluate("[generated, skipped]"), [1, 0])
+
+    def test_hidden_tab_does_not_restart_after_interrupt(self):
+        self.page.evaluate("document.getElementById('img2img_interrupt').style.display = 'block'")
+        self.page.keyboard.press("Control+Enter")
+        self.page.evaluate("""() => {
+            document.getElementById('tab_img2img').style.display = 'none';
+            document.getElementById('img2img_interrupt').style.display = 'none';
+        }""")
+        self.page.wait_for_timeout(30)
+        self.assertEqual(self.page.evaluate("generated"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

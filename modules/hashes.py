@@ -16,23 +16,31 @@ def calculate_sha256_real(filename: os.PathLike):
 calculate_sha256 = calculate_sha256_real
 
 
+def _hash_file_identity(filename):
+    stat = os.stat(filename)
+    return (
+        os.path.normcase(os.path.abspath(filename)),
+        stat.st_mtime_ns,
+        stat.st_size,
+        stat.st_ctime_ns,
+        stat.st_ino,
+        stat.st_dev,
+    )
+
+
 def sha256_from_cache(filename: os.PathLike, title: str, use_addnet_hash=False):
     hashes = cache("hashes-addnet") if use_addnet_hash else cache("hashes")
     try:
-        ondisk_mtime = os.path.getmtime(filename)
+        file_identity = _hash_file_identity(filename)
     except FileNotFoundError:
         return None
 
-    if title not in hashes:
+    # One database read; legacy entries are refreshed rather than trusted.
+    entry = hashes.get(title)
+    if not entry or entry.get("file_identity") != file_identity:
         return None
 
-    cached_sha256 = hashes[title].get("sha256", None)
-    cached_mtime = hashes[title].get("mtime", 0)
-
-    if ondisk_mtime > cached_mtime or cached_sha256 is None:
-        return None
-
-    return cached_sha256
+    return entry.get("sha256")
 
 
 def sha256(filename: os.PathLike, title: str, use_addnet_hash=False):
@@ -45,12 +53,20 @@ def sha256(filename: os.PathLike, title: str, use_addnet_hash=False):
     if shared.cmd_opts.no_hashing:
         return None
 
+    file_identity = _hash_file_identity(filename)
     print(f"Calculating sha256 for {filename}: ", end="", flush=True)
-    sha256_value = calculate_sha256_real(filename)
+    if use_addnet_hash:
+        with open(filename, "rb") as file:
+            sha256_value = addnet_hash_safetensors(file)
+    else:
+        sha256_value = calculate_sha256_real(filename)
+    if _hash_file_identity(filename) != file_identity:
+        raise RuntimeError(f"File changed while calculating sha256: {filename}")
     print(sha256_value)
 
     hashes[title] = {
-        "mtime": os.path.getmtime(filename),
+        "mtime": file_identity[1] / 1_000_000_000,
+        "file_identity": file_identity,
         "sha256": sha256_value,
     }
 
