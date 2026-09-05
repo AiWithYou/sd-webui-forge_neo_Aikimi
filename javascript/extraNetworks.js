@@ -8,10 +8,10 @@ function toggleCss(key, css, enable) {
     }
     if (style && !enable) {
         document.head.removeChild(style);
+        return;
     }
-    if (style) {
-        style.innerHTML == "";
-        style.appendChild(document.createTextNode(css));
+    if (style && style.textContent !== css) {
+        style.textContent = css;
     }
 }
 
@@ -86,6 +86,7 @@ function setupExtraNetworksForTab(tabname) {
         let refresh = gradioApp().querySelector("#" + tabname_full + "_extra_refresh");
         let controls = gradioApp().querySelector("#" + tabname_full + "_controls");
         let currentSort = "";
+        let filterTimer = null;
         const isLoraPage = tabname_full === tabname + "_lora";
 
         // If any of the buttons above don't exist, we want to skip this iteration of the loop.
@@ -97,7 +98,11 @@ function setupExtraNetworksForTab(tabname) {
         initialized = true;
 
         let applyFilter = function (force) {
-            let searchTerm = search.value.toLowerCase();
+            clearTimeout(filterTimer);
+            filterTimer = null;
+            const searchTerm = search.value.toLowerCase();
+            const splitSearch = searchTerm.split(" ").filter(Boolean);
+            const filterEnabled = opts.lora_preset_filter === true;
 
             // get UI preset
             const uiPreset = gradioApp().querySelector("#forge_ui_preset input")?.value;
@@ -106,37 +111,26 @@ function setupExtraNetworksForTab(tabname) {
             page
                 .querySelectorAll("div.card")
                 .forEach(function (elem) {
-                    let searchOnly = elem.querySelector(".search_only");
-                    let text = Array.prototype.map
-                        .call(elem.querySelectorAll(".search_terms, .description"), function (t) {
-                            return t.textContent.toLowerCase();
-                        })
-                        .join(" ");
-
-                    let visible = true;
-                    if (searchOnly && searchTerm.length < 4) visible = false;
-
-                    const splitSearch = searchTerm.split(" ");
-                    splitSearch.forEach(function (partial) {
-                        if (text.indexOf(partial) == -1) visible = false;
-                    });
-
+                    const searchOnly = elem.querySelector(".search_only");
                     const sdversion = elem.getAttribute("data-sort-sdversion");
-                    if (
-                        isLoraPage &&
-                        !extraNetworksLoraCardMatchesPreset(sdversion, uiPreset, opts.lora_preset_filter === true)
-                    ) {
-                        visible = false;
+                    let visible = !(searchOnly && searchTerm.length < 4) && (
+                        !isLoraPage || extraNetworksLoraCardMatchesPreset(sdversion, uiPreset, filterEnabled)
+                    );
+
+                    // Empty searches and preset-hidden cards need no text traversal.
+                    if (visible && splitSearch.length > 0) {
+                        const text = Array.from(elem.querySelectorAll(".search_terms, .description"), function (t) {
+                            return t.textContent.toLowerCase();
+                        }).join(" ");
+                        visible = splitSearch.every(function (partial) {
+                            return text.includes(partial);
+                        });
                     }
 
-                    if (visible) {
-                        elem.classList.remove("hidden");
-                    } else {
-                        elem.classList.add("hidden");
-                    }
+                    elem.classList.toggle("hidden", !visible);
                 });
             if (isLoraPage) {
-                extraNetworksApplyLoraTreePresetFilter(page, uiPreset, opts.lora_preset_filter === true);
+                extraNetworksApplyLoraTreePresetFilter(page, uiPreset, filterEnabled);
             }
 
             applySort(force);
@@ -183,7 +177,25 @@ function setupExtraNetworksForTab(tabname) {
             parent.appendChild(frag);
         };
 
-        search.addEventListener("input", function () {
+        search.addEventListener("input", function (event) {
+            clearTimeout(filterTimer);
+            filterTimer = null;
+            if (event?.isComposing) return;
+            // Keep programmatic folder/preset filters and clearing immediate.
+            if (!event?.isTrusted || search.value === "") {
+                applyFilter();
+                return;
+            }
+            filterTimer = setTimeout(function () {
+                filterTimer = null;
+                if (elem.isConnected) applyFilter();
+            }, 100);
+        });
+        search.addEventListener("compositionstart", function () {
+            clearTimeout(filterTimer);
+            filterTimer = null;
+        });
+        search.addEventListener("compositionend", function () {
             applyFilter();
         });
         applySort();
@@ -403,7 +415,7 @@ function extraNetworksTreeProcessDirectoryClick(event, btn, tabname, extra_netwo
      *
      * Here is how the tree reacts to clicks for various states:
      * unselected unopened directory: Directory is selected and expanded.
-     * unselected opened directory: Directory is selected.
+     * unselected opened directory: Directory is collapsed and deselected.
      * selected opened directory: Directory is collapsed and deselected.
      * chevron is clicked: Directory is expanded or collapsed. Selected state unchanged.
      *
@@ -414,7 +426,6 @@ function extraNetworksTreeProcessDirectoryClick(event, btn, tabname, extra_netwo
      */
     let ul = btn.nextElementSibling;
     // This is the actual target that the user clicked on within the target button.
-    // We use this to detect if the chevron was clicked.
     let true_targ = event.target;
 
     function _expand_or_collapse(_ul, _btn) {
