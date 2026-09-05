@@ -2,12 +2,12 @@
 
 import ast
 import json
-from enum import Enum
-from pathlib import Path
 import shutil
 import subprocess
-from types import SimpleNamespace
 import unittest
+from enum import Enum
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 try:
