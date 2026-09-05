@@ -415,17 +415,18 @@ function extraNetworksTreeProcessDirectoryClick(event, btn, tabname, extra_netwo
      *
      * Here is how the tree reacts to clicks for various states:
      * unselected unopened directory: Directory is selected and expanded.
-     * unselected opened directory: Directory is collapsed and deselected.
+     * unselected opened directory: Directory is selected.
      * selected opened directory: Directory is collapsed and deselected.
      * chevron is clicked: Directory is expanded or collapsed. Selected state unchanged.
      *
      * @param event                     The generated event.
      * @param btn                       The clicked `tree-list-item` button.
      * @param tabname                   The name of the active tab in the sd webui. Ex: txt2img, img2img, etc.
-     * @param extra_networks_tabname    The id of the active extraNetworks tab. Ex: lora, checkpoints, etc.
+     * @param extra_networks_tabname    The id of the activeExtraNetworks tab. Ex: lora, checkpoints, etc.
      */
     let ul = btn.nextElementSibling;
     // This is the actual target that the user clicked on within the target button.
+    // We use this to detect if the chevron was clicked.
     let true_targ = event.target;
 
     function _expand_or_collapse(_ul, _btn) {
