@@ -1,0 +1,266 @@
+name: Apply reviewed runtime performance patch (one-time)
+
+on:
+  push:
+    branches: [perf/runtime-memory-ui-20260906]
+    paths: [.github/workflows/apply-runtime-perf-20260906.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-runtime-perf-20260906
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.repository == 'AiWithYou/sd-webui-forge_neo_Aikimi'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Verify reviewed source revisions
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD:modules/devices.py)" = 98f479bf15043a9df3433b075a643d999323a5df
+          test "$(git rev-parse HEAD:modules/processing.py)" = 73b6d118285dcc0ab481e395e507bdad8cbfc0ce
+          test "$(git rev-parse HEAD:javascript/extraNetworks.js)" = bc1fc208791b5d37a74b6fdf8032a33142e5dc4d
+      - name: Apply only reviewed hunks and preserve existing line endings
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/runtime-perf.patch" <<'PATCH'
+          --- a/modules/cache.py
+          +++ b/modules/cache.py
+          @@ -25,10 +25,10 @@
+               """
+           
+               cache_obj = caches.get(subsection)
+          -    if not cache_obj:
+          +    if cache_obj is None:
+                   with cache_lock:
+                       cache_obj = caches.get(subsection)
+          -            if not cache_obj:
+          +            if cache_obj is None:
+                           cache_obj = diskcache.Cache(os.path.join(cache_dir, subsection))
+                           caches[subsection] = cache_obj
+           
+          --- a/modules/devices.py
+          +++ b/modules/devices.py
+          @@ -43,7 +43,20 @@
+               return device
+           
+           
+          -def torch_gc():
+          +def torch_gc(*, force: bool = True):
+          +    """Keep explicit cleanup compatible; allow routine NVIDIA boundaries to reuse cache."""
+          +    if (
+          +        not force
+          +        and device.type == "cuda"
+          +        and memory_management.is_nvidia()
+          +        and not memory_management.DISABLE_SMART_MEMORY
+          +        and not memory_management.signal_empty_cache
+          +        and memory_management.vram_state in (
+          +            memory_management.VRAMState.NORMAL_VRAM,
+          +            memory_management.VRAMState.HIGH_VRAM,
+          +        )
+          +    ):
+          +        return
+               memory_management.soft_empty_cache()
+           
+           
+          --- a/modules/processing.py
+          +++ b/modules/processing.py
+          @@ -427,6 +427,10 @@
+                   self.sampler = None
+                   self.c = None
+                   self.uc = None
+          +        # Drop this processing object's references without clearing extension-owned lists.
+          +        self.latents_after_sampling = []
+          +        self.pixels_after_sampling = []
+          +        self.modified_noise = None
+                   if not opts.persistent_cond_cache:
+                       self.clear_prompt_cache()
+           
+          @@ -663,10 +667,21 @@
+               already_decoded = True
+           
+           
+          -def decode_latent_batch(model, batch, target_device=None, check_for_nans=False):
+          +def _normalize_decoded_batch(samples):
+          +    """Normalize an owned float32 buffer without changing retained or extension data."""
+          +    if isinstance(samples, torch.Tensor):
+          +        normalized = samples.to(dtype=torch.float32, copy=True, memory_format=torch.contiguous_format)
+          +    else:
+          +        normalized = torch.stack(samples).float()
+          +    return normalized.add_(1.0).div_(2.0).clamp_(0.0, 1.0)
+          +
+          +
+          +def decode_latent_batch(model, batch, target_device=None, check_for_nans=False, *, return_tensor=False):
+          +    samples_pytorch = decode_first_stage(model, batch).to(target_device)
+          +    if return_tensor:
+          +        return samples_pytorch
+          +
+               samples = DecodedSamples()
+          -    samples_pytorch = decode_first_stage(model, batch).to(target_device)
+          -
+               for x in samples_pytorch:
+                   samples.append(x)
+           
+          @@ -945,7 +960,7 @@
+               else:
+                   assert p.prompt is not None
+           
+          -    devices.torch_gc()
+          +    devices.torch_gc(force=False)
+           
+               seed = get_fixed_seed(p.seed)
+               subseed = get_fixed_seed(p.subseed)
+          @@ -1081,10 +1096,9 @@
+                       else:
+                           if opts.sd_vae_decode_method != "Full":
+                               p.extra_generation_params["VAE Decoder"] = opts.sd_vae_decode_method
+          -                x_samples_ddim = decode_latent_batch(p.sd_model, samples_ddim, target_device=devices.cpu, check_for_nans=True)
+          -
+          -            x_samples_ddim = torch.stack(x_samples_ddim).float()
+          -            x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+          +                x_samples_ddim = decode_latent_batch(p.sd_model, samples_ddim, target_device=devices.cpu, check_for_nans=True, return_tensor=True)
+          +
+          +            x_samples_ddim = _normalize_decoded_batch(x_samples_ddim)
+           
+                       if len(x_samples_ddim.shape) == 5:
+                           x_samples_ddim = x_samples_ddim.reshape(-1, *x_samples_ddim.shape[-3:])
+          @@ -1092,7 +1106,7 @@
+                       del samples_ddim
+           
+                       devices.test_for_nans(x_samples_ddim)
+          -            devices.torch_gc()
+          +            devices.torch_gc(force=False)
+           
+                       state.nextjob()
+           
+          @@ -1204,7 +1218,7 @@
+           
+                       del x_samples_ddim
+           
+          -            devices.torch_gc()
+          +            devices.torch_gc(force=False)
+           
+                       if n == 0 and not cmd_opts.no_prompt_history:
+                           with open(os.path.join(paths.data_path, "params.txt"), "w", encoding="utf8") as file:
+          @@ -1234,7 +1248,7 @@
+               if not p.disable_extra_networks and p.extra_network_data:
+                   extra_networks.deactivate(p, p.extra_network_data)
+           
+          -    devices.torch_gc()
+          +    devices.torch_gc(force=False)
+           
+               res = Processed(
+                   p,
+          @@ -1465,9 +1479,8 @@
+                       devices.torch_gc()
+           
+                       if self.latent_scale_mode is None:
+          -                decoded_samples = decode_latent_batch(self.sd_model, samples, target_device=devices.cpu, check_for_nans=True)
+          -                decoded_samples = torch.stack(decoded_samples).float()
+          -                decoded_samples = torch.clamp((decoded_samples + 1.0) / 2.0, min=0.0, max=1.0)
+          +                decoded_samples = decode_latent_batch(self.sd_model, samples, target_device=devices.cpu, check_for_nans=True, return_tensor=True)
+          +                decoded_samples = _normalize_decoded_batch(decoded_samples)
+                       else:
+                           decoded_samples = None
+           
+          --- a/javascript/extraNetworks.js
+          +++ b/javascript/extraNetworks.js
+          @@ -8,10 +8,10 @@
+               }
+               if (style && !enable) {
+                   document.head.removeChild(style);
+          +        return;
+               }
+               if (style) {
+          -        style.innerHTML == "";
+          -        style.appendChild(document.createTextNode(css));
+          +        style.textContent = css;
+               }
+           }
+           
+          @@ -37,6 +37,10 @@
+                   );
+               });
+               page.querySelectorAll(".extra-network-tree li[data-tree-entry-type='dir']").forEach(function (directory) {
+          +        if (!filterEnabled) {
+          +            directory.hidden = false;
+          +            return;
+          +        }
+                   const hasVisibleFile = Array.from(directory.querySelectorAll(fileSelector)).some(function (item) {
+                       return !item.hidden;
+                   });
+          @@ -96,8 +100,12 @@
+                   search.dataset.extraNetworksInitialized = "true";
+                   initialized = true;
+           
+          +        let filterTimer = null;
+                   let applyFilter = function (force) {
+          +            clearTimeout(filterTimer);
+          +            filterTimer = null;
+                       let searchTerm = search.value.toLowerCase();
+          +            const splitSearch = searchTerm.split(" ");
+           
+                       // get UI preset
+                       const uiPreset = gradioApp().querySelector("#forge_ui_preset input")?.value;
+          @@ -116,9 +124,8 @@
+                               let visible = true;
+                               if (searchOnly && searchTerm.length < 4) visible = false;
+           
+          -                    const splitSearch = searchTerm.split(" ");
+          -                    splitSearch.forEach(function (partial) {
+          -                        if (text.indexOf(partial) == -1) visible = false;
+          +                    visible = visible && splitSearch.every(function (partial) {
+          +                        return text.includes(partial);
+                               });
+           
+                               const sdversion = elem.getAttribute("data-sort-sdversion");
+          @@ -184,7 +191,11 @@
+                   };
+           
+                   search.addEventListener("input", function () {
+          -            applyFilter();
+          +            clearTimeout(filterTimer);
+          +            filterTimer = setTimeout(function () {
+          +                filterTimer = null;
+          +                if (search.isConnected && elem.isConnected) applyFilter();
+          +            }, 80);
+                   });
+                   applySort();
+                   applyFilter();
+          PATCH
+          git apply --check --ignore-space-change --whitespace=nowarn "$RUNNER_TEMP/runtime-perf.patch"
+          git apply --ignore-space-change --whitespace=nowarn "$RUNNER_TEMP/runtime-perf.patch"
+          git diff --check
+      - name: Run focused offline regression checks
+        run: |
+          python -m compileall -q modules/cache.py modules/devices.py modules/processing.py tools/tests/test_runtime_performance.py
+          node --check javascript/extraNetworks.js
+          python -m unittest -v tools.tests.test_runtime_performance
+      - name: Commit reviewed source changes to the dedicated branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add -- modules/cache.py modules/devices.py modules/processing.py javascript/extraNetworks.js
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'perf: reduce routine cleanup, image copies, and repeated UI filtering'
+          ASKPASS="$RUNNER_TEMP/aikimi-perf-askpass"
+          trap 'rm -f "$ASKPASS"' EXIT
+          cat > "$ASKPASS" <<'SCRIPT'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$GH_TOKEN" ;;
+          esac
+          SCRIPT
+          chmod 700 "$ASKPASS"
+          GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 git push origin HEAD:refs/heads/perf/runtime-memory-ui-20260906
