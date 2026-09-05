@@ -427,6 +427,10 @@ class StableDiffusionProcessing:
         self.sampler = None
         self.c = None
         self.uc = None
+        # Drop this processing object's references without clearing extension-owned lists.
+        self.latents_after_sampling = []
+        self.pixels_after_sampling = []
+        self.modified_noise = None
         if not opts.persistent_cond_cache:
             self.clear_prompt_cache()
 
@@ -663,10 +667,21 @@ class DecodedSamples(list):
     already_decoded = True
 
 
-def decode_latent_batch(model, batch, target_device=None, check_for_nans=False):
-    samples = DecodedSamples()
-    samples_pytorch = decode_first_stage(model, batch).to(target_device)
+def _normalize_decoded_batch(samples):
+    """Normalize an owned float32 buffer without changing retained or extension data."""
+    if isinstance(samples, torch.Tensor):
+        normalized = samples.to(dtype=torch.float32, copy=True, memory_format=torch.contiguous_format)
+    else:
+        normalized = torch.stack(samples).float()
+    return normalized.add_(1.0).div_(2.0).clamp_(0.0, 1.0)
 
+
+def decode_latent_batch(model, batch, target_device=None, check_for_nans=False, *, return_tensor=False):
+    samples_pytorch = decode_first_stage(model, batch).to(target_device)
+    if return_tensor:
+        return samples_pytorch
+
+    samples = DecodedSamples()
     for x in samples_pytorch:
         samples.append(x)
 
@@ -945,7 +960,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     else:
         assert p.prompt is not None
 
-    devices.torch_gc()
+    devices.torch_gc(force=False)
 
     seed = get_fixed_seed(p.seed)
     subseed = get_fixed_seed(p.subseed)
@@ -1081,10 +1096,9 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             else:
                 if opts.sd_vae_decode_method != "Full":
                     p.extra_generation_params["VAE Decoder"] = opts.sd_vae_decode_method
-                x_samples_ddim = decode_latent_batch(p.sd_model, samples_ddim, target_device=devices.cpu, check_for_nans=True)
+                x_samples_ddim = decode_latent_batch(p.sd_model, samples_ddim, target_device=devices.cpu, check_for_nans=True, return_tensor=True)
 
-            x_samples_ddim = torch.stack(x_samples_ddim).float()
-            x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+            x_samples_ddim = _normalize_decoded_batch(x_samples_ddim)
 
             if len(x_samples_ddim.shape) == 5:
                 x_samples_ddim = x_samples_ddim.reshape(-1, *x_samples_ddim.shape[-3:])
@@ -1092,7 +1106,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             del samples_ddim
 
             devices.test_for_nans(x_samples_ddim)
-            devices.torch_gc()
+            devices.torch_gc(force=False)
 
             state.nextjob()
 
@@ -1204,7 +1218,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
             del x_samples_ddim
 
-            devices.torch_gc()
+            devices.torch_gc(force=False)
 
             if n == 0 and not cmd_opts.no_prompt_history:
                 with open(os.path.join(paths.data_path, "params.txt"), "w", encoding="utf8") as file:
@@ -1234,7 +1248,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     if not p.disable_extra_networks and p.extra_network_data:
         extra_networks.deactivate(p, p.extra_network_data)
 
-    devices.torch_gc()
+    devices.torch_gc(force=False)
 
     res = Processed(
         p,
@@ -1465,9 +1479,8 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             devices.torch_gc()
 
             if self.latent_scale_mode is None:
-                decoded_samples = decode_latent_batch(self.sd_model, samples, target_device=devices.cpu, check_for_nans=True)
-                decoded_samples = torch.stack(decoded_samples).float()
-                decoded_samples = torch.clamp((decoded_samples + 1.0) / 2.0, min=0.0, max=1.0)
+                decoded_samples = decode_latent_batch(self.sd_model, samples, target_device=devices.cpu, check_for_nans=True, return_tensor=True)
+                decoded_samples = _normalize_decoded_batch(decoded_samples)
             else:
                 decoded_samples = None
 

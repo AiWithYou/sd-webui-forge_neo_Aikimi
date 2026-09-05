@@ -8,10 +8,10 @@ function toggleCss(key, css, enable) {
     }
     if (style && !enable) {
         document.head.removeChild(style);
+        return;
     }
     if (style) {
-        style.innerHTML == "";
-        style.appendChild(document.createTextNode(css));
+        style.textContent = css;
     }
 }
 
@@ -37,6 +37,10 @@ function extraNetworksApplyLoraTreePresetFilter(page, uiPreset, filterEnabled) {
         );
     });
     page.querySelectorAll(".extra-network-tree li[data-tree-entry-type='dir']").forEach(function (directory) {
+        if (!filterEnabled) {
+            directory.hidden = false;
+            return;
+        }
         const hasVisibleFile = Array.from(directory.querySelectorAll(fileSelector)).some(function (item) {
             return !item.hidden;
         });
@@ -96,8 +100,12 @@ function setupExtraNetworksForTab(tabname) {
         search.dataset.extraNetworksInitialized = "true";
         initialized = true;
 
+        let filterTimer = null;
         let applyFilter = function (force) {
+            clearTimeout(filterTimer);
+            filterTimer = null;
             let searchTerm = search.value.toLowerCase();
+            const splitSearch = searchTerm.split(" ");
 
             // get UI preset
             const uiPreset = gradioApp().querySelector("#forge_ui_preset input")?.value;
@@ -116,9 +124,8 @@ function setupExtraNetworksForTab(tabname) {
                     let visible = true;
                     if (searchOnly && searchTerm.length < 4) visible = false;
 
-                    const splitSearch = searchTerm.split(" ");
-                    splitSearch.forEach(function (partial) {
-                        if (text.indexOf(partial) == -1) visible = false;
+                    visible = visible && splitSearch.every(function (partial) {
+                        return text.includes(partial);
                     });
 
                     const sdversion = elem.getAttribute("data-sort-sdversion");
@@ -184,7 +191,11 @@ function setupExtraNetworksForTab(tabname) {
         };
 
         search.addEventListener("input", function () {
-            applyFilter();
+            clearTimeout(filterTimer);
+            filterTimer = setTimeout(function () {
+                filterTimer = null;
+                if (search.isConnected && elem.isConnected) applyFilter();
+            }, 80);
         });
         applySort();
         applyFilter();

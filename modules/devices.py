@@ -43,7 +43,20 @@ def get_device_for(*args, **kwargs) -> torch.device:
     return device
 
 
-def torch_gc():
+def torch_gc(*, force: bool = True):
+    """Keep explicit cleanup compatible; allow routine NVIDIA boundaries to reuse cache."""
+    if (
+        not force
+        and device.type == "cuda"
+        and memory_management.is_nvidia()
+        and not memory_management.DISABLE_SMART_MEMORY
+        and not memory_management.signal_empty_cache
+        and memory_management.vram_state in (
+            memory_management.VRAMState.NORMAL_VRAM,
+            memory_management.VRAMState.HIGH_VRAM,
+        )
+    ):
+        return
     memory_management.soft_empty_cache()
 
 
