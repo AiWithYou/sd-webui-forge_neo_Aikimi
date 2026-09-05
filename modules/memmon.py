@@ -47,20 +47,24 @@ class MemUsageMonitor(threading.Thread):
         while True:
             self.run_flag.wait()
 
-            self._backend.reset_peak_memory_stats()
+            self._backend.reset_peak_memory_stats(self.device)
             self.data.clear()
+            self.data["min_free"] = self.cuda_mem_get_info()[0]
 
             if self.opts.memmon_poll_rate <= 0:
                 self.run_flag.clear()
                 continue
 
-            self.data["min_free"] = self.cuda_mem_get_info()[0]
-
             while self.run_flag.is_set():
+                # Settings may change while a generation is running.
+                poll_rate = self.opts.memmon_poll_rate
+                if poll_rate <= 0:
+                    self.run_flag.clear()
+                    break
                 free, total = self.cuda_mem_get_info()
                 self.data["min_free"] = min(self.data["min_free"], free)
 
-                time.sleep(1 / self.opts.memmon_poll_rate)
+                time.sleep(1 / poll_rate)
 
     def dump_debug(self):
         print(self, "recorded data:")
@@ -74,7 +78,7 @@ class MemUsageMonitor(threading.Thread):
                 continue
             print("\t" if "peak" in k else "", k, -(v // -(1024**2)))
 
-        print(self._backend.memory_summary())
+        print(self._backend.memory_summary(self.device))
 
     def monitor(self):
         self.run_flag.set()
@@ -90,7 +94,10 @@ class MemUsageMonitor(threading.Thread):
             self.data["active_peak"] = torch_stats.get("active_bytes.all.peak") or torch_stats.get("active.all.peak") or 0
             self.data["reserved"] = torch_stats["reserved_bytes.all.current"]
             self.data["reserved_peak"] = torch_stats["reserved_bytes.all.peak"]
-            self.data["system_peak"] = total - self.data["min_free"]
+            # read()/stop() can precede the polling thread's first sample.
+            min_free = min(self.data.get("min_free", free), free)
+            self.data["min_free"] = min_free
+            self.data["system_peak"] = total - min_free
 
         return self.data
 

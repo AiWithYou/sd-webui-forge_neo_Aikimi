@@ -59,20 +59,21 @@ def cached_data_for_file(subsection, title, filename, func):
     """
 
     existing_cache = cache(subsection)
-    ondisk_mtime = os.path.getmtime(filename)
+    ondisk_stat = os.stat(filename)
+    file_identity = (os.path.normcase(os.path.abspath(filename)), ondisk_stat.st_mtime_ns, ondisk_stat.st_size)
 
     entry = existing_cache.get(title)
-    if entry:
-        cached_mtime = entry.get("mtime", 0)
-        if ondisk_mtime > cached_mtime:
-            entry = None
+    # A replacement can have an older timestamp or reuse another file's title.
+    # Legacy entries without an identity are refreshed once.
+    if entry and entry.get("file_identity") != file_identity:
+        entry = None
 
     if not entry or "value" not in entry:
         value = func()
         if value is None:
             return None
 
-        entry = {"mtime": ondisk_mtime, "value": value}
+        entry = {"mtime": ondisk_stat.st_mtime, "file_identity": file_identity, "value": value}
         existing_cache[title] = entry
 
         dump_cache()

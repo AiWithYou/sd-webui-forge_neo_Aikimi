@@ -66,7 +66,9 @@ function get_uiCurrentTab() {
  * Get the first currently visible top-level UI tab content (e.g. the div hosting the "txt2img" UI).
  */
 function get_uiCurrentTabContent() {
-    return gradioApp().querySelector('#tabs > .tabitem[id^=tab_]:not([style*="display: none"])');
+    return Array.from(gradioApp().querySelectorAll('#tabs > .tabitem[id^="tab_"]')).find(
+        (panel) => uiElementIsVisible(panel),
+    ) || null;
 }
 
 const uiUpdateCallbacks = [];
@@ -190,12 +192,14 @@ document.addEventListener("DOMContentLoaded", function () {
 // - Esc to interrupt a generation
 
 document.addEventListener("keydown", function (e) {
-    if (e.isComposing || e.keyCode === 229) return;
+    if (e.defaultPrevented || e.repeat || e.isComposing || e.keyCode === 229) return;
 
     const isEnter = e.key === "Enter" || e.code === "Enter";
     const isCtrlKey = e.metaKey || e.ctrlKey;
     const isAltKey = e.altKey;
     const isEsc = e.key === "Escape";
+    // Ordinary prompt typing should not traverse tabs or query layout.
+    if (!isEsc && !(isEnter && (isCtrlKey || isAltKey))) return;
 
     const currentTab = get_uiCurrentTabContent();
     if (!currentTab) return;
@@ -207,20 +211,18 @@ document.addEventListener("keydown", function (e) {
     if (isCtrlKey && isEnter && generateButton) {
         e.preventDefault();
         if (interruptButton?.style.display === "block") {
+            if (opts.ctrl_enter_interrupt) {
+                interruptButton.click();
+                return;
+            }
+            const observer = new MutationObserver(function () {
+                if (interruptButton.style.display !== "none") return;
+                observer.disconnect();
+                if (generateButton.isConnected) generateButton.click();
+            });
+            // Observe before clicking: the interrupt handler may update synchronously.
+            observer.observe(interruptButton, { attributes: true, attributeFilter: ["style"] });
             interruptButton.click();
-            if (opts.ctrl_enter_interrupt) return;
-            const callback = (mutationList) => {
-                for (const mutation of mutationList) {
-                    if (mutation.type === "attributes" && mutation.attributeName === "style") {
-                        if (interruptButton.style.display === "none") {
-                            generateButton.click();
-                            observer.disconnect();
-                        }
-                    }
-                }
-            };
-            const observer = new MutationObserver(callback);
-            observer.observe(interruptButton, { attributes: true });
         } else {
             generateButton.click();
         }
@@ -248,15 +250,15 @@ document.addEventListener("keydown", function (e) {
  * Check whether an UI element is not in another hidden element or tab content
  */
 function uiElementIsVisible(el) {
-    if (el === document) {
-        return true;
+    if (!el || !el.isConnected) return false;
+    // ShadowRoot is not an Element; cross it through its host instead of
+    // passing it (or a detached node's null parent) to getComputedStyle.
+    for (let node = el; node; node = node.parentNode || node.host) {
+        if (node.nodeType === Node.ELEMENT_NODE && getComputedStyle(node).display === "none") {
+            return false;
+        }
     }
-
-    const computedStyle = getComputedStyle(el);
-    const isVisible = computedStyle.display !== "none";
-
-    if (!isVisible) return false;
-    return uiElementIsVisible(el.parentNode);
+    return true;
 }
 
 function uiElementInSight(el) {

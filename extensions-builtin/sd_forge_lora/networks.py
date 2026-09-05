@@ -1,4 +1,5 @@
 import functools
+import itertools
 import logging
 import os.path
 import re
@@ -93,7 +94,8 @@ def load_lora_for_models(model: "UnetPatcher", clip: "CLIP", lora: dict[str, tor
     if model is not None and len(lora_unet) > 0:
         new_model = model.clone()
         loaded_keys = new_model.add_patches(filename=filename, patches=lora_unet, strength_patch=strength_model, online_mode=online_mode)
-        skipped_keys = [item for item in lora_unet if item not in loaded_keys]
+        loaded_key_set = set(loaded_keys)
+        skipped_keys = [item for item in lora_unet if item not in loaded_key_set]
         if len(skipped_keys) / len(lora_unet) > 0.25:
             logger.warning(f"[LORA] Mismatch {filename} for {model_flag}-UNet with {len(skipped_keys)} keys mismatched in {len(loaded_keys)} keys")
         else:
@@ -103,7 +105,8 @@ def load_lora_for_models(model: "UnetPatcher", clip: "CLIP", lora: dict[str, tor
     if clip is not None and len(lora_clip) > 0:
         new_clip = clip.clone()
         loaded_keys = new_clip.add_patches(filename=filename, patches=lora_clip, strength_patch=strength_clip, online_mode=online_mode)
-        skipped_keys = [item for item in lora_clip if item not in loaded_keys]
+        loaded_key_set = set(loaded_keys)
+        skipped_keys = [item for item in lora_clip if item not in loaded_key_set]
         if len(skipped_keys) / len(lora_clip) > 0.25:
             logger.warning(f"[LORA] Mismatch {filename} for {model_flag}-CLIP with {len(skipped_keys)} keys mismatched in {len(loaded_keys)} keys")
         else:
@@ -159,11 +162,18 @@ def load_networks(names: list[str], te_multipliers: list[float] = None, unet_mul
             continue
         compiled_lora_targets.append([n.filename, u, t, online_mode])
 
-    compiled_lora_targets_hash = str(compiled_lora_targets)
+    # Reuse an applied LoRA only while its file and strengths are unchanged.
+    file_versions = []
+    for filename, *_ in compiled_lora_targets:
+        stat = os.stat(filename)
+        file_versions.append((stat.st_mtime_ns, stat.st_size))
+    compiled_lora_targets_hash = str((compiled_lora_targets, file_versions))
     if current_sd.current_lora_hash == compiled_lora_targets_hash:
         return
 
-    current_sd.current_lora_hash = compiled_lora_targets_hash
+    # Invalidate before mutating models; publish the key only after success.
+    # A failed read/patch must be retried, even when reverting to the old choice.
+    current_sd.current_lora_hash = None
     current_sd.forge_objects.unet = current_sd.forge_objects_original.unet
     current_sd.forge_objects.clip = current_sd.forge_objects_original.clip
 
@@ -177,20 +187,22 @@ def load_networks(names: list[str], te_multipliers: list[float] = None, unet_mul
         current_sd.forge_objects.unet, current_sd.forge_objects.clip = load_lora_for_models(current_sd.forge_objects.unet, current_sd.forge_objects.clip, lora_sd, strength_model, strength_clip, filename=filename, online_mode=online_mode)
 
     current_sd.forge_objects_after_applying_lora = current_sd.forge_objects.shallow_copy()
+    current_sd.current_lora_hash = compiled_lora_targets_hash
 
 
 def process_network_files(names: Optional[list[str]] = None):
-    candidates = []
-
-    for _dir in [shared.cmd_opts.lora_dir, *shared.cmd_opts.lora_dirs]:
-        candidates.extend(shared.walk_files(_dir, allowed_extensions=[".pt", ".ckpt", ".safetensors"]))
+    requested_names = set(names) if names else None
+    candidates = itertools.chain.from_iterable(
+        shared.walk_files(_dir, allowed_extensions=[".pt", ".ckpt", ".safetensors"])
+        for _dir in [shared.cmd_opts.lora_dir, *shared.cmd_opts.lora_dirs]
+    )
 
     for filename in candidates:
         if os.path.isdir(filename):
             continue
         name = os.path.splitext(os.path.basename(filename))[0]
         # if names is provided, only load networks with names in the list
-        if names and name not in names:
+        if requested_names is not None and name not in requested_names:
             continue
         try:
             entry = network.NetworkOnDisk(name, filename)
