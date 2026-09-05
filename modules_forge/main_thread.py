@@ -49,7 +49,7 @@ def loop():
     while True:
         with condition:
             while not waiting_queue:
-                condition.wait(timeout=0.1)
+                condition.wait()
 
             task = waiting_queue.popleft()
 
@@ -57,6 +57,8 @@ def loop():
 
         with condition:
             finished_tasks[task.task_id] = task
+            # Do not retain the previous request and images while idle.
+            del task
             condition.notify_all()
 
 
@@ -67,7 +69,8 @@ def async_run(func, *args, **kwargs):
         last_id += 1
         task = Task(task_id=last_id, func=func, args=args, kwargs=kwargs)
         waiting_queue.append(task)
-        condition.notify()
+        # The worker and result consumers wait on the same condition.
+        condition.notify_all()
 
         return task.task_id
 
